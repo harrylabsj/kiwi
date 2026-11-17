@@ -21,6 +21,8 @@ import { MerchantImportDraftStore } from "../http/merchant-management/draft-stor
 import { MerchantManagementOperationStore } from "../http/merchant-management/operation-store.js";
 import { renderMerchantManagementPage } from "../http/merchant-management/page.js";
 import { MutableServiceState } from "../http/merchant-management/service-state.js";
+import { openMerchantOperationsFacade } from "../merchant-core/ops/facade.js";
+import { MerchantOperationsSurface } from "../merchant-core/ops/surface.js";
 import { createTrustedWorkbenchPageHandler } from "../http/merchant-management/trusted-page.js";
 import { WorkbenchConfirmationStore } from "../http/merchant-management/webauthn-confirmation.js";
 import { ManagementError, type MerchantProductPage, type PageQuery } from "../merchant/application/service.js";
@@ -193,7 +195,21 @@ export async function startStandaloneMerchantWorkbench(
   const db = new DatabaseSync(`${dataDir}/state.sqlite`);
   const serviceState = MutableServiceState.fromDeclared(process.env.KIWI_WORKBENCH_SERVICE_STATE);
   serviceState.attachPersistence(db, profile.owner_id);
-  const drafts = new MerchantImportDraftStore({ db, now: () => new Date().toISOString() });
+  const now = () => new Date().toISOString();
+  const drafts = new MerchantImportDraftStore({ db, now });
+  // TOP1-3 管理路由：学习/记忆/经营任务统一经运营门面；只有 workbench
+  // 持有治理所有权时，公共 `/merchant/api/v1/learning/*`、`/automation/*`
+  // 才挂载，避免与 a2a/cloud 写者无栅栏并发。
+  const merchantOperations = assembly.governanceActive
+    ? new MerchantOperationsSurface({
+        facade: openMerchantOperationsFacade({
+          db,
+          merchantId: profile.owner_id,
+          now,
+        }),
+        now,
+      })
+    : undefined;
   const operations = new MerchantManagementOperationStore({ db });
   const workbenchConfirmations = new WorkbenchConfirmationStore({ db });
   const productReader = buildProductReader(profile);
@@ -237,6 +253,7 @@ export async function startStandaloneMerchantWorkbench(
     serviceState,
     readiness,
     workbenchConfirmations,
+    ...(merchantOperations !== undefined ? { merchantOperations } : {}),
   });
   const adminHandle = createMerchantHttpHandler(assembly.serverOptions);
   const trustedPage = createTrustedWorkbenchPageHandler();

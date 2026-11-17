@@ -44,11 +44,14 @@ import { HistorySearchService } from "./history.js";
 export class SqliteCustomerMemoryProvider implements CustomerMemoryToolProvider {
   private readonly dbPath: string;
   private readonly now: () => string;
+  /** 接待进程是否允许写候选记忆；单写者部署下 a2a 只读。 */
+  private readonly allowWrites: boolean;
   private handle: DatabaseSync | undefined;
 
-  constructor(options: { dbPath: string; now?: () => string }) {
+  constructor(options: { dbPath: string; now?: () => string; allowWrites?: boolean }) {
     this.dbPath = options.dbPath;
     this.now = options.now ?? (() => new Date().toISOString());
+    this.allowWrites = options.allowWrites ?? true;
   }
 
   private db(): DatabaseSync | undefined {
@@ -248,6 +251,9 @@ export class SqliteCustomerMemoryProvider implements CustomerMemoryToolProvider 
       confidence?: number;
     },
   ): { memory_id: string; state: string } {
+    if (!this.allowWrites) {
+      throw new Error("customer memory writes are handled by the standalone workbench");
+    }
     const db = this.db();
     if (db === undefined) {
       throw new Error("customer memory store unavailable");

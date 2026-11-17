@@ -166,6 +166,8 @@ export interface MerchantRuntimeAssembly {
   currentPolicy: () => MerchantPolicy | undefined;
   /** Internal only: current private floor converted exactly for quote eligibility. */
   privateFloorMinor: (sku: string, currency: string) => string | undefined;
+  /** 本进程当前是否持有 TOP1-3 治理所有权（管理写入准入依据）。 */
+  governanceActive: boolean;
   /** 关闭装配持有的数据库连接（不涉及 http server）。 */
   close: () => Promise<void>;
 }
@@ -331,12 +333,15 @@ export async function assembleMerchantRuntime(
   // 开启时由本进程 CAS 获取实例所有权（a2a 只读技能/记忆）。
   let governanceRuntime: GovernanceRuntime | undefined;
   try {
-    if (options.initializeGovernance !== false) {
+    if (
+      options.initializeGovernance !== false &&
+      process.env.KIWI_GOVERNANCE_DISABLE_INIT !== "1"
+    ) {
       governanceRuntime = initializeGovernanceRuntime({
-      db,
-      merchantId: profile.owner_id,
-      flags: loadGovernanceFeatureFlagsFromEnv(process.env),
-      ownerId: `mcp_${randomUUID()}`,
+        db,
+        merchantId: profile.owner_id,
+        flags: loadGovernanceFeatureFlagsFromEnv(process.env),
+        ownerId: `governance_${randomUUID()}`,
         onEvent: (event: GovernanceRuntimeEvent) =>
           log(`[kiwi] governance: ${JSON.stringify(event)}\n`),
       });
@@ -642,6 +647,9 @@ export async function assembleMerchantRuntime(
   // 独立运行模式的 Workbench v1 管理 API：与 cloud bootstrap 同一套
   // `createMerchantManagementApiHandler`，挂到本进程 `/merchant/api/*`。
   // 依赖 oauth.sqlite（管理会话）；未配置 OAuth 时保持原行为不挂载。
+  // 现有管理路由保持原行为；TOP1-3 新功能路由只在持有治理所有权时挂载，
+  // 避免无栅栏写入（管理写者由部署决定：standalone workbench 或 cloud）。
+  const governanceActive = governanceRuntime?.active === true;
   const managementApi =
     oauthDb === undefined
       ? undefined
@@ -663,14 +671,18 @@ export async function assembleMerchantRuntime(
           operations: new MerchantManagementOperationStore({ db, now }),
           serviceState: new MutableServiceState("OPERATING", { now }),
           readiness: async () => ({ ready: true, checks: {} }),
-          merchantOperations: new MerchantOperationsSurface({
-            facade: openMerchantOperationsFacade({
-              db,
-              merchantId: profile.owner_id,
-              now,
-            }),
-            now,
-          }),
+          ...(governanceActive
+            ? {
+                merchantOperations: new MerchantOperationsSurface({
+                  facade: openMerchantOperationsFacade({
+                    db,
+                    merchantId: profile.owner_id,
+                    now,
+                  }),
+                  now,
+                }),
+              }
+            : {}),
           now: () => new Date(now()),
         });
   const serverOptions: MerchantMcpServerOptions = {
@@ -806,6 +818,7 @@ export async function assembleMerchantRuntime(
       if (floor === undefined) return undefined;
       return decimalMajorToMinor(currency, String(floor)).amount_minor;
     },
+    governanceActive,
     close: createCleanup([
       { id: "merchant_conversations", run: () => conversation?.close() ?? Promise.resolve() },
       { id: "oauth_database", run: () => { if (oauthDb) closeDatabase(oauthDb); } },

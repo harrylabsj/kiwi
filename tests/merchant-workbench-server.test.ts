@@ -81,25 +81,40 @@ merchant_policy:
   delivery_lead_days: 7
 `;
 
-describe("standalone merchant workbench", () => {
-  it("starts a local workbench with login/admin surfaces and /livez", async () => {
-    const root = mkdtempSync(join(tmpdir(), "kiwi-workbench-"));
-    dirs.push(root);
-    const profilePath = join(root, "profile.yaml");
-    writeFileSync(profilePath, PROFILE);
-    const profile = loadProfile(profilePath);
-    writeAdminCredentials(root, {
-      principalId: profile.agent_id,
-      merchantId: profile.owner_id,
-      password: "strong-pw-123",
-    });
-    const handle = await startStandaloneMerchantWorkbench({
+async function startWorkbench(root: string): Promise<StandaloneWorkbenchHandle | undefined> {
+  const profilePath = join(root, "profile.yaml");
+  writeFileSync(profilePath, PROFILE);
+  const profile = loadProfile(profilePath);
+  writeAdminCredentials(root, {
+    principalId: profile.agent_id,
+    merchantId: profile.owner_id,
+    password: "strong-pw-123",
+  });
+  try {
+    return await startStandaloneMerchantWorkbench({
       profile,
       dataDir: root,
       host: "127.0.0.1",
       port: 0,
       log: () => undefined,
     });
+  } catch {
+    return undefined;
+  }
+}
+
+describe("standalone merchant workbench", () => {
+  it("starts a local workbench with login/admin surfaces and /livez", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kiwi-workbench-"));
+    dirs.push(root);
+    process.env.KIWI_GOVERNANCE_LEARNING_ENABLED = "true";
+    let handle: StandaloneWorkbenchHandle | undefined;
+    try {
+      handle = await startWorkbench(root);
+    } finally {
+      delete process.env.KIWI_GOVERNANCE_LEARNING_ENABLED;
+    }
+    if (handle === undefined) throw new Error("workbench failed to start");
     workbenches.push(handle);
     const page = await fetch(handle.url);
     expect(page.status).toBe(200);
@@ -122,6 +137,44 @@ describe("standalone merchant workbench", () => {
     });
     expect(policy.status).toBe(200);
     expect(await policy.json()).toMatchObject({ auto_quote: true });
+
+    // TOP1-3 管理路由已接入同一 workbench 入口。
+    const corrections = await fetch(
+      new URL("/merchant/api/v1/learning/corrections", handle.url),
+      { headers: { cookie } },
+    );
+    expect(corrections.status).toBe(200);
+    expect(await corrections.json()).toEqual({ corrections: [] });
+    const rules = await fetch(new URL("/merchant/api/v1/automation/rules", handle.url), {
+      headers: { cookie },
+    });
+    expect(rules.status).toBe(200);
+    expect(await rules.json()).toEqual({ rules: [] });
+  });
+
+  it("does not mount TOP1-3 routes when governance flags are off", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kiwi-workbench-"));
+    dirs.push(root);
+    const handle = await startWorkbench(root);
+    if (handle === undefined) throw new Error("workbench failed to start");
+    workbenches.push(handle);
+    const login = await fetch(new URL("/admin/login?next=%2Fmerchant%2F", handle.url), {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "password=strong-pw-123&next=%2Fmerchant%2F",
+      redirect: "manual",
+    });
+    expect(login.status).toBe(303);
+    const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+    const policy = await fetch(new URL("/merchant/api/v1/policy", handle.url), {
+      headers: { cookie },
+    });
+    expect(policy.status).toBe(200);
+    const corrections = await fetch(
+      new URL("/merchant/api/v1/learning/corrections", handle.url),
+      { headers: { cookie } },
+    );
+    expect(corrections.status).toBe(404);
   });
 });
 

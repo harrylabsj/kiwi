@@ -756,6 +756,8 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
       ? new SqliteCustomerMemoryProvider({
           dbPath: path.join(options.dataDir!, "state.sqlite"),
           now,
+          // 单写者部署：管理写者由 standalone workbench 持有所有权；接待只读。
+          allowWrites: false,
         })
       : undefined;
   const receptionPi =
