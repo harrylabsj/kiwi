@@ -168,6 +168,8 @@ export interface MerchantRuntimeAssembly {
   privateFloorMinor: (sku: string, currency: string) => string | undefined;
   /** 本进程当前是否持有 TOP1-3 治理所有权（管理写入准入依据）。 */
   governanceActive: boolean;
+  /** 逐次写入前核验所有权；未初始化治理时 undefined。 */
+  assertGovernanceOwner: (() => void) | undefined;
   /** 关闭装配持有的数据库连接（不涉及 http server）。 */
   close: () => Promise<void>;
 }
@@ -650,6 +652,8 @@ export async function assembleMerchantRuntime(
   // 现有管理路由保持原行为；TOP1-3 新功能路由只在持有治理所有权时挂载，
   // 避免无栅栏写入（管理写者由部署决定：standalone workbench 或 cloud）。
   const governanceActive = governanceRuntime?.active === true;
+  const assertGovernanceOwner =
+    governanceRuntime === undefined ? undefined : () => governanceRuntime.assertOwner();
   const managementApi =
     oauthDb === undefined
       ? undefined
@@ -671,6 +675,7 @@ export async function assembleMerchantRuntime(
           operations: new MerchantManagementOperationStore({ db, now }),
           serviceState: new MutableServiceState("OPERATING", { now }),
           readiness: async () => ({ ready: true, checks: {} }),
+          ...(assertGovernanceOwner !== undefined ? { assertGovernanceOwner } : {}),
           ...(governanceActive
             ? {
                 merchantOperations: new MerchantOperationsSurface({
@@ -819,6 +824,7 @@ export async function assembleMerchantRuntime(
       return decimalMajorToMinor(currency, String(floor)).amount_minor;
     },
     governanceActive,
+    assertGovernanceOwner,
     close: createCleanup([
       { id: "merchant_conversations", run: () => conversation?.close() ?? Promise.resolve() },
       { id: "oauth_database", run: () => { if (oauthDb) closeDatabase(oauthDb); } },

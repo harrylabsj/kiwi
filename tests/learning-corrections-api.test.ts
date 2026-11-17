@@ -33,6 +33,8 @@ const merchantOperations = new MerchantOperationsSurface({ facade, now: () => NO
 
 let server: Server;
 let base: string;
+/** 模拟运行期失去治理所有权：学习写入必须逐次核验并 fail-closed。 */
+let ownershipHeld = true;
 
 beforeAll(async () => {
   server = createServer(
@@ -49,6 +51,9 @@ beforeAll(async () => {
       operations,
       serviceState,
       merchantOperations,
+      assertGovernanceOwner: () => {
+        if (!ownershipHeld) throw new Error("ownership lost");
+      },
       readiness: async () => ({ ready: true, checks: {} }),
       now: () => new Date(NOW),
     }),
@@ -397,5 +402,24 @@ describe("商家纠正入口（Workbench v1）", () => {
     // 适配层先按会话 merchant 拦截（404）；服务层另有 actor_merchant_mismatch
     // 的 defense-in-depth（见 learning-corrections.test.ts）。
     expect(attempt.status).toBe(404);
+  });
+
+  it("运行期失去治理所有权：学习写 409，读仍可用", async () => {
+    const operator = await login("operator");
+    ownershipHeld = false;
+    try {
+      const write = await call("POST", "/merchant/api/v1/learning/corrections", {
+        ...operator,
+        body: {
+          correction_text: "失去所有权后不应落库。",
+          idempotency_key: "corr-lost-owner",
+        },
+      });
+      expect(write.status).toBe(409);
+    } finally {
+      ownershipHeld = true;
+    }
+    const list = await call("GET", "/merchant/api/v1/learning/corrections", operator);
+    expect(list.status).toBe(200);
   });
 });

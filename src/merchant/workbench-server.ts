@@ -254,6 +254,9 @@ export async function startStandaloneMerchantWorkbench(
     readiness,
     workbenchConfirmations,
     ...(merchantOperations !== undefined ? { merchantOperations } : {}),
+    ...(assembly.assertGovernanceOwner !== undefined
+      ? { assertGovernanceOwner: assembly.assertGovernanceOwner }
+      : {}),
   });
   const adminHandle = createMerchantHttpHandler(assembly.serverOptions);
   const trustedPage = createTrustedWorkbenchPageHandler();

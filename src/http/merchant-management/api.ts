@@ -357,6 +357,11 @@ export interface MerchantManagementApiOptions {
   workbenchEvents?: WorkbenchEventProjectionStore;
   /** 商家持续经营（v0.2）：经营计划/机会/方案/跟进；未配置时对应路由 404。 */
   merchantOperations?: MerchantOperationsSurface;
+  /**
+   * TOP1-3 学习/自动化写入口的所有权准入（逐次校验，不只启动时判定）。
+   * 缺省不校验（测试/旧装配）；掌握治理所有权的进程应传入。
+   */
+  assertGovernanceOwner?: () => void;
   quotePreview?: (sku: string, quantity: number) => Promise<WorkbenchQuoteResult>;
   followerSummary?: () => number;
   engagementSummary?: () => { received: number; presented: number; clicked: number };
@@ -1266,6 +1271,20 @@ export function createMerchantManagementApiHandler(
     requestId: string,
     url: URL,
   ): Promise<void> {
+    if (
+      options.assertGovernanceOwner !== undefined &&
+      (rest.startsWith("/learning/") || rest.startsWith("/automation/"))
+    ) {
+      // 写前逐次核验所有权：初始化后被接管/租约过期时 fail-closed，不落无栅栏写入。
+      try {
+        options.assertGovernanceOwner();
+      } catch {
+        throw new ManagementError(
+          "conflict",
+          "governance ownership is not held by this process",
+        );
+      }
+    }
     if (options.merchantOperations !== undefined) {
       const ops = options.merchantOperations;
       const readOpsBody = async (): Promise<{ body: unknown; idempotencyKey?: string }> => {
