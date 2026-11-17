@@ -33,7 +33,7 @@ export class ProtocolOperationUnknown extends McpError {
  * 不是"结果未知"：不能再轮询、也不能自动重试。
  */
 export class MerchantDeclined extends McpError {
-  constructor(readonly reasonCode: string) {
+  constructor(readonly reasonCode: string, readonly merchantMessage?: string) {
     super("merchant_declined", `merchant declined the request: ${reasonCode}`, {
       decline_reason: reasonCode,
     });
@@ -71,7 +71,7 @@ export interface ProtocolExchange {
   pollIntervalMs: number;
 }
 /** 从任务终态消息里取商家结构化拒绝的 reason_code（无则 null）。 */
-function structuredDecline(task: A2ATask): string | null {
+function structuredDecline(task: A2ATask): { reasonCode: string; message?: string } | null {
   const parts = task?.status?.message?.parts;
   if (!Array.isArray(parts)) return null;
   for (const part of parts) {
@@ -81,7 +81,14 @@ function structuredDecline(task: A2ATask): string | null {
     const record = data as Record<string, unknown>;
     if (record["decline"] !== true) continue;
     const reason = typeof record["reason_code"] === "string" ? record["reason_code"].trim() : "";
-    return reason === "" ? "unspecified" : reason;
+    const textPart = parts.find((p) => p?.kind === "text" && typeof p.text === "string");
+    const message = textPart?.kind === "text" && typeof textPart.text === "string"
+      ? Array.from(textPart.text, (char) => {
+          const code = char.charCodeAt(0);
+          return code < 32 || code === 127 ? " " : char;
+        }).join("").trim().slice(0, 300)
+      : "";
+    return { reasonCode: reason === "" ? "unspecified" : reason, ...(message ? { message } : {}) };
   }
   return null;
 }
@@ -448,7 +455,7 @@ export class BuyerProtocolRecovery {
       // 报"结果未知"——商家明明已经明确拒绝了。这里先认出来，交给上层投影成
       // `rejected` 候选（带 reason_code），别再等 20 秒。
       const decline = structuredDecline(task);
-      if (decline !== null) throw new MerchantDeclined(decline);
+      if (decline !== null) throw new MerchantDeclined(decline.reasonCode, decline.message);
       let reply: NegotiationEnvelope | null;
       try {
         reply = extractKnpEnvelope(task, wire);

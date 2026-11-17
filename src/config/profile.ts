@@ -158,8 +158,8 @@ export interface AgentProfile {
     /**
      * 商品源未声明单位时，商家的**默认售卖单位**（如 `piece`）。
      *
-     * shopping-cli 的 products 表没有单位列，报价 handler 对单位是严格比较（不做
-     * 同义词映射）：没有单位就一律 `field_unsupported`，这也是本字段存在的原因。
+     * shopping-cli 的 products 表没有单位列；报价 handler 接受内建的一对一单位
+     * 写法，但没有单位时仍返回 `field_unsupported`，这也是本字段存在的原因。
      * 不填 = 保持 fail-closed（拒绝一切询价），填了才参与报价。
      */
     default_unit?: string;

@@ -491,7 +491,7 @@ class ProductSourceUnavailableError extends Error {
 
 /**
  * 单位校验：商品**没有单位就拒绝**（fail-closed，不知道按什么计量就不报价）；
- * 有单位时严格比较，只额外接受商家显式声明的别名，或内建的 box/盒 1:1 写法。
+ * 有单位时接受商家显式别名及内建的 box/盒、piece/个/件 1:1 写法。
  * 不做“个/件 = 盒”的自动换算，也不改变数量/单价/金额。
  */
 function unitMismatch(
@@ -514,6 +514,12 @@ const declineReply = (
   ...(message !== undefined ? { message } : {}),
   taskState: "completed",
 });
+
+function unitDecline(productUnit: string | undefined): NegotiationHandlerResult {
+  return declineReply("field_unsupported", productUnit?.trim()
+    ? "询价数量单位与商品销售单位不匹配，请核对单位及包装数量后重新询价。"
+    : "商品尚未提供销售单位，请联系商家确认后重新询价。");
+}
 
 /** AC09/D03：统计入站商务动作的商品行数（rfq/offer/counter_offer）。 */
 function multiItemCountOf(envelope: { action: string; payload?: unknown }): number {
@@ -1390,7 +1396,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           if ("declined" in resolved) return resolved.declined;
           const product = resolved.product;
           const { priceMinor, currency } = product;
-          if (unitMismatch(product.unit, requestedUnit, unitPolicy)) return declineReply("field_unsupported");
+          if (unitMismatch(product.unit, requestedUnit, unitPolicy)) return unitDecline(product.unit);
           const handoff_destination = product.stock === undefined || product.source_evidence === undefined ? undefined : product.handoff_destination;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
           const promotion = resolvePromotionQuote(sku, quantity, priceMinor, currency, floorMinor);
@@ -1495,7 +1501,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           if ("declined" in resolved) return resolved.declined;
           const product = resolved.product;
           const { priceMinor, currency } = product;
-          if (unitMismatch(product.unit, requestedUnit, unitPolicy)) return declineReply("field_unsupported");
+          if (unitMismatch(product.unit, requestedUnit, unitPolicy)) return unitDecline(product.unit);
           const handoff_destination = product.stock === undefined || product.source_evidence === undefined ? undefined : product.handoff_destination;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
           const promotion = resolvePromotionQuote(sku, quantity, priceMinor, currency, floorMinor);
@@ -1587,7 +1593,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           if ("declined" in resolved) return resolved.declined;
           const product = resolved.product;
           const { priceMinor, currency } = product;
-          if (unitMismatch(product.unit, requestedUnit, unitPolicy)) return declineReply("field_unsupported");
+          if (unitMismatch(product.unit, requestedUnit, unitPolicy)) return unitDecline(product.unit);
           const handoff_destination = product.stock === undefined || product.source_evidence === undefined ? undefined : product.handoff_destination;
           if (factsUnusable(product, quantity)) return declineReply("temporarily_unavailable");
           const authorityPromotion = resolvePromotionQuote(

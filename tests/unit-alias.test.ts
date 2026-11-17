@@ -168,6 +168,20 @@ describe("explicit box/盒 unit aliases", () => {
     expect(unitsAreCanonicalAliases("个", "box")).toBe(false);
     expect(unitsAreCanonicalAliases("件", "box")).toBe(false);
     expect(unitsAreCanonicalAliases("个", "盒")).toBe(false);
-    expect(canonicalUnitToken("个")).toBe("个");
+    expect(canonicalUnitToken("个")).toBe("piece");
+  });
+
+  it.each(["件", "个", "piece"])("treats %s as one piece in either direction", (source) => {
+    for (const requested of ["件", "个", "piece"]) {
+      expect(unitsAreCanonicalAliases(source, requested)).toBe(true);
+      expect(resolveUnitConversion(unitConversionPolicy({}), source, requested))
+        .toEqual({ kind: "identity", unit: "piece" });
+    }
+  });
+
+  it("rejects conflicting package definitions even after piece spellings are folded", () => {
+    const policy = unitConversionPolicy({ defaultUnit: "piece", packageFactors: { "件": 12 } });
+    expect(resolveUnitConversion(policy, "件", "piece")).toEqual({ kind: "mismatch", reason: "folded_factor_conflict" });
+    expect(() => normalizeUnitFactorMap({ "件": 12, "个": 6 })).toThrow(/conflicting/);
   });
 });

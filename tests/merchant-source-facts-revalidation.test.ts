@@ -71,6 +71,20 @@ describe("actual handler source facts and accept preconditions", () => {
     // unit_unmapped；计价仍按商家规范单位。
     expect(terms.items[0]?.quantity.unit).toBe("个");
   });
+  it.each(["个", "piece"])('quotes a product sold by 件 when requested as %s', async unit => {
+    const f = setup({ ...base(), unit: "件" });
+    const r = await f.send("rfq", { type: "rfq", items: [{ sku: "SKU", quantity: { value: 1, unit } }] });
+    const env = outgoing(r);
+    expect((env.payload as { terms: { items: unknown[] } }).terms.items).toEqual([
+      { sku: "SKU", quantity: { value: 1, unit }, unit_price: { currency: "CNY", amount_minor: 10000 } },
+    ]);
+  });
+  it("explains a unit mismatch and distinguishes missing product units", async () => {
+    expect(await setup(base()).send("rfq", { type: "rfq", items: [{ sku: "SKU", quantity: { value: 1, unit: "piece" } }] }))
+      .toMatchObject({ kind: "declined", reasonCode: "field_unsupported", message: expect.stringContaining("单位不匹配") });
+    expect(await setup({ ...base(), unit: undefined }).quote())
+      .toMatchObject({ kind: "declined", message: expect.stringContaining("尚未提供销售单位") });
+  });
   it("accepts box/盒 as an explicit 1:1 alias without changing quantity or price", async () => {
     const f = setup(base());
     const r = await f.send("rfq", { type: "rfq", items: [{ sku: "SKU", quantity: { value: 5, unit: "盒" } }] });
@@ -249,7 +263,7 @@ describe("actual handler source facts and accept preconditions", () => {
 
   it("still refuses an alias the merchant did not declare", async () => {
     const f = setup({ ...base(), unit: "piece" }, undefined, undefined, { unitAliases: { "件": "piece" } });
-    const r = await f.send("rfq", { type: "rfq", items: [{ sku: "SKU", quantity: { value: 5, unit: "个" } }] });
+    const r = await f.send("rfq", { type: "rfq", items: [{ sku: "SKU", quantity: { value: 5, unit: "只" } }] });
     expect(r.kind === "declined" && r.reasonCode).toBe("field_unsupported");
   });
   it.each([{}, { sku: "SKU" }, { sku: "SKU", quantity: { value: 5 } }])("does not fabricate required request fields %j", async item => {

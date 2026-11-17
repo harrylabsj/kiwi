@@ -480,7 +480,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
           failure: {
             classification: "rejected",
             retryable: false,
-            detail: `merchant_declined:${error.reasonCode}`,
+            detail: redactShareParameter(`merchant_declined:${error.reasonCode}${error.merchantMessage ? `：${error.merchantMessage}` : ""}`),
           },
         };
       }

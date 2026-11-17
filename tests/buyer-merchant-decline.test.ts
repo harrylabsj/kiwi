@@ -36,7 +36,7 @@ afterEach(() => {
 
 const CREATED_AT = "2026-10-28T12:00:00.000Z";
 
-function declineTask(): A2ATask {
+function declineTask(message?: string): A2ATask {
   return {
     id: "task_remote_declined",
     status: {
@@ -45,7 +45,7 @@ function declineTask(): A2ATask {
       message: {
         role: "agent",
         messageId: "msg_decline_1",
-        parts: [{ kind: "data", data: { decline: true, reason_code: "field_unsupported" } }],
+        parts: [...(message ? [{ kind: "text", text: message }] : []), { kind: "data", data: { decline: true, reason_code: "field_unsupported" } }],
       },
     },
   } as unknown as A2ATask;
@@ -109,5 +109,18 @@ describe("merchant structured decline", () => {
         expect(error).toBeInstanceOf(MerchantDeclined);
         expect((error as MerchantDeclined).reasonCode).toBe("field_unsupported");
       });
+  });
+
+  it("preserves the merchant's explanation without polling", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-decline-")); dirs.push(dir);
+    const recovery = new BuyerProtocolRecovery(dir, "buyer-agent:test", () => CREATED_AT);
+    await expect(recovery.exchange({
+      context: { taskId: "task-local-message", createdAt: CREATED_AT, intentBindingDigest: "sha256:intent-binding" },
+      stage: "rfq", round: 0, merchantId: "mkt_test", endpoint: "https://merchant.example/a2a",
+      binding: { intent: "probe" },
+      build: negotiationId => buildRfqEnvelope({ negotiationId, sku: "SKU-1", quantity: { value: 1, unit: "box" }, now: () => CREATED_AT }),
+      send: async () => declineTask("询价数量单位与商品销售单位不匹配，请核对单位。"),
+      get: async () => { throw new Error("must not poll"); }, timeoutMs: 2000, pollIntervalMs: 50,
+    })).rejects.toMatchObject({ reasonCode: "field_unsupported", merchantMessage: expect.stringContaining("单位不匹配") });
   });
 });

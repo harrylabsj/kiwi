@@ -2,8 +2,8 @@
  * Explicit, loss-free unit spellings shared by the merchant RFQ handler and the
  * reception paths.
  *
- * Only a closed one-to-one set is canonicalised here: `box` and `盒` denote the
- * same selling unit. This never turns `个`/`件` into a box. Package factors are
+ * Closed one-to-one spellings: `box`/`盒` and `piece`/`个`/`件`.
+ * This never turns `个`/`件` into a box. Package factors are
  * applied only by `resolveUnitConversion` when the source unit is explicitly
  * the configured `default_unit`; same-unit requests stay 1:1. Merchant
  * `unit_aliases` and `unit_package_factors` remain authoritative and are
@@ -16,14 +16,16 @@ export function normalizeUnitToken(unit: string): string {
 /** Canonical spelling for a known one-to-one unit; unknown units stay as-is. */
 export function canonicalUnitToken(unit: string): string {
   const normalized = normalizeUnitToken(unit);
-  return normalized === "盒" ? "box" : normalized;
+  if (normalized === "盒") return "box";
+  if (normalized === "个" || normalized === "件") return "piece";
+  return normalized;
 }
 
-/** True only when the two spellings are the explicit box/盒 equivalence. */
+/** True only for the built-in one-to-one unit groups. */
 export function unitsAreCanonicalAliases(a: string, b: string): boolean {
   const left = canonicalUnitToken(a);
   const right = canonicalUnitToken(b);
-  return left === "box" && right === "box";
+  return left === right && (left === "box" || left === "piece");
 }
 
 /**
