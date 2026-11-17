@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {execFileSync,spawnSync} from 'node:child_process';
 import {mkdtempSync,mkdirSync,readFileSync,writeFileSync,chmodSync,linkSync,rmdirSync,rmSync,realpathSync,existsSync} from 'node:fs';
 import {dirname,join} from 'node:path';
+import {tmpdir} from 'node:os';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {withBuyerCacheStore} from '../runtime/buyer-cache-store-draft.mjs';
@@ -11,7 +12,8 @@ import {verifyPreparedTreeBinding} from '../runtime/tree-binding.mjs';
 
 const runtime=dirname(fileURLToPath(import.meta.url));
 const connector=dirname(runtime);
-const python=realpathSync('/opt/homebrew/bin/python3');
+const python=realpathSync(execFileSync('python3',['-c','import sys;print(sys.executable)'],{encoding:'utf8'}).trim());
+const tempRoot=realpathSync(tmpdir());
 const treeCli=join(connector,'runtime','inspect_tree_cli.py');
 const name='@harrylabsj/kiwi',version='0.12.14';
 function createInstallTree(session){
@@ -25,7 +27,7 @@ function inspect(session){return JSON.parse(execFileSync(python,[treeCli,session
 test('Python tree inspection does not write bytecode into the pinned source tree',{timeout:10000},()=>{
   const source=readFileSync(join(connector,'runtime','candidate-check.mjs'),'utf8');
   assert.match(source,/NODE_ENV:'test',PYTHONDONTWRITEBYTECODE:'1'/);
-  const base=mkdtempSync('/private/tmp/kiwi-format3-bytecode-'),session=join(base,'session');mkdirSync(session,{mode:0o700});
+  const base=mkdtempSync(join(tempRoot,'kiwi-format3-bytecode-')),session=join(base,'session');mkdirSync(session,{mode:0o700});
   try{
     createInstallTree(session);
     const result=execFileSync(python,[treeCli,session],{cwd:connector,env:{HOME:base,TMPDIR:base,PATH:'/usr/bin:/bin',NODE_ENV:'test',PYTHONDONTWRITEBYTECODE:'1'},encoding:'utf8',stdio:['ignore','pipe','ignore']});
@@ -35,7 +37,7 @@ test('Python tree inspection does not write bytecode into the pinned source tree
 });
 
 test('synthetic install emits a content tree digest, format3 binds it, and spawn gate rechecks it',{timeout:15000},async()=>{
-  const base=mkdtempSync('/private/tmp/kiwi-format3-contract-'),store=join(base,'store'),session=join(store,'kiwi-preflight-ABC123');mkdirSync(store,{mode:0o700});mkdirSync(session,{mode:0o700});
+  const base=mkdtempSync(join(tempRoot,'kiwi-format3-contract-')),store=join(base,'store'),session=join(store,'kiwi-preflight-ABC123');mkdirSync(store,{mode:0o700});mkdirSync(session,{mode:0o700});
   try{
     const artifact=createInstallTree(session),before=inspect(session);
     assert.equal(before.packages,1);assert.equal(before.files,2);assert.match(before.content_tree_sha256,/^[a-f0-9]{64}$/);
@@ -60,7 +62,7 @@ test('synthetic install emits a content tree digest, format3 binds it, and spawn
 });
 
 test('root allowlist rejects an unknown top-level file before digest acceptance',{timeout:10000},()=>{
-  const base=mkdtempSync('/private/tmp/kiwi-format3-root-contract-'),session=join(base,'session');mkdirSync(session,{mode:0o700});
+  const base=mkdtempSync(join(tempRoot,'kiwi-format3-root-contract-')),session=join(base,'session');mkdirSync(session,{mode:0o700});
   try{
     createInstallTree(session);writeFileSync(join(session,'.npmrc'),'synthetic-only',{mode:0o600,flag:'wx'});
     const result=spawnSync(python,[treeCli,session],{env:{PATH:'/usr/bin:/bin',PYTHONDONTWRITEBYTECODE:'1'},encoding:'utf8',timeout:10000});
@@ -69,7 +71,7 @@ test('root allowlist rejects an unknown top-level file before digest acceptance'
 });
 
 test('package, empty-directory and mode changes alter the content digest; hard links are rejected',{timeout:15000},()=>{
-  const base=mkdtempSync('/private/tmp/kiwi-format3-digest-negative-'),session=join(base,'session');mkdirSync(session,{mode:0o700});
+  const base=mkdtempSync(join(tempRoot,'kiwi-format3-digest-negative-')),session=join(base,'session');mkdirSync(session,{mode:0o700});
   try{
     createInstallTree(session);const first=inspect(session).content_tree_sha256;
     mkdirSync(join(session,'node_modules','@harrylabsj','kiwi','empty'));assert.notEqual(inspect(session).content_tree_sha256,first);
