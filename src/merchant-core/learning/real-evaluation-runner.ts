@@ -129,7 +129,9 @@ export function createReceptionEvaluationRunner(
       ...(options.policy !== undefined ? { policy: options.policy } : {}),
       maxSteps: 6,
       maxToolAttempts: 10,
-      timeoutMs: 30_000,
+      // 与生产 profile 的 turn_timeout_seconds=90 对齐；30s 会把真实模型
+      // 的慢回合误判成质量失败（无 diagnostics 的 passed=false）。
+      timeoutMs: 90_000,
     });
   }
 
