@@ -1,7 +1,13 @@
 # Changelog
 
-## Unreleased
+## v0.12.31 — 2026-11-17
 
+- **独立部署商家工作台**：新增 `kiwi merchant workbench serve`
+  （`/merchant/` + `/merchant/api/*`，缺省 `127.0.0.1:9102`）。复用云端同一
+  份工作台页面/管理 API，本地 owner 登录复用 `/admin/login`；商品列表来自
+  shopping-cli 开放层（只读），报价规则写入运行中 policy，暂停/恢复与待审批
+  沿用本地管理面。目录连接、商品导入、经营计划等云端页签在独立部署中明确
+  503。详见 `docs/merchant-workbench-standalone.md`。
 - **商家工作台报价规则页**：自动应价默认开启、去掉“不修改”；按商品逐行
   展示 SKU/名称/当前价/当前折扣/底价是否已设置，可填新折扣/新底价或勾选
   清除，提交仍走草稿→确认；`GET /merchant/api/policy` 增加安全投影

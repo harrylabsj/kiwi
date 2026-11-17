@@ -121,6 +121,11 @@ Usage:
   kiwi merchant mcp pair [--profile <merchant.yaml>] [--data-dir <dir>]
                                           生成一次性配对码（10 分钟、单次），用于把实例
                                           绑定到商家连接器网关（不必粘贴长期令牌）
+  kiwi merchant workbench serve [--profile <merchant.yaml>] [--host <host>] [--port N]
+                                [--data-dir <dir>] [--public-url <origin>]
+                                          独立部署商家工作台（/merchant/ + /merchant/api/*；
+                                          缺省 127.0.0.1:9102；先运行
+                                          kiwi merchant mcp admin-passwd 设置登录口令）
   kiwi merchant runtime <start|stop|status|health|rotate-key> [--profile <merchant.yaml>] [--data-dir <dir>]
                                           Merchant 实例运行时管理：A2A + MCP 受管子进程，
                                           异常退出自动重启，分项健康检查（V2 阶段一）
