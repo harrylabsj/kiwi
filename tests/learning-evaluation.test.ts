@@ -144,11 +144,11 @@ describe("候选评测（M2-4）", () => {
     });
   }
 
-  it("全部通过：READY_FOR_REVIEW，72 次回放，目标 8/8、边界 6/6、硬门 0", async () => {
+  it("全部通过：READY_FOR_REVIEW，120 次回放，目标 8/8、边界 6/6、硬门 0", async () => {
     const evaluation = await evaluate(passRunner());
     expect(evaluation.state).toBe("READY_FOR_REVIEW");
     expect(evaluation.run_status).toBe("completed");
-    expect(evaluation.runs_completed).toBe(72);
+    expect(evaluation.runs_completed).toBe(120);
     expect(evaluation.report).toMatchObject({
       verdict: "pass",
       hard_gate_failures: 0,
@@ -235,13 +235,13 @@ describe("候选评测（M2-4）", () => {
     expect(interrupted.state).toBe("EVALUATING");
     expect(interrupted.run_status).toBe("failed");
     expect(interrupted.runs_completed).toBeGreaterThan(0);
-    expect(interrupted.runs_completed).toBeLessThan(72);
+    expect(interrupted.runs_completed).toBeLessThan(120);
 
     const resumed = await evaluate(passRunner());
     expect(resumed.evaluation_id).toBe(interrupted.evaluation_id);
     expect(resumed.state).toBe("READY_FOR_REVIEW");
     expect(resumed.run_status).toBe("completed");
-    expect(resumed.runs_completed).toBe(72);
+    expect(resumed.runs_completed).toBe(120);
   });
 
   it("预算不足：paused_budget，保留 EVALUATING，不发起回放", async () => {

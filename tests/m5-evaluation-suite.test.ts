@@ -85,6 +85,18 @@ describe("M5 正式评测套件", () => {
     expect(kinds).toEqual({ target: 8, adjacent: 6, boundary: 6 });
   });
 
+  it("澄清类验收同时接受注册问题形式（v1.1 规范化）", () => {
+    for (const id of ["facts-stale", "adjacent-delivery", "boundary-auto-purchase"]) {
+      const scenario = M5_EVALUATION_SUITE.scenarios.find((item) => item.scenario_id === id);
+      expect(scenario?.expected).toMatchObject({
+        any_block_kinds: expect.arrayContaining([
+          "ask_clarification",
+          "ask_registered_question",
+        ]),
+      });
+    }
+  });
+
   it("三个初始技能均可编译且不含包装倍率/折扣/价格事实", () => {
     const compiled = compileInitialSkills();
     expect(compiled).toHaveLength(3);
