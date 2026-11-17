@@ -31,7 +31,7 @@
  */
 
 import { createServer, type Server } from "node:http";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -86,6 +86,14 @@ import { createServiceControlExecutors } from "../merchant/service-control-execu
 import { calculateWorkbenchQuote } from "../merchant/quote-calculator.js";
 import { openMerchantOperationsFacade } from "../merchant-core/ops/facade.js";
 import { MerchantOperationsSurface } from "../merchant-core/ops/surface.js";
+import {
+  loadGovernanceFeatureFlagsFromEnv,
+} from "../merchant-core/context-governance/feature-flags.js";
+import {
+  initializeGovernanceRuntime,
+  type GovernanceRuntime,
+  type GovernanceRuntimeEvent,
+} from "../merchant-core/ownership/runtime.js";
 import { WORKBENCH_CURRENCY_TABLE_VERSION } from "../merchant/application/money.js";
 import { OnboardingStore } from "./onboarding/store.js";
 import { CatalogClient } from "./catalog-client.js";
@@ -375,6 +383,24 @@ function probeAuthoritativeStorage(dataDir: string): ReadinessCheckResult {
   }
 }
 
+/** governance 运行时事件的单行日志渲染：稳定原因码，不含客户数据。 */
+function describeGovernanceEvent(event: GovernanceRuntimeEvent): string {
+  switch (event.type) {
+    case "ownership_acquired":
+    case "ownership_renewed":
+      return `${event.type} fencing=${event.fencing}`;
+    case "ledger_registration_failed":
+    case "ownership_acquisition_failed":
+    case "ownership_renewal_deferred":
+    case "ownership_renewal_callback_failed":
+    case "ownership_lost":
+    case "ownership_release_failed":
+      return `${event.type} reason=${event.reason}`;
+    default:
+      return event.type;
+  }
+}
+
 /**
  * 启动云端 Runtime。任何拒绝都抛 CloudStartupError / CloudConfigError，
  * 由入口非零退出并打印（绝不带着错误配置对外服务）。
@@ -392,6 +418,19 @@ export async function bootstrapCloudRuntime(
     loadCloudConfig(options.env ?? process.env, {
       ...(options.artifactRoot !== undefined ? { artifactRoot: options.artifactRoot } : {}),
     });
+
+  // 0) M1 收尾（D-M0-09 / 收尾决议 §1.4）：governance 功能开关严格解析。
+  //    非法值与试图启用 customer_delivery 一律启动失败，不静默回落；
+  //    解析独立于管理面装配，保证默认关闭行为在任何装配模式下一致。
+  let governanceFlags;
+  try {
+    governanceFlags = loadGovernanceFeatureFlagsFromEnv(options.env ?? process.env);
+  } catch (err) {
+    throw new CloudStartupError(
+      "GOVERNANCE_FLAGS_INVALID",
+      `governance 功能开关配置非法：${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   // 1) 商家 profile：云端只接受 merchant 角色（buyer 侧由 Catalog/Buyer 通道承载）。
   let profile;
@@ -438,6 +477,8 @@ export async function bootstrapCloudRuntime(
       mcpPath: MCP_PATH,
       authMode: "oauth",
       issuer: config.publicOrigin,
+      // cloud bootstrap 自己初始化治理运行时，避免 MCP 装配重复 acquire。
+      initializeGovernance: false,
       requireCommittedProductDecisions: true,
       // 云工作台：裸登录后进入 /merchant/；待批准页提供返回工作台入口。
       // 独立 MCP（cli）不传这两项，保持 /admin/pending 与无返回链接。
@@ -720,9 +761,39 @@ export async function bootstrapCloudRuntime(
   let bindingReconcileWork: Promise<void> | undefined;
   let directConnection: MerchantConnectionService | undefined;
   let enrollmentHeartbeat: EnrollmentHeartbeat | undefined;
+  let governanceRuntime: GovernanceRuntime | undefined;
   let catalogMerchantIdForProducts: () => string | undefined = () => undefined;
+  // 开关开启但无管理面（无 state.sqlite）时，新功能静默不可用会误导运维：
+  // 明确记录「保持关闭」，默认关闭路径行为不变。
+  if (
+    adminOptions === undefined &&
+    (governanceFlags.learning_enabled || governanceFlags.memory_enabled || governanceFlags.jobs_enabled)
+  ) {
+    log(
+      "[kiwi] governance: 功能开关已启用但未装配管理面（state.sqlite）——新功能保持关闭\n",
+    );
+  }
   if (adminOptions !== undefined) {
     managementDb = new DatabaseSync(path.join(config.dataDir, "state.sqlite"));
+    // M1 收尾（D-M0-05/D-M0-08）：三个独立迁移账本与 data_grants 在功能装配前
+    // 就绪；learning/memory/jobs 任一开启时 CAS 获取实例所有权并心跳续约。
+    // 获取失败只关闭新功能并记录原因（X12），现有接待/经营路径保持原行为
+    // （设计 §18.2：迁移失败功能保持关闭，原接待继续运行；§1.3：合法询价
+    // 必须始终可走现有确定性路径，故不整体拒绝启动）。
+    try {
+      governanceRuntime = initializeGovernanceRuntime({
+        db: managementDb,
+        merchantId: profile.owner_id,
+        flags: governanceFlags,
+        ownerId: `boot_${randomUUID()}`,
+        onEvent: (event: GovernanceRuntimeEvent) => log(`[kiwi] governance: ${describeGovernanceEvent(event)}`),
+      });
+    } catch (err) {
+      throw new CloudStartupError(
+        "GOVERNANCE_INIT_FAILED",
+        `governance 运行时初始化失败：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     serviceState.attachPersistence(managementDb, profile.owner_id);
     // 商家持续经营（v0.2）：经营计划/机会/方案/跟进共用 state.sqlite；
     // 商家身份由认证主体注入，路由层不再接受请求正文自报 merchant_id。
@@ -1509,7 +1580,9 @@ export async function bootstrapCloudRuntime(
     { id: "statistics", after: ["http_server", "background_work", "heartbeat", "merchant_handler"],
       run: () => core.close({ preserveOwnership: true }) },
     { id: "assembly", after: ["http_server", "background_work", "merchant_handler"], run: () => assembly.close() },
-    { id: "management_database", after: ["http_server", "background_work", "merchant_handler"],
+    { id: "governance", after: ["http_server", "background_work", "merchant_handler"],
+      run: () => governanceRuntime?.stop() },
+    { id: "management_database", after: ["http_server", "background_work", "merchant_handler", "governance"],
       run: () => { if (managementDb) closeDatabase(managementDb); } },
     { id: "inquiry_nonces", after: ["http_server", "background_work"], run: () => { inquiryNonces?.close(); } },
     { id: "ownership", after: ["timers", "heartbeat", "http_server", "background_work", "merchant_handler", "statistics", "assembly", "management_database", "inquiry_nonces"],

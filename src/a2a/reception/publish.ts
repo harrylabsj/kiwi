@@ -9,6 +9,10 @@
 
 import { contentDigest } from "../../negotiation/jcs.js";
 import { canonicalUnitToken } from "../unit-alias.js";
+import {
+  DEFAULT_QUESTION_SPEC_REGISTRY,
+  QuestionSpecRegistry,
+} from "./question-spec.js";
 import type {
   CommercialFactSnapshot,
   FactRef,
@@ -22,7 +26,17 @@ export type RejectReason =
   | "cross_tenant"
   | "not_public"
   | "expired"
-  | "unverified_claim";
+  | "unverified_claim"
+  | "unregistered_question"
+  | "question_contract_mismatch"
+  | "question_limit_exceeded";
+
+/** 运行记录标注：注册表无模板时回退旧文案（§7.2 renderer_fallback）。 */
+export interface RendererFallback {
+  readonly block_kind: "ask_clarification" | "ask_registered_question";
+  readonly reason_code: string;
+  readonly question_id?: string;
+}
 
 export interface RejectedBlock {
   block: ReceptionBlock;
@@ -65,6 +79,8 @@ export interface PublishResult {
   /** 校验通过的块渲染出的公开文本；全部被拒绝时为空串（调用方兜底）。 */
   text: string;
   rejected: RejectedBlock[];
+  /** 旧文案回退标注（不改变文本；供运行记录与审计）。 */
+  renderer_fallback: RendererFallback[];
 }
 
 function validateFactRef(
@@ -139,6 +155,9 @@ function renderBlock(block: ReceptionBlock, registry: CommercialFactRegistry): s
           : "";
       return [`已记录需求：${parts.join("，")}${converted}。`];
     }
+    case "ask_registered_question":
+      // 由 publishResponsePlan 在进入本函数前按注册表渲染；这里只保证类型穷尽。
+      return [];
     case "ask_clarification": {
       if (block.reason === "non_chinese") {
         return ["目前仅支持中文接待。请用中文说明需要的商品、数量和单位，或发送结构化 RFQ。"];
@@ -228,10 +247,64 @@ export function publishResponsePlan(input: {
   registry: CommercialFactRegistry;
   merchantId: string;
   now: string;
+  /** 已发布的 QuestionSpec 注册表；缺省使用内置 v1 模板。 */
+  questions?: QuestionSpecRegistry;
 }): PublishResult {
   const rejected: RejectedBlock[] = [];
+  const rendererFallback: RendererFallback[] = [];
   const lines: string[] = [];
+  const questions = input.questions ?? DEFAULT_QUESTION_SPEC_REGISTRY;
+  let questionCount = 0;
   for (const block of input.plan.blocks) {
+    if (block.kind === "ask_clarification" || block.kind === "ask_registered_question") {
+      // §7.2：每轮最多提出 2 个必要问题；超出不静默截断，拒绝并留原因。
+      questionCount += 1;
+      if (questionCount > 2) {
+        rejected.push({ block, reason: "question_limit_exceeded" });
+        continue;
+      }
+      if (block.kind === "ask_clarification") {
+        // 旧 reason 优先走注册表模板；模板缺失才回退旧文案并标注。
+        const rendered = questions.renderLegacy(block);
+        if (rendered !== undefined) {
+          lines.push(rendered.text);
+          continue;
+        }
+        rendererFallback.push({
+          block_kind: "ask_clarification",
+          reason_code: block.reason,
+        });
+        lines.push(...renderBlock(block, input.registry));
+        continue;
+      }
+      // 已注册问题：未知 ID / 契约失配一律拒绝，不回退到自由问句。
+      const spec = questions.resolve(block.question_id);
+      if (spec === undefined) {
+        rejected.push({ block, reason: "unregistered_question" });
+        continue;
+      }
+      if (
+        block.schema_version !== spec.schema_version ||
+        block.slot !== spec.slot ||
+        block.reason_code !== spec.reason_code
+      ) {
+        rejected.push({ block, reason: "question_contract_mismatch" });
+        continue;
+      }
+      if (block.candidate_refs !== undefined && spec.candidate_type !== "sku_candidates") {
+        rejected.push({ block, reason: "question_contract_mismatch" });
+        continue;
+      }
+      const rendered = questions.renderRegistered(block.question_id, {
+        ...(block.candidate_refs !== undefined ? { candidates: block.candidate_refs } : {}),
+      });
+      if (rendered === undefined) {
+        rejected.push({ block, reason: "question_contract_mismatch" });
+        continue;
+      }
+      lines.push(rendered.text);
+      continue;
+    }
     if (block.kind === "recommend_option") {
       const mainReason = validateFactRef(block.ref, input.registry, input.merchantId, input.now);
       if (mainReason !== undefined) {
@@ -290,5 +363,5 @@ export function publishResponsePlan(input: {
     }
     lines.push(...renderBlock(block, input.registry));
   }
-  return { text: lines.join(" "), rejected };
+  return { text: lines.join(" "), rejected, renderer_fallback: rendererFallback };
 }

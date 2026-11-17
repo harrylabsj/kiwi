@@ -72,6 +72,14 @@ export const MERCHANT_PERMISSIONS = [
   "followups:manage",
   "orders:read",
   "orders:report",
+  // TOP1 经验学习（M2）：纠正提交与案例形成走管理面；发布/回滚权限在
+  // M2-5 单独增加（真实管理员审核，不复用 learning:manage）。
+  "learning:read",
+  "learning:manage",
+  // 审核与发布是 owner 专属（设计 §6.2/§6.3：真实管理员审核，技能发布
+  // 许可不替代既有商务批准）。
+  "learning:review",
+  "learning:publish",
 ] as const;
 export type MerchantPermission = (typeof MERCHANT_PERMISSIONS)[number];
 
@@ -90,6 +98,7 @@ const ROLE_PERMISSIONS: Readonly<Record<MerchantRole, readonly MerchantPermissio
     "opportunities:read",
     "followups:read",
     "orders:read",
+    "learning:read",
   ],
   operator: [
     "status:read",
@@ -113,6 +122,8 @@ const ROLE_PERMISSIONS: Readonly<Record<MerchantRole, readonly MerchantPermissio
     "followups:manage",
     "orders:read",
     "orders:report",
+    "learning:read",
+    "learning:manage",
     ],
   owner: [
     "status:read",
@@ -146,6 +157,10 @@ const ROLE_PERMISSIONS: Readonly<Record<MerchantRole, readonly MerchantPermissio
     "followups:manage",
     "orders:read",
     "orders:report",
+    "learning:read",
+    "learning:manage",
+    "learning:review",
+    "learning:publish",
     ],
 };
 

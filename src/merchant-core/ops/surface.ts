@@ -22,6 +22,10 @@
  */
 
 import { ManagementError } from "../../merchant/application/service.js";
+import {
+  createActorContext,
+  type ActorContext,
+} from "../context-governance/actor-context.js";
 import type { MerchantOperationsFacade } from "./facade.js";
 import type { OperatingPlanInput } from "../operating/types.js";
 import type { CreateOpportunityInput } from "../opportunity/service.js";
@@ -58,6 +62,39 @@ function optionalText(body: Record<string, unknown>, name: string): string | und
 
 function optionalInteger(body: Record<string, unknown>, name: string): number | undefined {
   return body[name] === undefined ? undefined : integer(body, name);
+}
+
+function stringArray(body: Record<string, unknown>, name: string): string[] {
+  const value = body[name];
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new ManagementError("invalid_input", `${name} must be a string array`);
+  }
+  return value as string[];
+}
+
+/**
+ * 管理面已认证主体 → 治理 ActorContext。merchant/actor 来自会话，权限来自
+ * 角色映射；模型与请求正文不能注入这些值。只映射学习写入所需能力，避免
+ * 把管理面的其他权限带入治理域。
+ */
+export interface ManagementActorInput {
+  readonly actor_id: string;
+  readonly merchant_id: string;
+  readonly auth_method: "admin-session" | "merchant-session" | "service-identity";
+  readonly permissions: readonly string[];
+}
+
+function governanceActor(input: ManagementActorInput): ActorContext {
+  const capabilities = ["learning:manage", "learning:review", "learning:publish"].filter(
+    (capability) => input.permissions.includes(capability),
+  );
+  return createActorContext({
+    merchant_id: input.merchant_id,
+    actor_id: input.actor_id,
+    auth_strength: input.auth_method === "merchant-session" ? "session" : "verified",
+    subject_binding: "organization",
+    capabilities,
+  });
 }
 
 export class MerchantOperationsSurface {
@@ -366,4 +403,291 @@ export class MerchantOperationsSurface {
     );
   }
 
+  // ── TOP1 经验学习：纠正与案例（M2）────────────────────────────────────
+
+  listCorrections(): unknown[] {
+    return this.facade.learning.listCorrections(this.facade.merchantId);
+  }
+
+  getCorrection(correctionId: string): unknown {
+    const correction = this.facade.learning.getCorrection(this.facade.merchantId, correctionId);
+    if (correction === undefined) {
+      throw new ManagementError("not_found", `correction ${correctionId} not found`);
+    }
+    return correction;
+  }
+
+  submitCorrection(
+    value: unknown,
+    actor: ManagementActorInput,
+    idempotencyKey?: string,
+  ): unknown {
+    const body = objectBody(value);
+    return this.facade.learning.submitCorrection(
+      {
+        merchant_id: this.facade.merchantId,
+        actor: governanceActor(actor),
+        correction_text: text(body, "correction_text"),
+        ...(body.issue_tags !== undefined
+          ? { issue_tags: stringArray(body, "issue_tags") }
+          : {}),
+        ...(body.case_refs !== undefined ? { case_refs: stringArray(body, "case_refs") } : {}),
+        ...(optionalText(body, "base_release_id") !== undefined
+          ? { base_release_id: optionalText(body, "base_release_id") }
+          : {}),
+        ...(optionalText(body, "correction_id") !== undefined
+          ? { correction_id: optionalText(body, "correction_id") }
+          : {}),
+        ...(optionalInteger(body, "expected_revision") !== undefined
+          ? { expected_revision: optionalInteger(body, "expected_revision") }
+          : {}),
+      },
+      idempotencyKey !== undefined ? { command_id: idempotencyKey } : {},
+    );
+  }
+
+  promoteCorrection(
+    correctionId: string,
+    value: unknown,
+    actor: ManagementActorInput,
+    idempotencyKey?: string,
+  ): unknown {
+    const body = objectBody(value);
+    return this.facade.learning.promoteCorrection(
+      {
+        merchant_id: this.facade.merchantId,
+        actor: governanceActor(actor),
+        correction_id: correctionId,
+        expected_revision: integer(body, "expected_revision"),
+      },
+      idempotencyKey !== undefined ? { command_id: idempotencyKey } : {},
+    );
+  }
+
+  listCandidates(): unknown[] {
+    return this.facade.learning.listCandidates(this.facade.merchantId);
+  }
+
+  getCandidate(candidateId: string): unknown {
+    const candidate = this.facade.learning.getCandidate(this.facade.merchantId, candidateId);
+    if (candidate === undefined) {
+      throw new ManagementError("not_found", `candidate ${candidateId} not found`);
+    }
+    return candidate;
+  }
+
+  proposeCandidate(value: unknown, actor: ManagementActorInput, idempotencyKey?: string): unknown {
+    const body = objectBody(value);
+    return this.facade.learning.proposeCandidate(
+      this.candidateContentInput(body, actor),
+      idempotencyKey !== undefined ? { command_id: idempotencyKey } : {},
+    );
+  }
+
+  reviseCandidate(
+    candidateId: string,
+    value: unknown,
+    actor: ManagementActorInput,
+    idempotencyKey?: string,
+  ): unknown {
+    const body = objectBody(value);
+    return this.facade.learning.reviseCandidate(
+      {
+        ...this.candidateContentInput(body, actor),
+        candidate_id: candidateId,
+        expected_revision: integer(body, "expected_revision"),
+      },
+      idempotencyKey !== undefined ? { command_id: idempotencyKey } : {},
+    );
+  }
+
+  reviewCandidate(
+    candidateId: string,
+    value: unknown,
+    actor: ManagementActorInput,
+    idempotencyKey?: string,
+  ): unknown {
+    const body = objectBody(value);
+    const decision = text(body, "decision");
+    if (decision !== "approve" && decision !== "reject") {
+      throw new ManagementError("invalid_input", "decision must be approve or reject");
+    }
+    return this.facade.learning.reviewCandidate(
+      {
+        merchant_id: this.facade.merchantId,
+        actor: governanceActor(actor),
+        candidate_id: candidateId,
+        content_hash: text(body, "content_hash"),
+        evaluation_id: text(body, "evaluation_id"),
+        decision,
+        ...(optionalText(body, "reason") !== undefined
+          ? { reason: optionalText(body, "reason") }
+          : {}),
+      },
+      idempotencyKey !== undefined ? { command_id: idempotencyKey } : {},
+    );
+  }
+
+  listReviews(): unknown[] {
+    return this.facade.learning.listReviews(this.facade.merchantId);
+  }
+
+  getReview(reviewId: string): unknown {
+    const review = this.facade.learning.getReview(this.facade.merchantId, reviewId);
+    if (review === undefined) throw new ManagementError("not_found", `review ${reviewId} not found`);
+    return review;
+  }
+
+  publishRelease(value: unknown, actor: ManagementActorInput, idempotencyKey?: string): unknown {
+    const body = objectBody(value);
+    return this.facade.learning.publishRelease(
+      {
+        merchant_id: this.facade.merchantId,
+        actor: governanceActor(actor),
+        approval_ref: text(body, "approval_ref"),
+        expected_generation: integer(body, "expected_generation"),
+      },
+      idempotencyKey !== undefined ? { command_id: idempotencyKey } : {},
+    );
+  }
+
+  rollbackRelease(
+    releaseId: string,
+    value: unknown,
+    actor: ManagementActorInput,
+    idempotencyKey?: string,
+  ): unknown {
+    const body = objectBody(value);
+    return this.facade.learning.rollbackRelease(
+      {
+        merchant_id: this.facade.merchantId,
+        actor: governanceActor(actor),
+        target_release_id: releaseId,
+        expected_generation: integer(body, "expected_generation"),
+        reason: text(body, "reason"),
+      },
+      idempotencyKey !== undefined ? { command_id: idempotencyKey } : {},
+    );
+  }
+
+  revokeRelease(
+    releaseId: string,
+    value: unknown,
+    actor: ManagementActorInput,
+    idempotencyKey?: string,
+  ): unknown {
+    const body = objectBody(value);
+    return this.facade.learning.revokeRelease(
+      {
+        merchant_id: this.facade.merchantId,
+        actor: governanceActor(actor),
+        release_id: releaseId,
+        expected_generation: integer(body, "expected_generation"),
+        reason: text(body, "reason"),
+      },
+      idempotencyKey !== undefined ? { command_id: idempotencyKey } : {},
+    );
+  }
+
+  listReleases(skillKey?: string): unknown[] {
+    return this.facade.learning.listReleases(this.facade.merchantId, skillKey);
+  }
+
+  getRelease(releaseId: string): unknown {
+    const release = this.facade.learning.getRelease(this.facade.merchantId, releaseId);
+    if (release === undefined) {
+      throw new ManagementError("not_found", `release ${releaseId} not found`);
+    }
+    return release;
+  }
+
+  getActiveRelease(skillKey: string): unknown {
+    const release = this.facade.learning.getActiveRelease(this.facade.merchantId, skillKey);
+    if (release === undefined) {
+      throw new ManagementError("not_found", `no active release for ${skillKey}`);
+    }
+    return release;
+  }
+
+  // ── TOP3 经营任务规则/产物（M4）──────────────────────────────────────
+
+  listRules(): unknown[] {
+    return this.facade.operationsJobs.listRules(this.facade.merchantId);
+  }
+
+  getRule(ruleId: string): unknown {
+    const rule = this.facade.operationsJobs.getRule(this.facade.merchantId, ruleId);
+    if (rule === undefined) throw new ManagementError("not_found", `rule ${ruleId} not found`);
+    return rule;
+  }
+
+  prepareRule(value: unknown): unknown {
+    const body = objectBody(value);
+    const mode = body.mode === "goal" ? "goal" : "template";
+    return this.facade.operationsJobs.prepareRule({
+      merchant_id: this.facade.merchantId,
+      mode,
+      template: text(body, "template") as never,
+      trigger_spec: objectBody(body.trigger_spec) as never,
+      scope: objectBody(body.scope) as never,
+      predicate_spec: objectBody(body.predicate_spec) as never,
+      action_type: text(body, "action_type") as never,
+      budget: objectBody(body.budget) as never,
+      ...(optionalText(body, "goal_text") !== undefined
+        ? { goal_text: optionalText(body, "goal_text") }
+        : {}),
+    });
+  }
+
+  activateRule(value: unknown): unknown {
+    const body = objectBody(value);
+    return this.facade.operationsJobs.activateRule({
+      merchant_id: this.facade.merchantId,
+      candidate_ref: text(body, "candidate_ref"),
+      ...(optionalInteger(body, "expected_generation") !== undefined
+        ? { expected_generation: optionalInteger(body, "expected_generation") }
+        : {}),
+    });
+  }
+
+  pauseRule(ruleId: string, value: unknown): unknown {
+    const body = objectBody(value);
+    return this.facade.operationsJobs.pauseRule({
+      merchant_id: this.facade.merchantId,
+      rule_id: ruleId,
+      expected_version: integer(body, "expected_version"),
+      reason: text(body, "reason"),
+    });
+  }
+
+  listArtifacts(taskId?: string): unknown[] {
+    return this.facade.operationsJobs.listArtifacts(this.facade.merchantId, taskId);
+  }
+
+  private candidateContentInput(body: Record<string, unknown>, actor: ManagementActorInput) {
+    if (!Array.isArray(body.case_ids) || body.case_ids.some((item) => typeof item !== "string")) {
+      throw new ManagementError("invalid_input", "case_ids must be a string array");
+    }
+    if (!Array.isArray(body.proposed_steps)) {
+      throw new ManagementError("invalid_input", "proposed_steps must be an array");
+    }
+    return {
+      merchant_id: this.facade.merchantId,
+      actor: governanceActor(actor),
+      case_ids: body.case_ids as string[],
+      skill_key: text(body, "skill_key"),
+      trigger: text(body, "trigger"),
+      proposed_steps: body.proposed_steps,
+      reason: text(body, "reason"),
+      ...(body.exclusions !== undefined
+        ? { exclusions: stringArray(body, "exclusions") }
+        : {}),
+      ...(optionalText(body, "base_release_id") !== undefined
+        ? { base_release_id: optionalText(body, "base_release_id") }
+        : {}),
+      ...(body.required_tools !== undefined
+        ? { required_tools: stringArray(body, "required_tools") }
+        : {}),
+    };
+  }
 }

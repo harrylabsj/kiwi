@@ -3,7 +3,6 @@ import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { homedir } from "node:os";
 import { stringify } from "yaml";
 import { bootstrapCloudRuntime } from "../src/cloud/bootstrap.js";
 import { MerchantStatsStore } from "../src/merchant/stats-store.js";
@@ -20,7 +19,8 @@ async function freePort(): Promise<number> {
 }
 function localState() {
   // Normal persistent-data guard rejects OS temporary directories; these are owned test-only directories.
-  const base = path.join(homedir(), ".kiwi-cloud-test");
+  // coding 工作区内的本次独占前缀（mkdtemp 唯一）；不触碰生产持久目录。
+  const base = path.join(process.cwd(), ".kiwi-cloud-test-m1");
   mkdirSync(base, { recursive: true }); const dataDir = mkdtempSync(path.join(base, `kiwi-a645-close-${process.pid}-`)); dirs.push(dataDir);
   const profile = testProfile({ commerce: { ...testProfile().commerce, allow_demo_price_fallback: false } });
   const profilePath = path.join(dataDir, "merchant.yaml"); writeFileSync(profilePath, stringify(profile), { mode: 0o600 });
@@ -45,7 +45,7 @@ describe("actual cloud cleanup pipeline", () => {
     }, log: () => undefined });
     const stats = vi.spyOn(MerchantStatsStore.prototype, "close"), dbClose = vi.spyOn(DatabaseSync.prototype, "close");
     try {
-      await expect(instance.close()).rejects.toMatchObject({ failedSteps: ["merchant_handler", "statistics", "assembly", "management_database", "ownership"] });
+      await expect(instance.close()).rejects.toMatchObject({ failedSteps: ["merchant_handler", "statistics", "assembly", "governance", "management_database", "ownership"] });
       expect(instance.server.listening).toBe(false); expect(stats).not.toHaveBeenCalled(); expect(dbClose).not.toHaveBeenCalled();
       expect(existsSync(path.join(dataDir, "a2a/owner.lock"))).toBe(true); expect(existsSync(path.join(dataDir, "state.sqlite"))).toBe(true);
       const retry = instance.close(); finish(); await retry;

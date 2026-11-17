@@ -24,7 +24,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const MERCHANT_OPS_SCHEMA_VERSION = 1;
+export const MERCHANT_OPS_SCHEMA_VERSION = 3;
 
 const MIGRATION_9 = `
 -- 商家持续经营 M1（设计 v0.2 §5.1/§16/§17.1）：经营计划与命令幂等。
@@ -427,11 +427,51 @@ CREATE TABLE contribution_assessments (
 CREATE INDEX idx_contribution_assessments_ref ON contribution_assessments (merchant_id, ref_kind, ref_id);
 `;
 
+const MIGRATION_OWNERSHIP = `
+-- TOP1-3 M1（设计 v1.1 §19 / D-M0-08）：实例级单写者所有权。
+-- 与 followup_tasks 的任务级租约分开：本表是实例级（每商家一行），启动时
+-- CAS 获取、心跳续约；第二进程获取失败即 fail-closed。租约过期后可接管，
+-- fencing 递增——旧 owner 的续约与提交都被拒。state 仅 HELD/RELEASED：
+-- 过期不翻转状态，接管以 lease_expires_at <= now 为准（到期即失效）。
+CREATE TABLE instance_ownership (
+  merchant_id TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL,
+  fencing INTEGER NOT NULL CHECK (fencing >= 1),
+  heartbeat_at TEXT NOT NULL,
+  lease_expires_at TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('HELD','RELEASED')),
+  updated_at TEXT NOT NULL
+);
+`;
+
+/**
+ * TOP3 M4：followup 扩展（设计 v1.1 §18.1 / §15）。
+ * 规则/版本、revision、cancel_epoch、deadline、运行快照摘要与候选/操作引用；
+ * attempt 记录 worker/fencing/输入快照/结果证据。旧库就地升级，列全部可空。
+ */
+const MIGRATION_OPS_V3 = `
+ALTER TABLE followup_tasks ADD COLUMN rule_id TEXT;
+ALTER TABLE followup_tasks ADD COLUMN rule_version INTEGER;
+ALTER TABLE followup_tasks ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE followup_tasks ADD COLUMN cancel_epoch INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE followup_tasks ADD COLUMN deadline_at TEXT;
+ALTER TABLE followup_tasks ADD COLUMN snapshot_digest TEXT;
+ALTER TABLE followup_tasks ADD COLUMN candidate_ref TEXT;
+ALTER TABLE followup_tasks ADD COLUMN operation_ref TEXT;
+ALTER TABLE followup_attempts ADD COLUMN worker_id TEXT;
+ALTER TABLE followup_attempts ADD COLUMN fencing INTEGER;
+ALTER TABLE followup_attempts ADD COLUMN input_snapshot_digest TEXT;
+ALTER TABLE followup_attempts ADD COLUMN outcome_evidence_json TEXT;
+CREATE INDEX idx_followup_rule ON followup_tasks (merchant_id, rule_id, status, due_at);
+`;
+
 const MIGRATIONS: Readonly<Record<number, string>> = {
   1: `${MIGRATION_9}
 ${MIGRATION_10}
 ${MIGRATION_11}
 ${MIGRATION_12}`,
+  2: MIGRATION_OWNERSHIP,
+  3: MIGRATION_OPS_V3,
 };
 
 export function migrateMerchantOpsSchema(

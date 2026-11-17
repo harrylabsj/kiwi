@@ -37,6 +37,33 @@ import {
 } from "../unit-alias.js";
 import type { ReceptionProductSource } from "./engine.js";
 import { factRevision, type InMemoryFactRegistry } from "./publish.js";
+import {
+  DEFAULT_QUESTION_SPEC_REGISTRY,
+  type QuestionSpecRegistry,
+} from "./question-spec.js";
+import { receptionToolContractDigest } from "./skill-contract.js";
+import {
+  MAX_LOADED_SKILL_CHARS,
+  MAX_LOADED_SKILLS,
+  skillSummaryPrompt,
+  type ReceptionSkillCatalog,
+} from "./skill-catalog.js";
+import {
+  ContextGuard,
+  type ContextSnapshot,
+  type CurrentSkillBinding,
+} from "../../merchant-core/context-governance/context-guard.js";
+import { createActorContext } from "../../merchant-core/context-governance/actor-context.js";
+import type {
+  CustomerMemoryToolProvider,
+  CustomerRecallContext,
+} from "./customer-memory-tools.js";
+import {
+  MEMORY_NAMESPACES,
+  MEMORY_SOURCE_KINDS,
+  type MemoryNamespace,
+  type MemorySourceKind,
+} from "../../merchant-core/customer-memory/types.js";
 import type {
   ReceptionBlock,
   ReceptionNeed,
@@ -48,6 +75,10 @@ export const TOOL_COMPARE_PRODUCTS = "compare_products";
 export const TOOL_GET_COMMERCIAL_FACTS = "get_commercial_facts";
 export const TOOL_PROPOSE_NEED_PATCH = "propose_need_patch";
 export const TOOL_PROPOSE_REPLY = "propose_reply";
+export const TOOL_LOAD_RECEPTION_SKILL = "load_reception_skill";
+export const TOOL_RECALL_CUSTOMER_CONTEXT = "recall_customer_context";
+export const TOOL_SEARCH_CUSTOMER_HISTORY = "search_customer_history";
+export const TOOL_PROPOSE_CUSTOMER_MEMORY = "propose_customer_memory";
 
 const RECEPTION_TOOL_ALLOWLIST: readonly string[] = [
   TOOL_SEARCH_PRODUCTS,
@@ -60,6 +91,7 @@ const RECEPTION_TOOL_ALLOWLIST: readonly string[] = [
 const BLOCK_KINDS = new Set([
   "acknowledge_need",
   "ask_clarification",
+  "ask_registered_question",
   "show_commercial_terms",
   "recommend_option",
   "request_human_help",
@@ -118,6 +150,21 @@ export interface PiReceptionRuntimeOptions {
   /** API key resolver for the real provider. */
   getApiKey?: () => string | undefined;
   systemPrompt?: string;
+  /**
+   * QuestionSpec 注册表（§7.2）：提供时把受控问题目录追加到系统提示，
+   * 模型只能选择 question_id；发布器仍逐项校验。
+   */
+  questionRegistry?: QuestionSpecRegistry;
+  /**
+   * 已发布接待技能目录（M2-6）：提供时运行快照绑定当前生效版本，注入
+   * skill_summaries 并开放 load_reception_skill；撤回/版本变化在发布门失效。
+   */
+  skillCatalog?: ReceptionSkillCatalog;
+  /**
+   * 客户记忆/历史工具（M3-6）：有有效绑定与 grant 时绑定运行快照并开放
+   * recall/search/propose 三个工具；无绑定时不提供，只用当前会话。
+   */
+  customerProvider?: CustomerMemoryToolProvider;
   /** 每次模型回合的预算 lease（§18）；拒绝时本轮降级确定性路径。 */
   budget?: AttemptBudgetHooks;
   /** 工具级指标出口（node 写入本地 metrics 文件）。 */
@@ -132,11 +179,24 @@ const DEFAULT_SYSTEM_PROMPT = [
   "stock count, delivery date or any commercial fact; only the facts tool is authoritative.",
   "When the request is ambiguous or a required field is missing, ask one short",
   "clarification question. When ready, call propose_reply with typed blocks:",
-  "acknowledge_need, ask_clarification, show_commercial_terms (using the fact ref),",
+  "acknowledge_need, ask_clarification, ask_registered_question (using a registered",
+  "question_id from the catalog), show_commercial_terms (using the fact ref),",
   "request_human_help or next_step. You may use recommend_option with a fact ref and",
   "compared refs from compare_products; reasonCode must be lowest_public_price or in_stock.",
   "Never write free-form commercial text.",
+  "Every reply block uses the field \"kind\" (never \"type\"). Required shapes:",
+  "{\"kind\":\"acknowledge_need\",\"sku\":\"SKU\",\"quantity\":2,\"unit\":\"件\"},",
+  "{\"kind\":\"show_commercial_terms\",\"ref\":{\"sku\":\"SKU\",\"revision\":\"sha256:...\"}},",
+  "{\"kind\":\"ask_clarification\",\"missing\":[\"quantity\"],\"reason\":\"missing_quantity\"},",
+  "{\"kind\":\"ask_registered_question\",\"question_id\":\"q_missing_quantity_v1\"},",
+  "{\"kind\":\"next_step\",\"action\":\"send_rfq\"}.",
+  "Do not add free-text fields to next_step; the publisher renders all text.",
 ].join(" ");
+
+function buildReceptionSystemPrompt(registry: QuestionSpecRegistry): string {
+  const catalog = registry.catalogText();
+  return catalog === "" ? DEFAULT_SYSTEM_PROMPT : `${DEFAULT_SYSTEM_PROMPT} ${catalog}`;
+}
 
 function toolResult(text: string, details: unknown = {}): AgentToolResult<unknown> {
   return { content: [{ type: "text", text }], details };
@@ -240,14 +300,24 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** 把模型提交的 blocks 限缩到白名单结构；引用仍由发布器校验。 */
-export function sanitizeReceptionBlocks(value: unknown): ReceptionBlock[] | undefined {
+export function sanitizeReceptionBlocks(
+  value: unknown,
+  questionRegistry: QuestionSpecRegistry = DEFAULT_QUESTION_SPEC_REGISTRY,
+): ReceptionBlock[] | undefined {
   if (!Array.isArray(value) || value.length === 0 || value.length > 6) return undefined;
   const blocks: ReceptionBlock[] = [];
   for (const item of value) {
-    if (!isObject(item) || typeof item.kind !== "string" || !BLOCK_KINDS.has(item.kind)) {
-      return undefined;
-    }
-    switch (item.kind) {
+    if (!isObject(item)) return undefined;
+    // 兼容别名：部分模型把块类型写成 `type`；规范化后仍按 `kind` 严格校验
+    // 字段（不扩大允许的块种类）。
+    const kind =
+      typeof item.kind === "string"
+        ? item.kind
+        : typeof item.type === "string"
+          ? item.type
+          : undefined;
+    if (kind === undefined || !BLOCK_KINDS.has(kind)) return undefined;
+    switch (kind) {
       case "acknowledge_need": {
         const sku = typeof item.sku === "string" && item.sku.trim() !== "" ? item.sku.trim() : undefined;
         const quantity =
@@ -284,6 +354,47 @@ export function sanitizeReceptionBlocks(value: unknown): ReceptionBlock[] | unde
           missing: ["sku"],
           reason,
           ...(candidates !== undefined ? { candidates } : {}),
+        });
+        break;
+      }
+      case "ask_registered_question": {
+        const questionId =
+          typeof item.question_id === "string" ? item.question_id.trim() : "";
+        if (questionId.length === 0 || questionId.length > 64) return undefined;
+        // 服务端按注册表补齐契约字段：模型只需选择 question_id。若显式提供了
+        // schema/slot/reason，必须与注册表一致（不允许模型改写契约）。
+        const spec = questionRegistry.resolve(questionId);
+        if (spec === undefined) return undefined;
+        const schemaVersion =
+          item.schema_version === undefined ? spec.schema_version : item.schema_version;
+        const slot = item.slot === undefined ? spec.slot : item.slot;
+        const reasonCode =
+          item.reason_code === undefined ? spec.reason_code : item.reason_code;
+        if (slot !== "sku" && slot !== "quantity" && slot !== "unit") return undefined;
+        if (
+          typeof schemaVersion !== "number" ||
+          !Number.isSafeInteger(schemaVersion) ||
+          schemaVersion !== spec.schema_version ||
+          slot !== spec.slot ||
+          typeof reasonCode !== "string" ||
+          reasonCode !== spec.reason_code
+        ) {
+          return undefined;
+        }
+        const candidateRefs = Array.isArray(item.candidate_refs)
+          ? item.candidate_refs
+              .filter((candidate): candidate is string => typeof candidate === "string")
+              .slice(0, 8)
+          : undefined;
+        blocks.push({
+          kind: "ask_registered_question",
+          question_id: questionId,
+          schema_version: schemaVersion,
+          slot,
+          reason_code: reasonCode,
+          ...(candidateRefs !== undefined && candidateRefs.length > 0
+            ? { candidate_refs: candidateRefs }
+            : {}),
         });
         break;
       }
@@ -408,6 +519,109 @@ export function createPiReceptionRuntime(
       const rejectedFactUnits = new Map<string, { inputQuantity?: number; inputUnit?: string }>();
       const buyerQuantity = parseBuyerQuantity(input.text);
       const boundSku = input.structuredSku?.trim() || undefined;
+      // M2-6/M3-6：技能目录 + 客户绑定/运行快照/四检查点守卫。
+      const skillCatalog = options.skillCatalog;
+      const skillBindings = skillCatalog?.activeBindings(input.merchantId) ?? [];
+      const skillSummaries = skillCatalog?.summaries(input.merchantId);
+      const skillSummaryText =
+        skillSummaries !== undefined ? skillSummaryPrompt(skillSummaries) : "";
+      const customerContext: CustomerRecallContext | undefined =
+        options.customerProvider?.contextFor(input.merchantId, input.identity);
+      const guardEnabled = skillCatalog !== undefined || customerContext !== undefined;
+      let receptionGuard: ContextGuard | undefined;
+      let receptionSnapshot: ContextSnapshot | undefined;
+      const receptionActor = !guardEnabled
+        ? undefined
+        : createActorContext({
+            merchant_id: input.merchantId,
+            actor_id: `reception:${input.identity}`.slice(0, 128),
+            auth_strength: "session",
+            subject_binding: customerContext !== undefined ? "organization" : "none",
+            capabilities:
+              customerContext !== undefined
+                ? ["reception:serve", "customer:self", "memory:read"]
+                : ["reception:serve"],
+          });
+      if (guardEnabled && receptionActor !== undefined) {
+        const configVersion = receptionToolContractDigest();
+        receptionSnapshot = {
+          snapshot_id: `run_${input.contextId}`.slice(0, 128),
+          issued_at: input.now,
+          binding_epoch: customerContext?.binding_epoch ?? 0,
+          grant_versions: customerContext?.grant_versions ?? {},
+          data_scope_epochs: customerContext?.data_scope_epochs ?? {},
+          memory_set_version: customerContext?.memory_set_version ?? 0,
+          conversation_revision: 0,
+          config_version: configVersion,
+          skill_bindings: skillBindings.map((binding) => ({
+            skill_key: binding.skill_key,
+            release_id: binding.release_id,
+            compiled_artifact_hash: binding.compiled_artifact_hash,
+            generation: binding.generation,
+            revocation_epoch: binding.revocation_epoch,
+          })),
+        };
+        const authority = {
+          currentGrantEpoch: (merchantId: string, grantId: string): number | undefined =>
+            options.customerProvider?.currentGrantEpoch(merchantId, grantId),
+          currentBindingEpoch: (merchantId: string): number | undefined =>
+            options.customerProvider?.currentBindingEpoch(merchantId, input.identity),
+          currentDataScopeEpoch: (merchantId: string, scopeKey: string): number | undefined =>
+            options.customerProvider?.currentDataScopeEpoch(merchantId, scopeKey),
+          currentSkillBinding: (merchantId: string, skillKey: string): CurrentSkillBinding | undefined =>
+            skillCatalog?.currentBinding(merchantId, skillKey),
+          currentMemorySetVersion: (merchantId: string): number | undefined =>
+            customerContext === undefined
+              ? undefined
+              : options.customerProvider?.currentMemorySetVersion(
+                  merchantId,
+                  customerContext.subject_id,
+                ),
+          currentConversationRevision: (): number | undefined => undefined,
+          currentConfigVersion: (): string | undefined => configVersion,
+          sourceAvailable: (): boolean => false,
+        };
+        receptionGuard = new ContextGuard({ authority, now: () => input.now });
+      }
+      const checkGuard = (
+        checkpoint: "tool_call" | "provider_attempt" | "publish",
+        tool?: string,
+      ): void => {
+        if (
+          receptionGuard === undefined ||
+          receptionActor === undefined ||
+          receptionSnapshot === undefined
+        ) {
+          return;
+        }
+        const base = {
+          actor: receptionActor,
+          snapshot: receptionSnapshot,
+          capability: "reception:serve" as const,
+        };
+        if (checkpoint === "tool_call") {
+          receptionGuard.checkToolCall({ ...base, ...(tool !== undefined ? { tool } : {}) });
+        } else if (checkpoint === "provider_attempt") {
+          receptionGuard.checkProviderAttempt(base);
+        } else {
+          receptionGuard.checkPublish(base);
+        }
+      };
+      const allowedTools: readonly string[] = [
+        ...RECEPTION_TOOL_ALLOWLIST,
+        ...(skillCatalog !== undefined && skillBindings.length > 0
+          ? [TOOL_LOAD_RECEPTION_SKILL]
+          : []),
+        ...(customerContext !== undefined
+          ? [
+              TOOL_RECALL_CUSTOMER_CONTEXT,
+              TOOL_SEARCH_CUSTOMER_HISTORY,
+              TOOL_PROPOSE_CUSTOMER_MEMORY,
+            ]
+          : []),
+      ];
+      let loadedSkillCount = 0;
+      let loadedSkillChars = 0;
       let steps = 0;
       let toolAttempts = 0;
       let timedOut = false;
@@ -415,9 +629,11 @@ export function createPiReceptionRuntime(
       const guard = async (
         context: BeforeToolCallContext,
       ): Promise<BeforeToolCallResult | undefined> => {
-        if (!RECEPTION_TOOL_ALLOWLIST.includes(context.toolCall.name)) {
+        if (!allowedTools.includes(context.toolCall.name)) {
           return { block: true, reason: "tool_not_allowed" };
         }
+        // 每次工具调用前检查权限/技能绑定/版本；异常向引擎抛出 → 回退确定性。
+        checkGuard("tool_call", context.toolCall.name);
         if (plan !== undefined) {
           return { block: true, reason: "reply_already_proposed" };
         }
@@ -834,6 +1050,178 @@ export function createPiReceptionRuntime(
             return toolResult(JSON.stringify({ accepted: true }));
           },
         } as AgentTool<TSchema, unknown>,
+        ...(skillCatalog !== undefined && skillBindings.length > 0
+          ? [
+              {
+                name: TOOL_LOAD_RECEPTION_SKILL,
+                label: "Load reception skill",
+                description:
+                  "Load one published reception skill by skill_key from this run's summaries.",
+                parameters: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: { skill_key: { type: "string" } },
+                  required: ["skill_key"],
+                },
+                execute: async (_id: unknown, params: unknown): Promise<AgentToolResult<unknown>> => {
+                  const args: unknown = params;
+                  const skillKey =
+                    isObject(args) && typeof args.skill_key === "string"
+                      ? args.skill_key.trim()
+                      : "";
+                  const binding = skillBindings.find((item) => item.skill_key === skillKey);
+                  if (binding === undefined) {
+                    return toolResult(
+                      JSON.stringify({ accepted: false, error: "skill_not_bound" }),
+                    );
+                  }
+                  if (loadedSkillCount >= MAX_LOADED_SKILLS) {
+                    return toolResult(
+                      JSON.stringify({
+                        accepted: false,
+                        error: "skill_limit_exceeded",
+                        reason: "max_skills",
+                      }),
+                    );
+                  }
+                  const artifact = skillCatalog.loadArtifact(
+                    input.merchantId,
+                    skillKey,
+                    binding.release_id,
+                  );
+                  if (artifact === undefined) {
+                    return toolResult(
+                      JSON.stringify({ accepted: false, error: "skill_unavailable" }),
+                    );
+                  }
+                  if (
+                    loadedSkillChars + artifact.body_text.length >
+                    MAX_LOADED_SKILL_CHARS
+                  ) {
+                    return toolResult(
+                      JSON.stringify({
+                        accepted: false,
+                        error: "skill_limit_exceeded",
+                        reason: "body_budget",
+                      }),
+                    );
+                  }
+                  loadedSkillCount += 1;
+                  loadedSkillChars += artifact.body_text.length;
+                  return toolResult(
+                    JSON.stringify({
+                      accepted: true,
+                      skill_key: artifact.skill_key,
+                      release_id: artifact.release_id,
+                      compiled_artifact_hash: artifact.compiled_artifact_hash,
+                      question_schema_version: artifact.question_schema_version,
+                      required_tools: artifact.required_tools,
+                      steps: artifact.steps,
+                      body_text: artifact.body_text,
+                    }),
+                  );
+                },
+              } as AgentTool<TSchema, unknown>,
+            ]
+          : []),
+        ...(customerContext !== undefined && options.customerProvider !== undefined
+          ? [
+              {
+                name: TOOL_RECALL_CUSTOMER_CONTEXT,
+                label: "Recall customer context",
+                description:
+                  "Read this bound subject's active memory items (minimum fields only).",
+                parameters: { type: "object", additionalProperties: false, properties: {} },
+                execute: async (): Promise<AgentToolResult<unknown>> => {
+                  const items = options.customerProvider!.recall(customerContext);
+                  return toolResult(JSON.stringify({ status: "ok", items }));
+                },
+              } as AgentTool<TSchema, unknown>,
+              {
+                name: TOOL_SEARCH_CUSTOMER_HISTORY,
+                label: "Search customer history",
+                description:
+                  "Search this bound subject's authorized history; at most 5 snippets.",
+                parameters: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    query: { type: "string" },
+                    cursor: { type: "string" },
+                  },
+                  required: ["query"],
+                },
+                execute: async (_id: unknown, params: unknown): Promise<AgentToolResult<unknown>> => {
+                  const args: unknown = params;
+                  if (!isObject(args) || typeof args.query !== "string") {
+                    return toolResult(JSON.stringify({ status: "unavailable", reason: "invalid_query" }));
+                  }
+                  const cursor =
+                    typeof args.cursor === "string" && args.cursor.trim() !== ""
+                      ? args.cursor.trim()
+                      : undefined;
+                  const result = options.customerProvider!.search(customerContext, {
+                    query: args.query,
+                    ...(cursor !== undefined ? { cursor } : {}),
+                  });
+                  return toolResult(JSON.stringify(result));
+                },
+              } as AgentTool<TSchema, unknown>,
+              {
+                name: TOOL_PROPOSE_CUSTOMER_MEMORY,
+                label: "Propose customer memory",
+                description:
+                  "Propose a customer memory candidate. It stays candidate until the customer confirms.",
+                parameters: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    namespace: { type: "string" },
+                    key: { type: "string" },
+                    value_ref: { type: "string" },
+                    value_type: { type: "string" },
+                    source_kind: { type: "string" },
+                    confidence: { type: "number" },
+                  },
+                  required: ["namespace", "key", "value_ref", "value_type", "source_kind"],
+                },
+                execute: async (_id: unknown, params: unknown): Promise<AgentToolResult<unknown>> => {
+                  const args: unknown = params;
+                  if (
+                    !isObject(args) ||
+                    typeof args.namespace !== "string" ||
+                    !(MEMORY_NAMESPACES as readonly string[]).includes(args.namespace) ||
+                    typeof args.key !== "string" ||
+                    typeof args.value_ref !== "string" ||
+                    typeof args.value_type !== "string" ||
+                    typeof args.source_kind !== "string" ||
+                    !(MEMORY_SOURCE_KINDS as readonly string[]).includes(args.source_kind)
+                  ) {
+                    return toolResult(JSON.stringify({ accepted: false, error: "invalid_memory" }));
+                  }
+                  try {
+                    const proposal = options.customerProvider!.propose(customerContext, {
+                      namespace: args.namespace as MemoryNamespace,
+                      key: args.key,
+                      value_ref: args.value_ref,
+                      value_type: args.value_type,
+                      source_kind: args.source_kind as MemorySourceKind,
+                      ...(typeof args.confidence === "number"
+                        ? { confidence: args.confidence }
+                        : {}),
+                    });
+                    return toolResult(
+                      JSON.stringify({ accepted: true, ...proposal, state: "candidate" }),
+                    );
+                  } catch {
+                    return toolResult(
+                      JSON.stringify({ accepted: false, error: "proposal_rejected" }),
+                    );
+                  }
+                },
+              } as AgentTool<TSchema, unknown>,
+            ]
+          : []),
         {
           name: TOOL_PROPOSE_REPLY,
           label: "Propose reply",
@@ -849,8 +1237,18 @@ export function createPiReceptionRuntime(
           execute: async (_id, params): Promise<AgentToolResult<unknown>> => {
             const args: unknown = params;
             if (!isObject(args)) return toolResult(JSON.stringify({ accepted: false, error: "invalid_plan" }));
-            const blocks = sanitizeReceptionBlocks(args.blocks);
+            const blocks = sanitizeReceptionBlocks(
+              args.blocks,
+              options.questionRegistry ?? DEFAULT_QUESTION_SPEC_REGISTRY,
+            );
             if (blocks === undefined) {
+              // 诊断开关：记录模型原始 blocks（不含买家原文/密钥），便于定位
+              // 输出契约漂移；默认关闭，不改变生产日志。
+              if (process.env.KIWI_RECEPTION_DEBUG_PROPOSE === "1") {
+                process.stderr.write(
+                  `[reception] invalid_blocks ${JSON.stringify(args.blocks).slice(0, 3000)}\n`,
+                );
+              }
               return toolResult(JSON.stringify({ accepted: false, error: "invalid_blocks" }));
             }
             if (boundSku !== undefined) {
@@ -906,10 +1304,29 @@ export function createPiReceptionRuntime(
         } as AgentTool<TSchema, unknown>,
       ];
 
+      const baseSystemPrompt =
+        options.systemPrompt ??
+        buildReceptionSystemPrompt(
+          options.questionRegistry ?? DEFAULT_QUESTION_SPEC_REGISTRY,
+        );
+      const customerPrompt =
+        customerContext !== undefined
+          ? "Customer memory/history tools are bound to the current subject; never expose other subjects or infer identity."
+          : "";
+      const systemPrompt = [baseSystemPrompt, skillSummaryText, customerPrompt]
+        .filter((part) => part.trim() !== "")
+        .join("\n\n");
+      const guardedStreamFn: typeof options.streamFn =
+        skillCatalog === undefined
+          ? options.streamFn
+          : ((...args: Parameters<typeof options.streamFn>) => {
+              checkGuard("provider_attempt");
+              return options.streamFn(...args);
+            }) as typeof options.streamFn;
       const agent = new Agent({
-        streamFn: options.streamFn,
+        streamFn: guardedStreamFn,
         initialState: {
-          systemPrompt: options.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
+          systemPrompt,
           model: options.model,
           tools,
         },
@@ -995,6 +1412,8 @@ export function createPiReceptionRuntime(
       if (quotaRejected) metrics.quotaRejected = true;
       options.onMetrics?.(metrics);
       if (plan === undefined || timedOut || quotaRejected) return undefined;
+      // 发布前最后一次版本/撤回检查；失败抛出 → 引擎丢弃模型计划并回退确定性。
+      checkGuard("publish");
       return {
         plan,
         ...(Object.keys(needPatch).length > 0 ? { need: needPatch } : {}),

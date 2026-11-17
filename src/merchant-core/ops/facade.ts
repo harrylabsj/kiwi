@@ -25,6 +25,11 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { migrateMerchantOpsSchema } from "./schema.js";
+import { registerGovernanceLedgers } from "../migrations/ledgers.js";
+import { LearningRepository } from "../learning/repository.js";
+import { LearningService } from "../learning/service.js";
+import { BackgroundBudgetStore } from "../budget/background-budget.js";
+import { OperationsJobsService } from "../operations-jobs/service.js";
 import { MerchantOperatingPlanRepository } from "../operating/repository.js";
 import {
   MerchantOperatingPlanService,
@@ -84,6 +89,12 @@ export class MerchantOperationsFacade {
   readonly followups: FollowUpService;
   readonly orders: MerchantOrderService;
   readonly contributions: ContributionRepository;
+  /** TOP1 经验学习（M2）：纠正与案例；发布/评测在后续工作包接入。 */
+  readonly learning: LearningService;
+  /** 学习账本迁移是否成功；false 时 learning 统一 schema_unavailable。 */
+  readonly learningAvailable: boolean;
+  /** TOP3 经营任务（M4）：规则/事件/调度/原子提交。 */
+  readonly operationsJobs: OperationsJobsService;
   readonly merchantId: string;
 
   constructor(options: MerchantOperationsFacadeOptions) {
@@ -92,6 +103,16 @@ export class MerchantOperationsFacade {
     }
     this.merchantId = options.merchantId;
     const now = options.now ?? (() => new Date().toISOString());
+    // 学习/客户记忆/经营任务各自持有独立账本；门面装配保证这些表在业务
+    // 使用前就绪（bootstrap 已提前注册，重复调用幂等）。迁移失败必须只
+    // 关闭新功能（§18.2），不能让现有接待/经营装配整体失败。
+    let learningAvailable = true;
+    try {
+      registerGovernanceLedgers(options.db);
+    } catch {
+      learningAvailable = false;
+    }
+    this.learningAvailable = learningAvailable;
     this.plans = new MerchantOperatingPlanService({
       repository: new MerchantOperatingPlanRepository({ db: options.db, now }),
       now,
@@ -112,6 +133,16 @@ export class MerchantOperationsFacade {
     this.orders = new MerchantOrderService({
       orders: new OrderRepository({ db: options.db, now }),
       contributions: this.contributions,
+    });
+    this.learning = new LearningService({
+      repository: new LearningRepository({ db: options.db }),
+      now,
+      available: learningAvailable,
+    });
+    this.operationsJobs = new OperationsJobsService({
+      db: options.db,
+      now,
+      budgetStore: new BackgroundBudgetStore({ db: options.db, now }),
     });
   }
 

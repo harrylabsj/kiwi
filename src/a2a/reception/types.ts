@@ -112,6 +112,19 @@ export type ReceptionBlock =
       candidates?: string[];
     }
   | {
+      /**
+       * 已注册问题（QuestionSpec v1）：模型只选择 question_id，发布器按
+       * 注册模板确定性渲染；未知 ID / schema / slot / reason 失配一律拒绝。
+       */
+      kind: "ask_registered_question";
+      question_id: string;
+      schema_version: number;
+      slot: "sku" | "quantity" | "unit";
+      reason_code: string;
+      /** 已注册 SKU 候选（仅 candidate_type=sku_candidates 的问题允许）。 */
+      candidate_refs?: string[];
+    }
+  | {
       kind: "show_commercial_terms";
       /** 服务端事实引用；发布器校验存在性/版本/租户/可见性/有效期后渲染。 */
       ref: FactRef;

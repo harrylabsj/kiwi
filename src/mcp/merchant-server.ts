@@ -160,6 +160,11 @@ export interface MerchantMcpServerOptions {
   /** OAuth 授权服务器（V2 阶段一）：提供时挂载
    *  /.well-known/oauth-*、/oauth/register|authorize|token|revoke 端点。 */
   oauth?: MerchantOAuthServer;
+  /**
+   * Workbench v1 管理 API（`/merchant/api/*`）。独立运行模式（非 cloud
+   * bootstrap）也挂载纠错/候选/审核/发布/规则等管理路由；未提供时保持原行为。
+   */
+  managementApi?: (req: IncomingMessage, res: ServerResponse) => void;
   /** 七类 presentation 的 MCP 资源（V2 阶段二；提供时挂载 resources/list|read）。 */
   presentations?: ReturnType<typeof buildMerchantPresentationResources>;
   /** 配套商家确认页面（V2 阶段三；BUG-01/03 修复后：cookie 会话 + 一次性
@@ -615,6 +620,13 @@ export function createMerchantHttpHandler(
     }
     void (async () => {
       const url = new URL(req.url ?? "/", "http://localhost");
+      if (
+        options.managementApi !== undefined &&
+        (url.pathname === "/merchant/api" || url.pathname.startsWith("/merchant/api/"))
+      ) {
+        options.managementApi(req, res);
+        return;
+      }
       if (await routeOAuth(req, res, url)) return;
       // 一次性配对码兑换（设计 §8.4 第二期）：只能兑换一次，过期即失效；
       // 成功才返回内部凭据（供商家连接器网关按 merchant_id 路由使用）。

@@ -77,6 +77,8 @@ import { createDeepSeekNegotiationAdvisor } from "./server/negotiation-advisor.j
 import { createDeepSeekInquiryInterpreter } from "./server/inquiry-interpreter.js";
 import { buildModel, realStreamFn } from "../runtime/model.js";
 import { createPiReceptionRuntime } from "./reception/agent-runtime.js";
+import { SqliteReceptionSkillCatalog } from "../merchant-core/learning/reception-skill-catalog.js";
+import { SqliteCustomerMemoryProvider } from "../merchant-core/customer-memory/reception-provider.js";
 import { loadReceptionConfig } from "./reception/config.js";
 import { ReceptionConversationStore } from "./reception/conversation-store.js";
 import { runReceptionRetention } from "./reception/retention.js";
@@ -742,11 +744,31 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
     typeof options.merchantPolicy === "function"
       ? options.merchantPolicy()
       : (options.merchantPolicy ?? profile.merchant_policy);
+  // M2-6：已发布接待技能目录（state.sqlite 懒打开；发布/撤回后无需重启）。
+  const receptionSkillCatalog =
+    receptionEnabled && !isEphemeral
+      ? new SqliteReceptionSkillCatalog({
+          dbPath: path.join(options.dataDir!, "state.sqlite"),
+        })
+      : undefined;
+  const receptionCustomerProvider =
+    receptionEnabled && !isEphemeral
+      ? new SqliteCustomerMemoryProvider({
+          dbPath: path.join(options.dataDir!, "state.sqlite"),
+          now,
+        })
+      : undefined;
   const receptionPi =
     receptionEnabled && receptionConfig.runtime === "pi" && profile.model?.provider !== "fake"
       ? createPiReceptionRuntime({
           streamFn: realStreamFn(),
           model: buildModel(profile),
+          ...(receptionSkillCatalog !== undefined
+            ? { skillCatalog: receptionSkillCatalog }
+            : {}),
+          ...(receptionCustomerProvider !== undefined
+            ? { customerProvider: receptionCustomerProvider }
+            : {}),
           ...(productSource !== undefined ? { productSource } : {}),
           ...(receptionUnitAliases !== undefined ? { unitAliases: receptionUnitAliases } : {}),
           ...(receptionUnitPackages !== undefined
@@ -979,6 +1001,8 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
   const closeStats = createSyncCleanup([
     { id: "statistics", run: () => statsStore?.close() },
     { id: "reception_budget", run: () => receptionBudgetStore?.close() },
+    { id: "reception_skill_catalog", run: () => receptionSkillCatalog?.close() },
+    { id: "reception_customer_provider", run: () => receptionCustomerProvider?.close() },
     { id: "reception_retention", run: () => { if (retentionTimer !== undefined) clearInterval(retentionTimer); } },
   ]);
   const releaseOwnership = createSyncCleanup([

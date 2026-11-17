@@ -129,6 +129,8 @@ import { OperatingPlanError } from "../../merchant-core/operating/types.js";
 import { OpportunityError } from "../../merchant-core/opportunity/types.js";
 import { ProposalError } from "../../merchant-core/proposal/types.js";
 import { FollowUpError } from "../../merchant-core/followup/types.js";
+import { LearningError } from "../../merchant-core/learning/types.js";
+import { OperationsJobsError } from "../../merchant-core/operations-jobs/service.js";
 import {
   parseExactMoney,
   WorkbenchMoneyError,
@@ -1142,6 +1144,103 @@ export function createMerchantManagementApiHandler(
         writeJson(res, 200, { orders: ops.listOrders() }, { "x-request-id": requestId });
         return;
       }
+      if (rest === "/learning/corrections") {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "learning:read");
+        writeJson(res, 200, { corrections: ops.listCorrections() }, { "x-request-id": requestId });
+        return;
+      }
+      const correctionMatch = /^\/learning\/corrections\/([^/]+)$/.exec(rest);
+      if (correctionMatch !== null) {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "learning:read");
+        writeJson(res, 200, ops.getCorrection(pathSegment(correctionMatch[1] ?? "")), {
+          "x-request-id": requestId,
+        });
+        return;
+      }
+      if (rest === "/learning/candidates") {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "learning:read");
+        writeJson(res, 200, { candidates: ops.listCandidates() }, { "x-request-id": requestId });
+        return;
+      }
+      const candidateMatch = /^\/learning\/candidates\/([^/]+)$/.exec(rest);
+      if (candidateMatch !== null) {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "learning:read");
+        writeJson(res, 200, ops.getCandidate(pathSegment(candidateMatch[1] ?? "")), {
+          "x-request-id": requestId,
+        });
+        return;
+      }
+      if (rest === "/learning/reviews") {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "learning:read");
+        writeJson(res, 200, { reviews: ops.listReviews() }, { "x-request-id": requestId });
+        return;
+      }
+      const reviewMatch = /^\/learning\/reviews\/([^/]+)$/.exec(rest);
+      if (reviewMatch !== null) {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "learning:read");
+        writeJson(res, 200, ops.getReview(pathSegment(reviewMatch[1] ?? "")), {
+          "x-request-id": requestId,
+        });
+        return;
+      }
+      if (rest === "/learning/releases/active") {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "learning:read");
+        const skillKey = url.searchParams.get("skill_key");
+        if (skillKey === null || skillKey.trim() === "") {
+          throw new ManagementError("invalid_input", "skill_key query parameter is required");
+        }
+        writeJson(res, 200, ops.getActiveRelease(skillKey));
+        return;
+      }
+      if (rest === "/learning/releases") {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "learning:read");
+        const skillKey = url.searchParams.get("skill_key") ?? undefined;
+        writeJson(res, 200, { releases: ops.listReleases(skillKey) }, {
+          "x-request-id": requestId,
+        });
+        return;
+      }
+      const releaseMatch = /^\/learning\/releases\/([^/]+)$/.exec(rest);
+      if (releaseMatch !== null) {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "learning:read");
+        writeJson(res, 200, ops.getRelease(pathSegment(releaseMatch[1] ?? "")), {
+          "x-request-id": requestId,
+        });
+        return;
+      }
+      if (rest === "/automation/rules") {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "followups:read");
+        writeJson(res, 200, { rules: ops.listRules() }, { "x-request-id": requestId });
+        return;
+      }
+      const ruleMatch = /^\/automation\/rules\/([^/]+)$/.exec(rest);
+      if (ruleMatch !== null) {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "followups:read");
+        writeJson(res, 200, ops.getRule(pathSegment(ruleMatch[1] ?? "")), {
+          "x-request-id": requestId,
+        });
+        return;
+      }
+      if (rest === "/automation/artifacts") {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "followups:read");
+        const taskId = url.searchParams.get("task_id") ?? undefined;
+        writeJson(res, 200, { artifacts: ops.listArtifacts(taskId) }, {
+          "x-request-id": requestId,
+        });
+        return;
+      }
     }
     writeWorkbenchProblem(
       res,
@@ -1305,6 +1404,219 @@ export function createMerchantManagementApiHandler(
         authorizeOrThrow(auth.ctx, "contribution:manage");
         const { body } = await readOpsBody();
         writeJson(res, 200, ops.assessOrderContribution(pathSegment(orderContributionMatch[1] ?? ""), body), { "x-request-id": requestId });
+        return;
+      }
+      if (rest === "/learning/corrections") {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "learning:manage");
+        const { body, idempotencyKey } = await readOpsBody();
+        writeJson(
+          res,
+          201,
+          ops.submitCorrection(
+            body,
+            {
+              actor_id: auth.ctx.actorId,
+              merchant_id: auth.ctx.merchantId,
+              auth_method: auth.ctx.authMethod,
+              permissions: [...auth.ctx.permissions],
+            },
+            idempotencyKey,
+          ),
+          { "x-request-id": requestId },
+        );
+        return;
+      }
+      const promoteCorrectionMatch = /^\/learning\/corrections\/([^/]+)\/promote$/.exec(rest);
+      if (promoteCorrectionMatch !== null) {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "learning:manage");
+        const { body, idempotencyKey } = await readOpsBody();
+        writeJson(
+          res,
+          200,
+          ops.promoteCorrection(
+            pathSegment(promoteCorrectionMatch[1] ?? ""),
+            body,
+            {
+              actor_id: auth.ctx.actorId,
+              merchant_id: auth.ctx.merchantId,
+              auth_method: auth.ctx.authMethod,
+              permissions: [...auth.ctx.permissions],
+            },
+            idempotencyKey,
+          ),
+          { "x-request-id": requestId },
+        );
+        return;
+      }
+      if (rest === "/learning/candidates") {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "learning:manage");
+        const { body, idempotencyKey } = await readOpsBody();
+        writeJson(
+          res,
+          201,
+          ops.proposeCandidate(
+            body,
+            {
+              actor_id: auth.ctx.actorId,
+              merchant_id: auth.ctx.merchantId,
+              auth_method: auth.ctx.authMethod,
+              permissions: [...auth.ctx.permissions],
+            },
+            idempotencyKey,
+          ),
+          { "x-request-id": requestId },
+        );
+        return;
+      }
+      const reviseCandidateMatch = /^\/learning\/candidates\/([^/]+)\/revise$/.exec(rest);
+      if (reviseCandidateMatch !== null) {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "learning:manage");
+        const { body, idempotencyKey } = await readOpsBody();
+        writeJson(
+          res,
+          200,
+          ops.reviseCandidate(
+            pathSegment(reviseCandidateMatch[1] ?? ""),
+            body,
+            {
+              actor_id: auth.ctx.actorId,
+              merchant_id: auth.ctx.merchantId,
+              auth_method: auth.ctx.authMethod,
+              permissions: [...auth.ctx.permissions],
+            },
+            idempotencyKey,
+          ),
+          { "x-request-id": requestId },
+        );
+        return;
+      }
+      const reviewCandidateMatch = /^\/learning\/candidates\/([^/]+)\/review$/.exec(rest);
+      if (reviewCandidateMatch !== null) {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "learning:review");
+        const { body, idempotencyKey } = await readOpsBody();
+        writeJson(
+          res,
+          200,
+          ops.reviewCandidate(
+            pathSegment(reviewCandidateMatch[1] ?? ""),
+            body,
+            {
+              actor_id: auth.ctx.actorId,
+              merchant_id: auth.ctx.merchantId,
+              auth_method: auth.ctx.authMethod,
+              permissions: [...auth.ctx.permissions],
+            },
+            idempotencyKey,
+          ),
+          { "x-request-id": requestId },
+        );
+        return;
+      }
+      if (rest === "/learning/releases/publish") {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "learning:publish");
+        const { body, idempotencyKey } = await readOpsBody();
+        writeJson(
+          res,
+          201,
+          ops.publishRelease(
+            body,
+            {
+              actor_id: auth.ctx.actorId,
+              merchant_id: auth.ctx.merchantId,
+              auth_method: auth.ctx.authMethod,
+              permissions: [...auth.ctx.permissions],
+            },
+            idempotencyKey,
+          ),
+          { "x-request-id": requestId },
+        );
+        return;
+      }
+      const rollbackReleaseMatch = /^\/learning\/releases\/([^/]+)\/rollback$/.exec(rest);
+      if (rollbackReleaseMatch !== null) {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "learning:publish");
+        const { body, idempotencyKey } = await readOpsBody();
+        writeJson(
+          res,
+          200,
+          ops.rollbackRelease(
+            pathSegment(rollbackReleaseMatch[1] ?? ""),
+            body,
+            {
+              actor_id: auth.ctx.actorId,
+              merchant_id: auth.ctx.merchantId,
+              auth_method: auth.ctx.authMethod,
+              permissions: [...auth.ctx.permissions],
+            },
+            idempotencyKey,
+          ),
+          { "x-request-id": requestId },
+        );
+        return;
+      }
+      const revokeReleaseMatch = /^\/learning\/releases\/([^/]+)\/revoke$/.exec(rest);
+      if (revokeReleaseMatch !== null) {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "learning:publish");
+        const { body, idempotencyKey } = await readOpsBody();
+        writeJson(
+          res,
+          200,
+          ops.revokeRelease(
+            pathSegment(revokeReleaseMatch[1] ?? ""),
+            body,
+            {
+              actor_id: auth.ctx.actorId,
+              merchant_id: auth.ctx.merchantId,
+              auth_method: auth.ctx.authMethod,
+              permissions: [...auth.ctx.permissions],
+            },
+            idempotencyKey,
+          ),
+          { "x-request-id": requestId },
+        );
+        return;
+      }
+      if (rest === "/automation/rules/prepare") {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "followups:manage");
+        const { body } = await readOpsBody();
+        writeJson(res, 201, ops.prepareRule(body), { "x-request-id": requestId });
+        return;
+      }
+      if (rest === "/automation/rules/activate") {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "followups:manage");
+        const { body } = await readOpsBody();
+        writeJson(res, 201, ops.activateRule(body), { "x-request-id": requestId });
+        return;
+      }
+      const pauseRuleMatch = /^\/automation\/rules\/([^/]+)\/pause$/.exec(rest);
+      if (pauseRuleMatch !== null) {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "followups:manage");
+        const { body } = await readOpsBody();
+        writeJson(res, 200, ops.pauseRule(pathSegment(pauseRuleMatch[1] ?? ""), body), {
+          "x-request-id": requestId,
+        });
         return;
       }
     }
@@ -4673,6 +4985,33 @@ function respondWorkbenchError(res: ServerResponse, error: unknown, requestId: s
       "经营请求未完成",
       error instanceof Error ? error.message : "经营请求未完成",
     );
+    return;
+  }
+  if (error instanceof OperationsJobsError) {
+    const mapping: Readonly<Record<OperationsJobsError["code"], WorkbenchProblemCode>> = {
+      validation: "VALIDATION_ERROR",
+      not_found: "RESOURCE_NOT_FOUND",
+      conflict: "VERSION_CONFLICT",
+      version_conflict: "VERSION_CONFLICT",
+      invalid_transition: "VERSION_CONFLICT",
+      budget_exhausted: "RATE_LIMITED",
+      idempotency_conflict: "IDEMPOTENCY_KEY_REUSED",
+    };
+    writeWorkbenchProblem(res, mapping[error.code], requestId, "经营任务请求未完成", error.message);
+    return;
+  }
+  if (error instanceof LearningError) {
+    const mapping: Readonly<Record<LearningError["code"], WorkbenchProblemCode>> = {
+      validation: "VALIDATION_ERROR",
+      sensitive_content: "VALIDATION_ERROR",
+      unsupported_capability: "VALIDATION_ERROR",
+      access_denied: "PERMISSION_REVOKED",
+      not_found: "RESOURCE_NOT_FOUND",
+      version_conflict: "VERSION_CONFLICT",
+      idempotency_conflict: "IDEMPOTENCY_KEY_REUSED",
+      schema_unavailable: "DEPENDENCY_UNAVAILABLE",
+    };
+    writeWorkbenchProblem(res, mapping[error.code], requestId, "学习请求未完成", error.message);
     return;
   }
   if (error instanceof WorkbenchEventProjectionError) {

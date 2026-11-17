@@ -26,6 +26,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 import { contentDigest } from "../../negotiation/jcs.js";
+import { inImmediateTransaction } from "../storage/transaction.js";
 import { FollowUpError, type FollowUpStatus } from "./types.js";
 
 export interface FollowUpTask {
@@ -104,7 +105,6 @@ export interface FollowUpRepositoryOptions {
 export class FollowUpRepository {
   private readonly db: DatabaseSync;
   private readonly now: () => string;
-  private inTx = false;
 
   constructor(options: FollowUpRepositoryOptions) {
     this.db = options.db;
@@ -112,19 +112,10 @@ export class FollowUpRepository {
   }
 
   transaction<T>(work: () => T): T {
-    if (this.inTx) return work();
-    this.inTx = true;
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const result = work();
-      this.db.exec("COMMIT");
-      return result;
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    } finally {
-      this.inTx = false;
-    }
+    // 委托受控事务上下文：顶层 BEGIN IMMEDIATE/COMMIT/ROLLBACK 语义不变；
+    // 嵌套（栅栏写入等外层事务内调用）走 SAVEPOINT——内层抛错只回滚自己，
+    // "cannot start a transaction within a transaction" 不再出现。
+    return inImmediateTransaction(this.db, work);
   }
 
   createTask(input: {

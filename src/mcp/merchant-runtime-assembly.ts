@@ -26,7 +26,7 @@
  * 由调用方决定是退出还是拒绝启动。装配不监听端口、不注册目录、不启动对话。
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { closeDatabase, createCleanup } from "../lifecycle/close.js";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -43,6 +43,12 @@ import type { MerchantClient } from "../agent/merchant/types.js";
 import { MemoryStore } from "../agent/memory/store.js";
 import { PrivateVault } from "../agent/memory/vault.js";
 import { MerchantOAuthVerifier } from "../auth/merchant-authorization.js";
+import { loadGovernanceFeatureFlagsFromEnv } from "../merchant-core/context-governance/feature-flags.js";
+import {
+  initializeGovernanceRuntime,
+  type GovernanceRuntime,
+  type GovernanceRuntimeEvent,
+} from "../merchant-core/ownership/runtime.js";
 import { MerchantOAuthServer, MerchantOAuthStore } from "../auth/merchant-oauth.js";
 import { MerchantAdminSessions } from "../auth/merchant-sessions.js";
 import { OnboardingStore } from "../cloud/onboarding/store.js";
@@ -87,6 +93,13 @@ import { buildMerchantPresentationResources } from "./merchant-resources.js";
 import type { MerchantMcpServerOptions } from "./merchant-server.js";
 import type { AgentProfile, MerchantPolicy } from "../config/profile.js";
 import { PRODUCT_VERSION } from "../product-cli.js";
+import { createMerchantManagementApiHandler } from "../http/merchant-management/api.js";
+import { MerchantImportDraftStore } from "../http/merchant-management/draft-store.js";
+import { MerchantManagementOperationStore } from "../http/merchant-management/operation-store.js";
+import { MutableServiceState } from "../http/merchant-management/service-state.js";
+import { openMerchantOperationsFacade } from "../merchant-core/ops/facade.js";
+import { MerchantOperationsSurface } from "../merchant-core/ops/surface.js";
+import { ManagementError } from "../merchant/application/service.js";
 import { isFakeProvider } from "../config/provider-kind.js";
 
 /** 装配失败：code 稳定可判，message 面向操作者。 */
@@ -131,6 +144,11 @@ export interface MerchantRuntimeAssemblyOptions {
   adminDefaultNext?: string;
   /** 待批准页的返回入口（云工作台传；独立 MCP 不传）。 */
   adminPendingBackLink?: { href: string; label: string };
+  /**
+   * 是否由本装配初始化 TOP1-3 治理运行时。cloud bootstrap 已经在自己的
+   * state.sqlite 装配处初始化，应传 false 避免双运行时；独立 MCP 默认 true。
+   */
+  initializeGovernance?: boolean;
 }
 
 export interface MerchantRuntimeAssembly {
@@ -308,6 +326,27 @@ export async function assembleMerchantRuntime(
         });
   const db = openAgentDatabase(paths.db);
   const now = () => new Date().toISOString();
+  // TOP1-3 治理运行时：独立 `merchant runtime start`（Veyquo 等）不经
+  // cloud bootstrap，必须在商家装配处注册三个模块账本；feature flags 任一
+  // 开启时由本进程 CAS 获取实例所有权（a2a 只读技能/记忆）。
+  let governanceRuntime: GovernanceRuntime | undefined;
+  try {
+    if (options.initializeGovernance !== false) {
+      governanceRuntime = initializeGovernanceRuntime({
+      db,
+      merchantId: profile.owner_id,
+      flags: loadGovernanceFeatureFlagsFromEnv(process.env),
+      ownerId: `mcp_${randomUUID()}`,
+        onEvent: (event: GovernanceRuntimeEvent) =>
+          log(`[kiwi] governance: ${JSON.stringify(event)}\n`),
+      });
+    }
+  } catch (err) {
+    throw new MerchantAssemblyError(
+      "GOVERNANCE_INIT_FAILED",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
   // P0a 接待运营投影：只读预算用量/降级事件/审批计数；探针按需真实调用。
   const receptionConfig = loadReceptionConfig();
   const receptionBudgetFile = path.join(paths.dir, "a2a", "reception-budget.sqlite");
@@ -600,6 +639,40 @@ export async function assembleMerchantRuntime(
     );
   }
   // 配对兑换：两种认证模式都挂载——凭据由本实例在兑换时新签，不依赖环境变量。
+  // 独立运行模式的 Workbench v1 管理 API：与 cloud bootstrap 同一套
+  // `createMerchantManagementApiHandler`，挂到本进程 `/merchant/api/*`。
+  // 依赖 oauth.sqlite（管理会话）；未配置 OAuth 时保持原行为不挂载。
+  const managementApi =
+    oauthDb === undefined
+      ? undefined
+      : createMerchantManagementApiHandler({
+          merchantId: profile.owner_id,
+          generation: () => 1,
+          runtimeVersion: PRODUCT_VERSION,
+          sessions: new MerchantAdminSessions({ db: oauthDb }),
+          listPending: () => approvals.listPending(),
+          mintCandidateConfirmation: (input) =>
+            oauthStore?.createConfirmation(input) ?? "",
+          executeDecision: async () => {
+            throw new ManagementError(
+              "unavailable",
+              "standalone MCP 未通过 Workbench API 暴露审批执行；请使用 /admin/pending",
+            );
+          },
+          drafts: new MerchantImportDraftStore({ db, now }),
+          operations: new MerchantManagementOperationStore({ db, now }),
+          serviceState: new MutableServiceState("OPERATING", { now }),
+          readiness: async () => ({ ready: true, checks: {} }),
+          merchantOperations: new MerchantOperationsSurface({
+            facade: openMerchantOperationsFacade({
+              db,
+              merchantId: profile.owner_id,
+              now,
+            }),
+            now,
+          }),
+          now: () => new Date(now()),
+        });
   const serverOptions: MerchantMcpServerOptions = {
     service,
     host,
@@ -624,6 +697,7 @@ export async function assembleMerchantRuntime(
     presentations,
     // 配套商家确认页面（BUG-01/03）：cookie 会话 + 一次性确认凭证，两种认证
     // 模式下都挂载（会话/凭证存 oauth.sqlite，与 OAuth 授权服务器同库不同表）。
+    ...(managementApi !== undefined ? { managementApi } : {}),
     ...(oauthDb !== undefined && oauthStore !== undefined
       ? {
           admin: {
@@ -735,7 +809,8 @@ export async function assembleMerchantRuntime(
     close: createCleanup([
       { id: "merchant_conversations", run: () => conversation?.close() ?? Promise.resolve() },
       { id: "oauth_database", run: () => { if (oauthDb) closeDatabase(oauthDb); } },
-      { id: "merchant_database", run: () => closeDatabase(db) },
+      { id: "governance", run: () => governanceRuntime?.stop() },
+      { id: "merchant_database", after: ["governance"], run: () => closeDatabase(db) },
     ]),
   };
 }
