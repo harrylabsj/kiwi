@@ -189,6 +189,16 @@ describe("审核/发布/回滚/撤回（M2-5）", () => {
     expect(service.getActiveRelease("m-1", "trial-unit-clarification")?.release_id).toBe(
       release.release_id,
     );
+    // A08：审计真实发布人（服务端 actor），不是请求正文自报。
+    const publishedEvent = db
+      .prepare(
+        "SELECT detail_json FROM learning_events WHERE subject_id = ? AND event = 'release_published'",
+      )
+      .get(release.release_id) as { detail_json: string };
+    expect(JSON.parse(publishedEvent.detail_json)).toMatchObject({
+      generation: 1,
+      publisher_id: "admin-1",
+    });
     // 幂等：同批准再次发布返回原 release。
     expect(
       service.publishRelease({

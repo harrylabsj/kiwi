@@ -1243,6 +1243,8 @@ export class LearningService {
             skill_key: release.skill_key,
             generation: release.generation,
             artifact_hash: release.artifact_hash,
+            // A08：审计真实发布人（服务端 actor，不接受请求正文自报）。
+            publisher_id: input.actor.actor_id,
           },
           createdAt: now,
         });

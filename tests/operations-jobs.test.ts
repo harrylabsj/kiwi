@@ -112,6 +112,48 @@ describe("经营任务 M4", () => {
     );
   });
 
+  it("C01：同事件 100 次突发只产生一条 Inbox 与一个评估任务", () => {
+    for (let index = 0; index < 100; index += 1) {
+      service.ingestTrustedEvent({
+        merchant_id: MERCHANT,
+        source_scope: "inquiry",
+        external_event_id: "evt-burst",
+        payload_digest: "sha256:burst",
+        entity_ref: "inq-burst",
+        occurred_at: NOW,
+      });
+    }
+    const inbox = db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM event_inbox WHERE merchant_id = ? AND external_event_id = ?",
+      )
+      .get(MERCHANT, "evt-burst") as { n: number };
+    expect(inbox.n).toBe(1);
+    rule("unfinished_inquiry_digest");
+    service.evaluateDue({
+      merchant_id: MERCHANT,
+      prefilter: () => ({ result: "eligible" }),
+    });
+    const tasks = db
+      .prepare("SELECT COUNT(*) AS n FROM followup_tasks WHERE merchant_id = ?")
+      .get(MERCHANT) as { n: number };
+    expect(tasks.n).toBe(1);
+    // 同事件改摘要 → conflict，不新增版本。
+    expectError(
+      () =>
+        service.ingestTrustedEvent({
+          merchant_id: MERCHANT,
+          source_scope: "inquiry",
+          external_event_id: "evt-burst",
+          payload_digest: "sha256:changed",
+          entity_ref: "inq-burst",
+          occurred_at: NOW,
+        }),
+      "conflict",
+      "event_payload_conflict",
+    );
+  });
+
   it("prepareRule 只生成候选；activate 才创建规则；暂停递增 epoch 并取消任务", () => {
     const candidate = service.prepareRule({
       merchant_id: MERCHANT,
