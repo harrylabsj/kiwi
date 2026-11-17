@@ -149,6 +149,14 @@ export const EVALUATION_RUN_STATUSES = [
 ] as const;
 export type EvaluationRunStatus = (typeof EVALUATION_RUN_STATUSES)[number];
 
+/** 评测回放的可审计摘要（用于校准验收标准，不参与判定）。 */
+export interface EvaluationDiagnostics {
+  readonly block_kinds: readonly string[];
+  readonly question_ids: readonly string[];
+  readonly tools: readonly string[];
+  readonly text_excerpt: string;
+}
+
 export interface EvaluationAttemptResult {
   readonly variant: "baseline" | "candidate";
   readonly attempt: number;
@@ -156,6 +164,7 @@ export interface EvaluationAttemptResult {
   readonly hard_gate_failures: number;
   readonly improvement_delta?: number;
   readonly trace_ref?: string;
+  readonly diagnostics?: EvaluationDiagnostics;
 }
 
 export interface EvaluationScenarioResult {

@@ -37,6 +37,7 @@ import type { LearningRepository } from "./repository.js";
 import {
   LearningError,
   type EvaluationAttemptResult,
+  type EvaluationDiagnostics,
   type EvaluationReport,
   type EvaluationResults,
   type LearningCandidate,
@@ -69,6 +70,8 @@ export interface EvaluationAttemptOutcome {
   /** 预登记改善指标；正数表示优于基线。 */
   readonly improvement_delta?: number;
   readonly trace_ref?: string;
+  /** 回放摘要，供校准与证据审计（不参与判定）。 */
+  readonly diagnostics?: EvaluationDiagnostics;
 }
 
 export type EvaluationRunner = (input: {
@@ -563,6 +566,7 @@ export async function runCandidateEvaluation(
             ? { improvement_delta: outcome.improvement_delta }
             : {}),
           ...(outcome.trace_ref !== undefined ? { trace_ref: outcome.trace_ref } : {}),
+          ...(outcome.diagnostics !== undefined ? { diagnostics: outcome.diagnostics } : {}),
         });
         runsCompleted += 1;
         results[scenario.scenario_id] = {

@@ -154,6 +154,11 @@ describe("真实 provider runner 适配", () => {
       hard_gate_failures: 0,
       improvement_delta: 1,
     });
+    expect(variant.diagnostics).toMatchObject({
+      block_kinds: ["ask_registered_question"],
+      question_ids: ["q_missing_quantity_v1"],
+    });
+    expect(baseline.diagnostics).toMatchObject({ question_ids: [] });
   });
 
   it("硬门：禁止 block 出现 → 失败且 hard_gate_failures>0", async () => {

@@ -79,6 +79,12 @@ function passRunner(options: {
       passed: true,
       hard_gate_failures: 0,
       ...(variant === "candidate" ? { improvement_delta: options.improvement ?? 1 } : {}),
+      diagnostics: {
+        block_kinds: ["next_step"],
+        question_ids: [],
+        tools: [],
+        text_excerpt: `diagnostics:${scenario.scenario_id}:${variant}`,
+      },
     };
   };
 }
@@ -152,6 +158,10 @@ describe("候选评测（M2-4）", () => {
     });
     expect(service.getCandidate("m-1", candidateId)?.state).toBe("READY_FOR_REVIEW");
     expect(service.getCandidate("m-1", candidateId)?.eval_report_id).toBe(evaluation.evaluation_id);
+    const firstScenario = Object.values(evaluation.results.scenarios)[0];
+    expect(firstScenario?.attempts[0]?.diagnostics).toMatchObject({
+      block_kinds: ["next_step"],
+    });
   });
 
   it("目标场景非 3/3：EVALUATION_FAILED，old 结果保留", async () => {

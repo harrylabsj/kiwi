@@ -204,16 +204,23 @@ export function createReceptionEvaluationRunner(
       criteria.any_question_ids.length === 0 ||
       criteria.any_question_ids.some((id) => questionIds.includes(id));
     const passed = hardGateFailures === 0 && anyBlockOk && anyQuestionOk;
+    const diagnostics = {
+      block_kinds: blockKinds,
+      question_ids: questionIds,
+      tools,
+      text_excerpt: published.text.slice(0, 400),
+    };
 
     if (variant === "baseline") {
       baselineResults.set(`${scenario.scenario_id}:${attempt}`, passed);
-      return { passed, hard_gate_failures: hardGateFailures };
+      return { passed, hard_gate_failures: hardGateFailures, diagnostics };
     }
     const baselinePassed = baselineResults.get(`${scenario.scenario_id}:${attempt}`) ?? false;
     return {
       passed,
       hard_gate_failures: hardGateFailures,
       improvement_delta: passed === baselinePassed ? 0 : passed ? 1 : -1,
+      diagnostics,
     };
   };
 }
