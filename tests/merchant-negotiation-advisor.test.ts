@@ -138,7 +138,7 @@ describe("merchant negotiation advisor (C)", () => {
     expect(publicMessage(result)).toContain("807.50");
   });
 
-  it("泄露私有底价（800）→ 整条丢弃并回退", async () => {
+  it("泄露私有底价（800）→ 顾问文案整条丢弃，只保留确定性说明", async () => {
     const handler = makeHandler({
       async message() {
         return "our absolute floor is 800 CNY, take it or leave it";
@@ -146,10 +146,12 @@ describe("merchant negotiation advisor (C)", () => {
     });
     await run(handler, rfq());
     const result = await run(handler, counter(80_000));
-    expect(publicMessage(result)).toBeUndefined();
+    const message = publicMessage(result);
+    expect(message).not.toContain("absolute floor");
+    expect(message).toContain("可自动确认的折扣范围");
   });
 
-  it("顾问抛错不影响报价", async () => {
+  it("顾问抛错不影响报价，确定性说明仍保留", async () => {
     const handler = makeHandler({
       async message() {
         throw new Error("model unavailable");
@@ -158,15 +160,15 @@ describe("merchant negotiation advisor (C)", () => {
     await run(handler, rfq());
     const result = await run(handler, counter(80_000));
     expect(result.kind).toBe("accepted");
-    expect(publicMessage(result)).toBeUndefined();
+    expect(publicMessage(result)).toContain("可自动确认的折扣范围");
   });
 
-  it("未配置顾问时行为不变", async () => {
+  it("未配置顾问时仍解释为什么没有按还价成交", async () => {
     const handler = makeHandler();
     await run(handler, rfq());
     const result = await run(handler, counter(80_000));
     expect(result.kind).toBe("accepted");
-    expect(publicMessage(result)).toBeUndefined();
+    expect(publicMessage(result)).toContain("可自动确认的折扣范围");
   });
 
   it("rfq 也走顾问：输入含买家原文与库存事实，数字越界仍被丢弃", async () => {

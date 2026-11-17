@@ -753,7 +753,15 @@ export function createMerchantManagementApiHandler(
       // Workbench 页面（v1）与旧 v0 页面读取同一份脱敏策略投影；
       // 此前 v1 缺少该路由，商家后台「报价规则」报 API 路由不存在。
       const auth = requireActor(req);
-      writeJson(res, 200, await readService.getPolicy(auth.ctx), { "x-request-id": requestId });
+      writeJson(
+        res,
+        200,
+        {
+          ...await readService.getPolicy(auth.ctx),
+          ...policyWorkbenchSummary(options.policyCurrent?.()),
+        },
+        { "x-request-id": requestId },
+      );
       return;
     }
     if (rest === "/runtime/status") {
@@ -2623,7 +2631,10 @@ export function createMerchantManagementApiHandler(
     }
     if (rest === "/policy") {
       const auth = requireActor(req);
-      writeJson(res, 200, await readService.getPolicy(auth.ctx));
+      writeJson(res, 200, {
+        ...await readService.getPolicy(auth.ctx),
+        ...policyWorkbenchSummary(options.policyCurrent?.()),
+      });
       return;
     }
     if (rest === "/approvals") {
@@ -4495,6 +4506,24 @@ function candidateIdFromPreparation(value: unknown): string {
   const prepared = requireObject(value, "prepared candidate");
   const candidate = requireObject(prepared["candidate"], "prepared candidate.candidate");
   return requireString(candidate["candidate_id"], "prepared candidate.candidate_id");
+}
+
+/**
+ * 工作台规则页的安全投影：只回显**公开/可判定**的值与私有值的“是否已设置”，
+ * 不返回底价金额。字段名用页面别名，避免把策略 schema 字段名带进页面壳。
+ */
+function policyWorkbenchSummary(policy: MerchantPolicy | undefined): Record<string, unknown> {
+  if (policy === undefined) return {};
+  return {
+    auto_quote: policy.auto_negotiate !== false,
+    global_floor_configured: policy.min_unit_price_private !== undefined,
+    global_discount: policy.max_auto_discount_percent ?? null,
+    lead_days: policy.delivery_lead_days ?? null,
+    quote_ttl_seconds: policy.quote_ttl_seconds ?? null,
+    human_review: policy.human_review_on ?? [],
+    sku_discounts: policy.sku_max_discount_percent ?? {},
+    sku_floors_configured: Object.keys(policy.price_floors ?? {}),
+  };
 }
 
 function exactProductProjection(product: ExactMerchantProduct): Record<string, unknown> {

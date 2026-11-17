@@ -188,6 +188,8 @@ var catalogAccessDetection = null;
 var publicationDraft = null;
 var publicationPicks = null;
 var publicationBusy = false;
+var POLICY_SUMMARY = null;
+var POLICY_PRODUCTS = [];
 var $ = function (id) { return document.getElementById(id); };
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
@@ -641,6 +643,15 @@ function showCatalogPairing() {
   }).catch(function () { bar("无法读取配对信息，请刷新连接状态。", true); });
 }
 
+/** 商品状态文案：过期/暂停统一显示为“已下架”，不再使用“过期”。 */
+function productStatusLabel(it) {
+  var status = String((it && it.status) || "").toLowerCase();
+  if (status === "paused") return "已下架";
+  var until = Date.parse(String((it && it.valid_until) || ""));
+  if (Number.isFinite(until) && until <= Date.now()) return "已下架（有效期已过）";
+  if (status === "active" || status === "") return "在售";
+  return status;
+}
 /** 目录发布状态文案：known=false 时不把“读不到”说成“未发布”。 */
 function publicationStateLabel(state, known) {
   if (!known) return "状态未知";
@@ -805,7 +816,7 @@ function renderProducts(items, publication) {
       if (canPublish) {
         return '<tr data-sku="' + sku + '">' +
           '<td><input type="checkbox" class="pub-pick" onchange="syncPublicationSelectAll()" aria-label="选择商品 ' + sku + '"></td>' +
-          "<td>" + sku + "</td><td>" + esc(it.title) + "</td><td>" + esc(it.status) + "</td>" +
+          "<td>" + sku + "</td><td>" + esc(it.title) + "</td><td>" + esc(productStatusLabel(it)) + "</td>" +
           '<td class="pub-state">' + esc(publicationStateLabel(published[it.sku], known)) + "</td>" +
           '<td><input type="text" class="pub-category" maxlength="120" placeholder="填写分类" aria-label="' + sku + ' 的分类"></td>' +
           "<td>" + price + "</td><td>" + esc(it.min_order_qty == null ? "-" : it.min_order_qty) + "</td><td>" +
@@ -814,7 +825,7 @@ function renderProducts(items, publication) {
       }
       return "<tr><td>" + sku + "</td><td>" + esc(it.title) + "</td><td>" + price + "</td><td>" +
         esc(it.min_order_qty == null ? "-" : it.min_order_qty) + "</td><td>" +
-        esc(it.valid_until) + "</td><td>" + esc(it.status) + "</td><td>" + platform + "</td><td>" +
+        esc(it.valid_until) + "</td><td>" + esc(productStatusLabel(it)) + "</td><td>" + platform + "</td><td>" +
         esc(it.platform_product_id || "-") + "</td><td>" + marketplaceLink(it) + "</td></tr>";
     }
     var money = it.money || {};
@@ -842,7 +853,8 @@ function renderProducts(items, publication) {
       '<button class="act" id="pub-apply" onclick="applyPublicationCategory()">应用到已勾选</button>' +
       '<button class="act" id="pub-clear" onclick="clearPublicationPicks()">清空选择</button></div>' +
       '<p class="muted">公开名称、SKU、分类、商品页链接与其余公开字段；价格、库存及私有规则不会发布。' +
-      '可发布已导入或已有商品，不涉及下架其他商品。预览后选择会锁定，修改需先「重新选择」。</p>' +
+      '可发布已导入或已有商品，不涉及下架其他商品。预览后选择会锁定，修改需先「重新选择」。' +
+      '上架/下架与有效期在目录商家后台设置；「过期」统一显示为「已下架」。</p>' +
       '<button class="act" id="pub-preview" onclick="previewPublication()">预览公开内容</button>' +
       '<div id="publication-result"></div>'
     : (canPublish ? '<p class="muted">暂无商品，请先在下方导入商品后再选择发布。</p>' : "");
@@ -1021,25 +1033,61 @@ var views = {
     });
   },
   policy: function () {
-    return call("GET", "/policy").then(function (pol) {
+    return Promise.all([
+      call("GET", "/policy"),
+      // 商品源不可读时仍保留高级 JSON 模式；规则页不应整体 503。
+      call("GET", "/products?limit=100").catch(function () { return { items: [] }; }),
+    ]).then(function (results) {
+      var pol = results[0] || {};
+      var products = (results[1] && results[1].items) || [];
+      POLICY_SUMMARY = pol;
+      POLICY_PRODUCTS = products;
+      var autoOn = pol.auto_quote !== false;
+      var productRows = products.map(function (it) {
+        var sku = String(it.sku || "");
+        var currentDiscount = pol.sku_discounts && pol.sku_discounts[sku] != null
+          ? String(pol.sku_discounts[sku]) : "";
+        var floorConfigured = (pol.sku_floors_configured || []).indexOf(sku) !== -1;
+        var price = it.money && it.money.amount_minor != null
+          ? esc(it.money.currency || "") + " " + (Number(it.money.amount_minor) / 100).toFixed(2)
+          : (it.currency ? esc(it.currency) + " " + esc(it.price) : "-");
+        return '<tr data-sku="' + esc(sku) + '" data-current-discount="' + esc(currentDiscount) +
+          '" data-floor-configured="' + (floorConfigured ? "1" : "0") + '">' +
+          '<td class="mono">' + esc(sku) + '<input type="hidden" class="sku-rule-sku" value="' + esc(sku) + '"></td>' +
+          '<td>' + esc(it.title || "-") + '<div class="muted">' + esc(productStatusLabel(it)) + "</div></td>" +
+          '<td>' + price + "</td>" +
+          '<td>' + esc(currentDiscount === "" ? "继承全局 " + (pol.global_discount == null ? 0 : pol.global_discount) + "%" : currentDiscount + "%") + "</td>" +
+          '<td><input type="text" class="sku-rule-discount" inputmode="decimal" placeholder="新折扣 %" aria-label="' + esc(sku) + ' 新折扣"></td>' +
+          '<td>' + esc(floorConfigured ? "已设置（不显示）" : "未设置") + "</td>" +
+          '<td><input type="text" class="sku-rule-floor" inputmode="decimal" placeholder="新底价（元）" aria-label="' + esc(sku) + ' 新底价"></td>' +
+          '<td><label class="consent-label"><input type="checkbox" class="sku-rule-clear-floor"' + (floorConfigured ? "" : " disabled") + "> 清除</label></td>" +
+          '<td><label class="consent-label"><input type="checkbox" class="sku-rule-clear-discount"' + (currentDiscount === "" ? " disabled" : "") + "> 清除</label></td>" +
+          "</tr>";
+      }).join("");
+      var skuTable = products.length
+        ? '<div class="table-scroll"><table id="pf-sku-rules"><thead><tr><th>SKU</th><th>商品</th><th>当前价</th><th>当前折扣</th><th>新折扣</th><th>当前底价</th><th>新底价</th><th>清除底价</th><th>清除折扣</th></tr></thead><tbody>' +
+          productRows + "</tbody></table></div>" +
+          '<button class="act" type="button" onclick="addSkuRuleRow()">添加未列出的 SKU</button>'
+        : '<p class="muted">商品源暂不可读；仍可用下方高级 JSON 模式。恢复商品源后这里会按商品逐行显示。</p>';
       return '<div class="card"><h2>当前报价规则</h2><table>' +
         "<tr><th>规则版本</th><td>" + esc(pol.policy_revision) + "</td></tr>" +
         '<tr><th>内容摘要</th><td><pre class="digest">' + esc(pol.digest) + "</pre></td></tr></table>" +
-        '<p class="muted">底价等敏感值不出现在本页接口；提交草稿后由系统校验并原子生效。</p></div>' +
+        '<p class="muted">底价等敏感值不出现在本页接口；提交草稿后由系统校验并原子生效。' +
+        "上架/下架与有效期在目录商家后台设置；「新鲜期至」到期后商品自动下架，不再报价。</p></div>" +
         (ROLE === "owner" || ROLE === "operator"
           ? '<div class="card"><h2>常用规则表单</h2>' +
-            '<p class="muted">留空的字段不会写进补丁（不修改现有值）；当前值因隐私不回显。提交后生成规则变更草稿，再确认才生效。</p>' +
+            '<p class="muted">留空的全局字段不会写进补丁；按商品规则只提交你填写或勾选清除的行。提交后生成规则变更草稿，再确认才生效。</p>' +
             '<table>' +
-            '<tr><th>自动应价</th><td><select id="pf-auto"><option value="">不修改</option><option value="on">开启</option><option value="off">关闭</option></select>' +
-            '<span class="muted">关闭后新询价转人工处理</span></td></tr>' +
+            '<tr><th>自动应价</th><td><select id="pf-auto">' +
+            '<option value="on"' + (autoOn ? " selected" : "") + ">开启</option>" +
+            '<option value="off"' + (autoOn ? "" : " selected") + ">关闭</option></select>" +
+            '<span class="muted">默认开启；关闭后新询价转人工处理</span></td></tr>' +
             '<tr><th>全局最低单价（元）</th><td><input type="text" id="pf-floor" placeholder="留空不修改"></td></tr>' +
             '<tr><th>最大自动折扣（%）</th><td><input type="text" id="pf-discount" placeholder="0–100，留空不修改"></td></tr>' +
             '<tr><th>交期承诺（天）</th><td><input type="text" id="pf-lead" placeholder="正数，留空不修改"></td></tr>' +
             '<tr><th>报价有效期（秒）</th><td><input type="text" id="pf-ttl" placeholder="正数，留空不修改"></td></tr>' +
-            '<tr><th>SKU 规则</th><td>' +
-            '<table id="pf-sku-rules"><thead><tr><th>SKU</th><th>常态折扣（%）</th><th>私有底价（元）</th><th></th></tr></thead><tbody></tbody></table>' +
-            '<button class="act" type="button" onclick="addSkuRuleRow()">添加 SKU 规则</button>' +
-            '<span class="muted">提交时与现有 SKU 规则合并，不会清掉未列出的 SKU。</span></td></tr>' +
+            '<tr><th>按商品规则</th><td>' + skuTable +
+            '<span class="muted">为每件商品单独设置常态折扣与私有底价；未填写的行保持原值。当前底价金额不回显（隐私），只显示是否已设置。</span></td></tr>' +
             '<tr><th>超出范围转人工</th><td><span class="row">' +
             '<label><input type="checkbox" id="pf-hr-below" checked> 低于底价</label>' +
             '<label><input type="checkbox" id="pf-hr-warranty"> 特殊售后条款</label>' +
@@ -1047,9 +1095,9 @@ var views = {
             '<select id="pf-hr"><option value="">不修改</option><option value="set">按左侧勾选设置</option></select></td></tr>' +
             "</table>" +
             '<div class="row" style="margin-top:8px"><button class="act primary" onclick="draftPolicyForm()">生成规则草稿</button>' +
-            '<span class="muted">SKU 规则可在上方表格填写；促销与库存来源仍用下方高级模式。</span></div><div id="polformresult"></div></div>' +
+            '<span class="muted">促销与库存来源等复杂字段仍用下方高级模式。</span></div><div id="polformresult"></div></div>' +
             '<div class="card"><h2>高级：JSON patch 模式</h2>' +
-            '<p class="muted">适合 per-SKU 底价/折扣映射、促销与库存来源等完整 patch；字段名以策略 schema 文档为准，不在页面枚举。</p>' +
+            '<p class="muted">仅用于促销、库存来源等无法用上表表达的完整 patch；字段名以策略 schema 文档为准，不在页面枚举。</p>' +
             '<textarea id="patch" rows="8" aria-label="高级规则 JSON patch"></textarea>' +
             '<div class="row" style="margin-top:8px"><button class="act" onclick="draftPolicy()">保存草稿</button>' +
             '<span class="muted">保存后生成草稿摘要，再点提交才生效。</span></div><div id="polresult"></div></div>'
@@ -1244,14 +1292,29 @@ function readSkuRules() {
     var skuEl = rows[i].querySelector(".sku-rule-sku");
     var discountEl = rows[i].querySelector(".sku-rule-discount");
     var floorEl = rows[i].querySelector(".sku-rule-floor");
+    var clearDiscount = rows[i].querySelector(".sku-rule-clear-discount");
+    var clearFloor = rows[i].querySelector(".sku-rule-clear-floor");
     var sku = skuEl ? String(skuEl.value || "").trim() : "";
     var discountRaw = discountEl ? String(discountEl.value || "").trim() : "";
     var floorRaw = floorEl ? String(floorEl.value || "").trim() : "";
-    if (sku === "" && discountRaw === "" && floorRaw === "") continue;
-    if (sku === "") { bar("SKU 规则：SKU 不能为空", true); return null; }
+    var clearingDiscount = !!(clearDiscount && clearDiscount.checked);
+    var clearingFloor = !!(clearFloor && clearFloor.checked);
+    var hasChange = discountRaw !== "" || floorRaw !== "" || clearingDiscount || clearingFloor;
+    if (!hasChange) continue;
+    if (sku === "") continue;
     if (seen[sku]) { bar("SKU 规则：SKU 重复：" + sku, true); return null; }
     seen[sku] = true;
     var rule = { sku: sku };
+    if (discountRaw !== "" && clearingDiscount) {
+      bar("SKU 规则：" + sku + " 不能同时填写并清除折扣", true);
+      return null;
+    }
+    if (floorRaw !== "" && clearingFloor) {
+      bar("SKU 规则：" + sku + " 不能同时填写并清除底价", true);
+      return null;
+    }
+    if (clearingDiscount) rule.discount = null;
+    if (clearingFloor) rule.floor = null;
     if (discountRaw !== "") {
       var discount = Number(discountRaw);
       if (!Number.isFinite(discount) || discount < 0 || discount > 100) {
@@ -1278,7 +1341,8 @@ function readSkuRules() {
 }
 function draftPolicyForm() {
   var form = {};
-  var auto = $("pf-auto") ? $("pf-auto").value : "";
+  // 自动应价没有“不修改”：默认开启，提交时始终带上当前选择。
+  var auto = $("pf-auto") ? $("pf-auto").value : "on";
   if (auto === "on" || auto === "off") form.auto = auto;
   var floor = numberOrUndefined($("pf-floor") && $("pf-floor").value);
   if (floor !== undefined) {
