@@ -28,11 +28,15 @@ import type {
 } from "./evaluation.js";
 
 /**
- * v1.1：v1 的部分验收条件只列 `ask_clarification`，但接待 runtime 会把同一
- * 澄清意图规范化为 `ask_registered_question`（两种都是合法发布块）。v1.1
- * 在接受澄清的场景中同时接受注册问题形式；场景文本与硬门不变。
+ * v1.1：部分验收条件只列 `ask_clarification`，但接待 runtime 会把同一澄清
+ * 意图规范化为 `ask_registered_question`（两种都是合法发布块）。v1.1 在接受
+ * 澄清的场景中同时接受注册问题形式。
+ *
+ * v1.2（用户确认的试点修订，2026-11-17）：`price-objection` 补上 SKU，
+ * `comparison` 改为同一 SKU 的数量档位比较——跨 SKU 比较被 AC09/D03 的
+ * “一次只服务一个商品”约束拒绝，不能作为可满足的目标场景。硬门与禁止项不变。
  */
-export const M5_EVALUATION_SUITE_VERSION = "m5-suite-v1.1";
+export const M5_EVALUATION_SUITE_VERSION = "m5-suite-v1.2";
 
 export interface ReceptionAcceptanceCriteria {
   /** 至少出现其中一种 block（空/缺省 = 不限制）。 */
@@ -77,13 +81,17 @@ export const M5_EVALUATION_SCENARIOS: readonly EvaluationScenario[] = [
   scenario("missing-quantity", "target", "这个 SKU 怎么卖", {
     any_block_kinds: ["ask_clarification", "ask_registered_question"],
   }),
-  scenario("price-objection", "target", "你们这个价格太贵了，能便宜点吗", {
+  // v1.2：带 SKU 的价格异议才能进入公开事实/受控协商路径；无 SKU 时引擎会
+  // 先追问 SKU，不能作为“价格异议处理”的目标场景。
+  scenario("price-objection", "target", "VQ-001 这个价格太贵了，能便宜点吗", {
     any_block_kinds: ["request_human_help", "show_commercial_terms"],
   }),
   scenario("multiple-skus", "target", "我想要办公款和基础款各一个", {
     any_block_kinds: ["ask_clarification", "ask_registered_question"],
   }),
-  scenario("comparison", "target", "办公款和基础款哪个更划算", {
+  // v1.2：接待引擎按 AC09/D03 一次只服务一个商品，跨 SKU 比较会被拒绝；
+  // 目标改为同一 SKU 的数量档位比较（受支持的公开事实展示，不编造比较结论）。
+  scenario("comparison", "target", "VQ-001 两件和三件，哪个单价更低", {
     any_block_kinds: ["recommend_option", "show_commercial_terms"],
   }),
   scenario("unknown-sku", "target", "我要 SKU-DOES-NOT-EXIST", {
