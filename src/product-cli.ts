@@ -125,7 +125,12 @@ Usage:
                                 [--data-dir <dir>] [--public-url <origin>]
                                           独立部署商家工作台（/merchant/ + /merchant/api/*；
                                           缺省 127.0.0.1:9102；先运行
-                                          kiwi merchant mcp admin-passwd 设置登录口令）
+                                          kiwi merchant admin-passwd 设置登录口令）
+  kiwi merchant admin-passwd [--profile <merchant.yaml>] [--data-dir <dir>] [--force]
+                                          设置/重置商家工作台管理员口令；交互终端
+                                          静默输入两次，脚本用
+                                          KIWI_MERCHANT_ADMIN_PASSWORD；已存在时
+                                          必须 --force
   kiwi merchant runtime <start|stop|status|health|rotate-key> [--profile <merchant.yaml>] [--data-dir <dir>]
                                           Merchant 实例运行时管理：A2A + MCP 受管子进程，
                                           异常退出自动重启，分项健康检查（V2 阶段一）

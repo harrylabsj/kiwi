@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **管理员口令命令简化**：新增 `kiwi merchant admin-passwd`（`merchant mcp
+  admin-passwd` 保留兼容）。交互终端会静默提示输入两次并确认；脚本仍可用
+  `KIWI_MERCHANT_ADMIN_PASSWORD`。已有凭据时重置需显式 `--force`。
+
+- **商品上架即永久**：工作台商品状态只显示「上架 / 已下架」，移除「新鲜期至」
+  与基于 `valid_until` 的过期下架文案；商品数据的「数据有效期」只影响自动
+  报价，不改变上架状态。
+
 - **独立部署商家工作台**：新增 `kiwi merchant workbench serve`
   （`/merchant/` + `/merchant/api/*`，缺省 `127.0.0.1:9102`）。复用云端同一
   份工作台页面/管理 API，本地 owner 登录复用 `/admin/login`；商品列表来自

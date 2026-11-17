@@ -1518,6 +1518,7 @@ async function routeMerchant(sub: string | undefined, args: ParsedArgs): Promise
   }
   if (sub === "start") return await cmdAgentServe(args);
   if (sub === "mcp") return await cmdMerchantMcp(args);
+  if (sub === "admin-passwd") return await cmdMerchantAdminPasswd(args);
   if (sub === "workbench") return await cmdMerchantWorkbench(args);
   if (sub === "runtime") return await cmdMerchantRuntime(args);
   if (sub === "connect") return await cmdMerchantConnect(args);
@@ -2166,6 +2167,68 @@ async function cmdMerchantRuntime(args: ParsedArgs): Promise<number> {
 }
 
 /**
+ * 读取管理员口令：优先环境变量（脚本/CI），交互终端则静默输入两次确认。
+ * 口令绝不进入 argv；错误信息不回显口令。
+ */
+async function readNewAdminPassword(): Promise<string | undefined> {
+  const fromEnv = (process.env.KIWI_MERCHANT_ADMIN_PASSWORD ?? "").trim();
+  if (fromEnv !== "") return fromEnv;
+  if (!process.stdin.isTTY) {
+    process.stderr.write(
+      "非交互环境请通过环境变量 KIWI_MERCHANT_ADMIN_PASSWORD 提供新口令（至少 8 位）\n",
+    );
+    return undefined;
+  }
+  const first = await promptSecret("设置管理员口令（至少 8 位）: ");
+  if (first.length < 8) {
+    process.stderr.write("管理员口令至少 8 位\n");
+    return undefined;
+  }
+  const second = await promptSecret("再次输入确认: ");
+  if (first !== second) {
+    process.stderr.write("两次输入不一致\n");
+    return undefined;
+  }
+  return first;
+}
+
+/**
+ * `kiwi merchant admin-passwd`：初始化/重置本实例管理员口令。
+ * 交互终端直接运行即可；脚本可用 KIWI_MERCHANT_ADMIN_PASSWORD。
+ * 已存在凭据时必须显式 `--force`。
+ */
+async function cmdMerchantAdminPasswd(args: ParsedArgs): Promise<number> {
+  const profile = requireProfileOrDefault(args);
+  if (profile.role !== "merchant") {
+    process.stderr.write("kiwi merchant admin-passwd 需要 merchant profile\n");
+    return EXIT.CONFIG;
+  }
+  const password = await readNewAdminPassword();
+  if (password === undefined) return EXIT.CONFIG;
+  const dirs = resolveMerchantMcpDirs({
+    ...(configuredDataDir(args, profile) !== undefined
+      ? { dataDir: configuredDataDir(args, profile) as string }
+      : {}),
+    agentId: profile.agent_id,
+  });
+  try {
+    writeAdminCredentials(dirs.merchantDataDir, {
+      principalId: profile.agent_id,
+      merchantId: profile.owner_id,
+      password,
+      force: args.force,
+    });
+  } catch (err) {
+    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    return EXIT.CONFIG;
+  }
+  process.stdout.write(
+    `${args.force ? "管理员口令已重置" : "管理员口令已设置"}（哈希落盘 admin-credentials.json，0600）\n`,
+  );
+  return EXIT.OK;
+}
+
+/**
  * `kiwi merchant mcp serve`：Merchant Workbench 标准远程 MCP server
  * （WorkBuddy Buddy 应用开发计划 阶段二；官方 @modelcontextprotocol/sdk
  * streamableHttp，独立端口/路径，不复用 A2A 端点）。
@@ -2181,39 +2244,10 @@ async function cmdMerchantRuntime(args: ParsedArgs): Promise<number> {
  *   kiwi merchant mcp serve [--profile <file>] [--host <host>] [--port N] [--data-dir <dir>]
  */
 async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
-  // `kiwi merchant mcp admin-passwd`：初始化/重置管理员口令（BUG-01 账户来源：
-  // 单商家实例管理员 = 本实例 principal）。新口令只从环境变量读取
-  // （KIWI_MERCHANT_ADMIN_PASSWORD），绝不出现在命令行/日志；落盘为 scrypt 哈希。
+  // `kiwi merchant mcp admin-passwd`：兼容入口，委派到
+  // `kiwi merchant admin-passwd`（交互提示/环境变量，落盘 scrypt 哈希）。
   if (args.command[2] === "admin-passwd") {
-    const profile = requireProfileOrDefault(args);
-    if (profile.role !== "merchant") {
-      process.stderr.write("kiwi merchant mcp admin-passwd 需要 merchant profile\n");
-      return EXIT.CONFIG;
-    }
-    const password = (process.env.KIWI_MERCHANT_ADMIN_PASSWORD ?? "").trim();
-    if (password === "") {
-      process.stderr.write(
-        "请通过环境变量 KIWI_MERCHANT_ADMIN_PASSWORD 提供新口令（至少 8 位；不要写在命令行）\n",
-      );
-      return EXIT.CONFIG;
-    }
-    const dirs = resolveMerchantMcpDirs({
-      ...(configuredDataDir(args, profile) !== undefined ? { dataDir: configuredDataDir(args, profile) } : {}),
-      agentId: profile.agent_id,
-    });
-    try {
-      writeAdminCredentials(dirs.merchantDataDir, {
-        principalId: profile.agent_id,
-        merchantId: profile.owner_id,
-        password,
-        force: args.force,
-      });
-    } catch (err) {
-      process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
-      return EXIT.CONFIG;
-    }
-    process.stdout.write("管理员口令已设置（哈希落盘 admin-credentials.json，0600）\n");
-    return EXIT.OK;
+    return await cmdMerchantAdminPasswd(args);
   }
   // `kiwi merchant mcp pair`：生成一次性配对码（§8.4 第二期）。商家把它填进
   // 商家连接器网关的绑定页，网关据此兑换内部凭据——不必把长期令牌贴进表单。

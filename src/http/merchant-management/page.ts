@@ -647,9 +647,7 @@ function showCatalogPairing() {
 function productStatusLabel(it) {
   var status = String((it && it.status) || "").toLowerCase();
   if (status === "paused") return "已下架";
-  var until = Date.parse(String((it && it.valid_until) || ""));
-  if (Number.isFinite(until) && until <= Date.now()) return "已下架（有效期已过）";
-  if (status === "active" || status === "") return "在售";
+  if (status === "active" || status === "" || status === "expired") return "上架";
   return status;
 }
 /** 目录发布状态文案：known=false 时不把“读不到”说成“未发布”。 */
@@ -842,9 +840,9 @@ function renderProducts(items, publication) {
     ? '<div class="row"><label class="consent-label"><input type="checkbox" id="pub-select-all" aria-label="全选商品" onchange="togglePublicationPicks(this)"> 全选当前商品</label></div>'
     : "";
   var header = canPublish
-    ? "<tr><th>选择</th><th>SKU</th><th>名称</th><th>状态</th><th>目录状态</th><th>分类（必填）</th><th>单价</th><th>起订量</th><th>有效期至</th><th>交易平台</th><th>平台商品ID</th><th>平台商品页链接</th></tr>"
+    ? "<tr><th>选择</th><th>SKU</th><th>名称</th><th>状态</th><th>目录状态</th><th>分类（必填）</th><th>单价</th><th>起订量</th><th>数据有效期</th><th>交易平台</th><th>平台商品ID</th><th>平台商品页链接</th></tr>"
     : (FILE_PRODUCTS
-      ? "<tr><th>SKU</th><th>名称</th><th>单价</th><th>起订量</th><th>有效期至</th><th>状态</th><th>交易平台</th><th>平台商品ID</th><th>平台商品页链接</th></tr>"
+      ? "<tr><th>SKU</th><th>名称</th><th>单价</th><th>起订量</th><th>数据有效期</th><th>状态</th><th>交易平台</th><th>平台商品ID</th><th>平台商品页链接</th></tr>"
       : "<tr><th>SKU</th><th>名称</th><th>价格（最小币单位）</th><th>库存</th><th>版本</th></tr>");
   var table = '<div class="table-scroll"><table' + (canPublish ? ' id="pub-table"' : '') + ">" + header +
     (canPublish ? '<tbody id="pub-rows">' + rows + "</tbody>" : rows) + "</table></div>";
@@ -1073,7 +1071,7 @@ var views = {
         "<tr><th>规则版本</th><td>" + esc(pol.policy_revision) + "</td></tr>" +
         '<tr><th>内容摘要</th><td><pre class="digest">' + esc(pol.digest) + "</pre></td></tr></table>" +
         '<p class="muted">底价等敏感值不出现在本页接口；提交草稿后由系统校验并原子生效。' +
-        "上架/下架与有效期在目录商家后台设置；「新鲜期至」到期后商品自动下架，不再报价。</p></div>" +
+        "上架/下架在目录商家后台设置；商品上架后长期有效。数据有效期只影响自动报价，不改变上架状态。</p></div>" +
         (ROLE === "owner" || ROLE === "operator"
           ? '<div class="card"><h2>常用规则表单</h2>' +
             '<p class="muted">留空的全局字段不会写进补丁；按商品规则只提交你填写或勾选清除的行。提交后生成规则变更草稿，再确认才生效。</p>' +
@@ -1438,13 +1436,12 @@ function previewPublication() {
         esc(listing.source_product_ref || it.sku) + "</td><td>" +
         esc(listing.category || it.category) + "</td><td>" +
         publicLink(listing.handoff_destination_ref) + "</td><td>" +
-        esc(listing.fresh_until || "-") + "</td><td>" +
         publicFieldText(listing) + "</td></tr>";
     }).join("");
     lockPublicationSelection(true);
     $("publication-result").innerHTML = "<h3>将公开 " + esc(items.length) + " 件商品</h3>" +
-      '<p class="muted">「预览有效期至」是草稿到期时间，不是商品新鲜期；商品新鲜期以下方每行「新鲜期至」为准。</p>' +
-      '<div class="table-scroll"><table><tr><th>名称</th><th>SKU</th><th>分类</th><th>商品页链接</th><th>新鲜期至</th><th>其余公开字段</th></tr>' +
+      '<p class="muted">商品上架后长期有效；「预览有效期至」只是本次草稿的到期时间。</p>' +
+      '<div class="table-scroll"><table><tr><th>名称</th><th>SKU</th><th>分类</th><th>商品页链接</th><th>其余公开字段</th></tr>' +
       rows + "</table></div>" +
       '<p class="muted">预览有效期至 ' + esc(draft.expires_at) +
       '（草稿到期时间）；价格、库存与私有规则不在公开内容中。导入只按 SKU 新增/更新本机商品，不会撤回本次未勾选的其他已发布商品。</p>' +

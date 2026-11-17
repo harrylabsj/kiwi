@@ -12,6 +12,7 @@
  * - 旧命令保留：`kiwi chat --help` / `kiwi agent serve --help` 仍走全局帮助。
  */
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { readAdminCredentials, verifyAdminPassword } from "../src/auth/merchant-sessions.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -190,6 +191,57 @@ describe("product CLI command tree (D0)", () => {
     const serve = await run(["agent", "serve", "--help"]);
     expect(serve.code).toBe(EXIT.OK);
     expect(serve.stdout).toContain("agent serve");
+  });
+});
+
+describe("kiwi merchant admin-passwd", () => {
+  it("sets and resets via env password; reset requires --force", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-admin-passwd-"));
+    const previous = process.env.KIWI_MERCHANT_ADMIN_PASSWORD;
+    try {
+      process.env.KIWI_MERCHANT_ADMIN_PASSWORD = "first-password";
+      const first = await run([
+        "merchant", "admin-passwd", "--profile", MERCHANT_PROFILE, "--data-dir", dir,
+      ]);
+      expect(first.code).toBe(EXIT.OK);
+      const initial = readAdminCredentials(dir);
+      expect(initial).toBeDefined();
+      expect(verifyAdminPassword("first-password", initial!.password_hash)).toBe(true);
+
+      // 不带 --force 的重置被拒绝，旧口令仍有效。
+      process.env.KIWI_MERCHANT_ADMIN_PASSWORD = "second-password";
+      const refused = await run([
+        "merchant", "admin-passwd", "--profile", MERCHANT_PROFILE, "--data-dir", dir,
+      ]);
+      expect(refused.code).toBe(EXIT.CONFIG);
+      expect(verifyAdminPassword("first-password", readAdminCredentials(dir)!.password_hash)).toBe(true);
+
+      const reset = await run([
+        "merchant", "admin-passwd", "--profile", MERCHANT_PROFILE, "--data-dir", dir, "--force",
+      ]);
+      expect(reset.code).toBe(EXIT.OK);
+      expect(verifyAdminPassword("second-password", readAdminCredentials(dir)!.password_hash)).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.KIWI_MERCHANT_ADMIN_PASSWORD;
+      else process.env.KIWI_MERCHANT_ADMIN_PASSWORD = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed without env password in a non-interactive run", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-admin-passwd-"));
+    const previous = process.env.KIWI_MERCHANT_ADMIN_PASSWORD;
+    try {
+      delete process.env.KIWI_MERCHANT_ADMIN_PASSWORD;
+      const result = await run([
+        "merchant", "admin-passwd", "--profile", MERCHANT_PROFILE, "--data-dir", dir,
+      ]);
+      expect(result.code).toBe(EXIT.CONFIG);
+      expect(result.stderr).toContain("KIWI_MERCHANT_ADMIN_PASSWORD");
+    } finally {
+      if (previous !== undefined) process.env.KIWI_MERCHANT_ADMIN_PASSWORD = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

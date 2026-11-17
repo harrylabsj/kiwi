@@ -178,7 +178,7 @@ export const CLOUD_A2A_PATH = "/a2a";
 /** Public management projection of an already validated file-product record. */
 export function projectFileProductRecord(
   record: CloudProductRecord,
-  nowMs: number,
+  _nowMs: number,
   platformRules: readonly import("../handoff/trade-platform-rules.js").TradePlatformRule[] = DEFAULT_TRADE_PLATFORM_RULES,
 ): MerchantProductProjection {
   return {
@@ -199,12 +199,8 @@ export function projectFileProductRecord(
     min_order_qty: record.moq ?? null,
     valid_until: record.valid_until,
     updated_at: record.updated_at,
-    status:
-      record.status === "paused"
-        ? "paused"
-        : Date.parse(record.valid_until) < nowMs
-          ? "expired"
-          : "active",
+    // 上架状态只看商品源 status；valid_until 是报价数据有效期，不改变上架。
+    status: record.status === "paused" ? "paused" : "active",
   };
 }
 
