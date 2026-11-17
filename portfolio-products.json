@@ -28,7 +28,7 @@
     {
       "id": "kiwi",
       "name": "Kiwi runtime",
-      "version": "0.12.31",
+      "version": "0.12.30",
       "version_source": {
         "type": "json",
         "scope": "central",

@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.12.31 — 2026-11-17
+## Unreleased
 
 - **独立部署商家工作台**：新增 `kiwi merchant workbench serve`
   （`/merchant/` + `/merchant/api/*`，缺省 `127.0.0.1:9102`）。复用云端同一
