@@ -120,6 +120,100 @@ export function resolveDeliveryBefore(
   if (leadDays === undefined) return undefined;
   return new Date(Date.parse(now) + leadDays * 86_400_000).toISOString();
 }
+
+const CJK_TEXT_RE = /[一-鿿]/;
+
+/** 买家文本是否中文（只影响回复语言，不影响任何事实/价格）。 */
+export function prefersChineseText(text: string | undefined): boolean {
+  return text !== undefined && CJK_TEXT_RE.test(text);
+}
+
+/**
+ * 回复语言：有中文即中文；纯英文文本用英文；没有任何语言线索时按 Kiwi
+ * 中文市场默认中文（CNY/中文商家）。只影响措辞，不影响事实。
+ */
+export function replyLanguageOf(...texts: (string | undefined)[]): "zh" | "en" {
+  const joined = texts
+    .filter((text): text is string => text !== undefined && text.trim() !== "")
+    .join(" ")
+    .trim();
+  if (joined === "") return "zh";
+  if (CJK_TEXT_RE.test(joined)) return "zh";
+  return /[A-Za-z]/.test(joined) ? "en" : "zh";
+}
+
+/** 从买家 RFQ 的 requested_terms.delivery_before 取合法 ISO 时间。 */
+export function requestedDeliveryBeforeOf(payload: unknown): string | undefined {
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const requested = (payload as { requested_terms?: unknown }).requested_terms;
+  if (typeof requested !== "object" || requested === null) return undefined;
+  const value = (requested as { delivery_before?: unknown }).delivery_before;
+  if (typeof value !== "string" || value.trim() === "") return undefined;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined;
+}
+
+/**
+ * 买家文本里的相对交期（“7天到中国”“两周内送达”）。只用于把买家的
+ * 时限与商家已配置的权威交期对齐；解析不出就不猜。
+ */
+export function requestedDeliveryDaysOf(text: string): number | undefined {
+  const numeric = /(\d{1,3})\s*(?:个)?\s*(?:工作日|天|日)\s*(?:内|以内|到|到达|送到|送达|发到|发货|到货)?/.exec(text);
+  if (numeric !== null) {
+    const days = Number(numeric[1]);
+    return Number.isSafeInteger(days) && days > 0 ? days : undefined;
+  }
+  const chinese = /([一二两三四五六七八九十]+)\s*(?:个)?\s*(?:工作日|天|日)\s*(?:内|以内|到|到达|送到|送达|发到|发货|到货)?/.exec(text);
+  if (chinese === null) return undefined;
+  const digits: Record<string, number> = {
+    一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10,
+  };
+  const raw = chinese[1]!;
+  if (raw === "十") return 10;
+  const tenIndex = raw.indexOf("十");
+  if (tenIndex === -1) return raw.length === 1 ? digits[raw] : undefined;
+  const tens = tenIndex === 0 ? 1 : digits[raw.slice(0, tenIndex)];
+  const ones = tenIndex === raw.length - 1 ? 0 : digits[raw.slice(tenIndex + 1)];
+  return tens === undefined || ones === undefined ? undefined : tens * 10 + ones;
+}
+
+/**
+ * 交期应答：买家给了明确时限时，必须回答“能否满足”，不能只说“待确认”。
+ * 事实只来自 merchant_policy.delivery_lead_days 或“未配置”这一事实。
+ */
+export function deliveryCommitmentNote(
+  requestedBefore: string | undefined,
+  promisedBefore: string | undefined,
+  language: "zh" | "en",
+): string | undefined {
+  if (requestedBefore === undefined) return undefined;
+  const requestedDay = requestedBefore.slice(0, 10);
+  if (promisedBefore === undefined) {
+    return language === "zh"
+      ? `您要求不晚于 ${requestedDay} 到货；本店尚未配置可承诺的交期，无法确认该时限，请与商家确认。`
+      : `You asked for delivery by ${requestedDay}; this merchant has no committed lead time configured, so that deadline cannot be confirmed.`;
+  }
+  const promisedDay = promisedBefore.slice(0, 10);
+  if (Date.parse(promisedBefore) <= Date.parse(requestedBefore)) {
+    return language === "zh"
+      ? `您要求不晚于 ${requestedDay} 到货；当前预计交期不晚于 ${promisedDay}，可以满足。`
+      : `You asked for delivery by ${requestedDay}; the current estimate is by ${promisedDay}, which meets it.`;
+  }
+  return language === "zh"
+    ? `您要求不晚于 ${requestedDay} 到货；当前预计交期不晚于 ${promisedDay}，无法承诺该时限。`
+    : `You asked for delivery by ${requestedDay}; the current estimate is by ${promisedDay}, so that deadline cannot be committed.`;
+}
+
+/** 从买家问题推断商业主题的确定性兜底（模型不可用时仍按问题作答）。 */
+export function inferInquiryTopicsFromText(text: string): InquiryTopic[] {
+  const topics = new Set<InquiryTopic>();
+  if (/价|多少钱|报价|便宜|优惠|折扣|price|cost|discount/i.test(text)) topics.add("price");
+  if (/库存|现货|有货|缺货|stock|inventory|availability/i.test(text)) topics.add("stock");
+  if (/交期|发货|送达|到货|多久|几天|多少天|\d+\s*(?:天|日)|delivery|eta|ship|lead.?time|arrive/i.test(text)) {
+    topics.add("delivery");
+  }
+  return [...topics];
+}
 /** 批量促销默认门槛（merchant_policy.promos[sku].bulk_threshold 缺省值）。 */
 export const DEFAULT_BULK_THRESHOLD = 100;
 
@@ -1189,14 +1283,18 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             }
           }
           const sku = structuredSku ?? interpreted?.sku;
+          const language = interpreted?.language ?? replyLanguageOf(buyerMessage);
           if (sku === undefined) {
             return textReply(
-              "Please provide a product SKU, quantity and declared unit for a source-backed quote.",
+              language === "zh"
+                ? "请提供商品 SKU、数量和单位，我才能按商品源给你正式报价。"
+                : "Please provide a product SKU, quantity and declared unit for a source-backed quote.",
             );
           }
           const topics = new Set<InquiryTopic>(structuredTopics);
           for (const topic of interpreted?.topics ?? []) topics.add(topic);
-          const language = interpreted?.language ?? "en";
+          // 模型/解释器不可用时仍按买家原文识别主题，避免把具体问题答成模板。
+          for (const topic of inferInquiryTopicsFromText(buyerMessage ?? "")) topics.add(topic);
           const resolved = await resolveProductOrDecline(sku);
           if ("declined" in resolved) {
             // 询价不是商业承诺：商品源确认不了就要求核对 SKU，不发 decline 信封。
@@ -1238,14 +1336,36 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           } else if (topics.has("stock")) {
             lines.push(language === "zh" ? "库存状态待确认。" : "Stock status needs confirmation.");
           }
-          if ((askAll || topics.has("delivery")) && delivery !== undefined) {
-            lines.push(
-              language === "zh"
-                ? `预计交期不晚于 ${delivery.slice(0, 10)}。`
-                : `Estimated delivery is by ${delivery.slice(0, 10)}.`,
-            );
-          } else if (topics.has("delivery")) {
-            lines.push(language === "zh" ? "交期待确认。" : "Delivery date needs confirmation.");
+          if (askAll || topics.has("delivery")) {
+            const requestedDays = requestedDeliveryDaysOf(buyerMessage ?? "");
+            if (delivery !== undefined) {
+              const canMeet =
+                requestedDays !== undefined &&
+                Date.parse(delivery) <= Date.parse(now()) + requestedDays * 86_400_000;
+              lines.push(
+                requestedDays === undefined
+                  ? language === "zh"
+                    ? `预计交期不晚于 ${delivery.slice(0, 10)}。`
+                    : `Estimated delivery is by ${delivery.slice(0, 10)}.`
+                  : canMeet
+                    ? language === "zh"
+                      ? `您要求 ${requestedDays} 天到货；预计交期不晚于 ${delivery.slice(0, 10)}，可以满足。`
+                      : `You asked for delivery within ${requestedDays} days; the estimate is by ${delivery.slice(0, 10)}, which meets it.`
+                    : language === "zh"
+                      ? `您要求 ${requestedDays} 天到货；预计交期不晚于 ${delivery.slice(0, 10)}，无法承诺 ${requestedDays} 天送达。`
+                      : `You asked for delivery within ${requestedDays} days; the estimate is by ${delivery.slice(0, 10)}, so that deadline cannot be committed.`,
+              );
+            } else {
+              lines.push(
+                requestedDays !== undefined
+                  ? language === "zh"
+                    ? `您要求 ${requestedDays} 天到货；本店尚未配置可承诺的交期，无法确认 ${requestedDays} 天送达，请与商家确认。`
+                    : `You asked for delivery within ${requestedDays} days; this merchant has no committed lead time configured, so ${requestedDays}-day delivery cannot be confirmed.`
+                  : language === "zh"
+                    ? "本店尚未配置可承诺的交期，交期待确认；请与商家确认。"
+                    : "Delivery timing needs confirmation with the merchant.",
+              );
+            }
           }
           lines.push(
             language === "zh"
@@ -1257,6 +1377,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
         case "rfq": {
           const payload = envelope.payload as {
             items?: { sku?: string; quantity?: { value?: number; unit?: string } }[];
+            requested_terms?: { delivery_before?: string };
           };
           const sku = payload.items?.[0]?.sku;
           const requestedUnit = payload.items?.[0]?.quantity?.unit;
@@ -1295,7 +1416,17 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
               })
             : undefined;
           const quoteNote = quoteMessage(product);
-          const publicMessage = advisedMessage ?? quoteNote.public_message;
+          // 买家在 RFQ 里声明了到货时限时必须逐条回应，不能只回价格。
+          const language = replyLanguageOf(envelope.public_message, buyerMessage);
+          const deliveryNote = deliveryCommitmentNote(
+            requestedDeliveryBeforeOf(envelope.payload),
+            deliveryBefore(),
+            language,
+          );
+          const publicMessage =
+            [advisedMessage, quoteNote.public_message, deliveryNote]
+              .filter((part): part is string => part !== undefined && part.trim() !== "")
+              .join(" ") || undefined;
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -1584,6 +1715,36 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             stock_available: product.stock !== undefined && quantity <= product.stock,
             extraQuantities: [bulkThreshold],
           });
+          // 买家还价低于公开价但商家没有自动折扣时，不能只回一个相同价格——
+          // 必须明确说明“为什么没降”，否则买家会认为商家没看懂还价。
+          const counterMinor =
+            typeof buyerCounterMinor === "number" && Number.isFinite(buyerCounterMinor)
+              ? buyerCounterMinor
+              : undefined;
+          const counterBelowPublic =
+            authorizedMinor === undefined &&
+            counterMinor !== undefined &&
+            counterMinor < priceMinor &&
+            counterMinor < publicBoundMinor;
+          const counterLanguage = replyLanguageOf(envelope.public_message, buyerMessage);
+          const counterNote = counterBelowPublic && counterMinor !== undefined
+            ? publicBoundMinor >= priceMinor
+              ? counterLanguage === "zh"
+                ? `您的还价 ${(counterMinor / 100).toFixed(2)} ${currency} 低于本店当前公开报价 ${(priceMinor / 100).toFixed(2)} ${currency}；本店未配置自动折扣，本次仍按公开价报价。如需按数量或规格重新核价，请说明。`
+                : `Your counter of ${(counterMinor / 100).toFixed(2)} ${currency} is below the merchant's current public price of ${(priceMinor / 100).toFixed(2)} ${currency}; no automatic discount is configured, so this reply keeps the public price.`
+              : counterLanguage === "zh"
+                ? `您的还价 ${(counterMinor / 100).toFixed(2)} ${currency} 低于本店可自动确认的折扣范围；本次按可自动确认的价格报价，更低价需商家确认。`
+                : `Your counter of ${(counterMinor / 100).toFixed(2)} ${currency} is below the merchant's automatic discount range; this reply uses the lowest automatically confirmable price, and any lower price needs merchant confirmation.`
+            : undefined;
+          const quoteNote = quoteMessage(product);
+          const counterPublicMessage = [
+            // 库存/来源未确认时的 needs_confirmation 安全文案必须保留。
+            quoteNote.public_message,
+            advisedMessage,
+            counterNote,
+          ]
+            .filter((part): part is string => part !== undefined && part.trim() !== "")
+            .join(" ") || undefined;
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -1639,8 +1800,8 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
                     ]
                   : [],
             },
-            ...(advisedMessage !== undefined
-              ? { public_message: advisedMessage }
+            ...(counterPublicMessage !== undefined
+              ? { public_message: counterPublicMessage }
               : quoteMessage(product)),
           });
           conditionalByNegotiation.set(negotiationId, {
@@ -1658,7 +1819,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
         }
         case "clarification": {
           const questions =
-            (envelope.payload as { questions?: { field?: string }[] }).questions ?? [];
+            (envelope.payload as { questions?: { field?: string; reason?: string }[] }).questions ?? [];
           // 方案B（协议完整）：商家的应答是结构化 clarification_response
           // envelope（§8.2），in_reply_to 引用被回答的澄清消息（§8.5/§14
           // 强制，finalizeEnvelope 校验）。payload 形状规范未冻结（§14），
@@ -1670,31 +1831,78 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           // 所问。这里只回答**可公开且确定**的事实；价格边界、库存精确值
           // 不在这里披露（价格仍走 counter_offer 的公开折扣边界）。
           const promised = deliveryBefore();
-          const answerFor = (field: string): string => {
-            const key = field.toLowerCase();
-            if (/delivery|eta|ship|lead.?time|交期|发货|送达/.test(key)) {
-              return promised !== undefined
-                ? `delivery before ${promised}; payment terms negotiable (nonbinding)`
-                : "delivery timing to be confirmed with the merchant; payment terms negotiable (nonbinding)";
+          // 语言只看人类可读文本（买家摘要/原文/问题理由），不看协议字段名。
+          const questionText = questions
+            .map((q) => q.reason ?? "")
+            .filter((reason) => reason.trim() !== "")
+            .join(" ");
+          const clarificationText = [
+            envelope.public_message,
+            buyerMessage,
+            questionText,
+          ]
+            .filter((part): part is string => part !== undefined && part.trim() !== "")
+            .join(" ");
+          const language = replyLanguageOf(clarificationText);
+          const requestedDays = requestedDeliveryDaysOf(clarificationText);
+          const deliveryAnswer = (): string => {
+            if (promised === undefined) {
+              return requestedDays !== undefined
+                ? language === "zh"
+                  ? `您要求 ${requestedDays} 天到货；本店尚未配置可承诺的交期，无法确认 ${requestedDays} 天送达，请与商家确认`
+                  : `You asked for delivery within ${requestedDays} days; this merchant has no committed lead time configured, so ${requestedDays}-day delivery cannot be confirmed`
+                : language === "zh"
+                  ? "本店尚未配置可承诺的交期，交期待确认，请与商家确认"
+                  : "delivery timing is not configured and needs confirmation with the merchant";
+            }
+            const promisedDay = promised.slice(0, 10);
+            if (requestedDays === undefined) {
+              return language === "zh"
+                ? `预计交期不晚于 ${promisedDay}`
+                : `delivery before ${promised}`;
+            }
+            const canMeet =
+              Date.parse(promised) <= Date.parse(now()) + requestedDays * 86_400_000;
+            if (canMeet) {
+              return language === "zh"
+                ? `您要求 ${requestedDays} 天到货；预计交期不晚于 ${promisedDay}，可以满足`
+                : `you asked for delivery within ${requestedDays} days; the estimate is by ${promised}, which meets it`;
+            }
+            return language === "zh"
+              ? `您要求 ${requestedDays} 天到货；预计交期不晚于 ${promisedDay}，无法承诺 ${requestedDays} 天送达`
+              : `you asked for delivery within ${requestedDays} days; the estimate is by ${promised}, so that deadline cannot be committed`;
+          };
+          const answerFor = (field: string, reason: string): string => {
+            const key = `${field} ${reason}`.toLowerCase();
+            if (/delivery|eta|ship|lead.?time|交期|发货|送达|到货|几天|多少天|\d+\s*(?:天|日)|arrive/.test(key)) {
+              return deliveryAnswer();
             }
             if (/stock|inventory|availability|库存|现货/.test(key)) {
-              return "stock level to be confirmed with the merchant; the quoted price assumes currently available inventory";
+              return language === "zh"
+                ? "库存状态需商家确认；报价按当前可得库存计算"
+                : "stock level needs merchant confirmation; the quote assumes currently available inventory";
             }
             if (/price|discount|价格|优惠|便宜/.test(key)) {
-              return "the price follows the published quote; volume pricing and other terms are negotiable within the merchant's configured limits (nonbinding)";
+              return language === "zh"
+                ? "报价按本店当前公开价执行；更大折扣需商家确认（非约束性）"
+                : "the price follows the published quote; larger discounts need merchant confirmation (nonbinding)";
             }
             if (/alternative|model|sku|spec|型号|规格|替代/.test(key)) {
-              return "only listed models can be quoted automatically; other specifications require the merchant's confirmation";
+              return language === "zh"
+                ? "只能自动报价已列出的型号；其他规格需商家确认"
+                : "only listed models can be quoted automatically; other specifications need merchant confirmation";
             }
-            return promised !== undefined
-              ? `delivery before ${promised}; payment terms negotiable (nonbinding)`
-              : "delivery timing and other terms to be confirmed with the merchant (nonbinding)";
+            return language === "zh"
+              ? "已记录您的问题；其他条款需商家确认（非约束性）"
+              : "your question is recorded; other terms need merchant confirmation (nonbinding)";
           };
           const answers = questions.map((q) => ({
             field: q.field ?? "…",
-            answer: answerFor(q.field ?? ""),
+            answer: answerFor(q.field ?? "", q.reason ?? ""),
           }));
-          const publicMessage = Array.from(new Set(answers.map((a) => a.answer))).join("; ");
+          const publicMessage = Array.from(new Set(answers.map((a) => a.answer))).join(
+            language === "zh" ? "；" : "; ",
+          );
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -1705,7 +1913,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
               type: "clarification_response",
               answers,
             },
-            public_message: `${publicMessage}.`,
+            public_message: `${publicMessage}${language === "zh" ? "。" : "."}`,
           });
           // 出站应答即恢复（restore 边，§21.2）：顶层推进已把相位挂到
           // AWAITING_CLARIFICATION，clarification_response 同轮弹回

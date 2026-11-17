@@ -59,7 +59,7 @@ async function main(){
     ensureBuyerCacheDirectory(store);
     await withCacheLock(store,state=>{
       if(state.prepared())return;
-      if(readdirSync(store).some(name=>name!=='.update-lock'))throw new Error('CACHE_STATE_INVALID');
+      if(readdirSync(store).some(name=>!['.update-lock','.update-lock.sqlite'].includes(name)&&!/^\.update-lock-data-[a-f0-9]{24}(-journal)?$/.test(name)))throw new Error('CACHE_STATE_INVALID');
     },{waitForLock:true,signal,deadlineEpochMs});
   }
   const controller=new AbortController();let server,startupDeadlineEpochMs;

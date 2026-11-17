@@ -390,7 +390,15 @@ function policyActionMode(policy: DelegationPolicyLike, action: string): "auto" 
  */
 function inferClarificationFields(summary: string): { field: string; reason: string }[] {
   const fields: string[] = [];
-  if (/交期|发货|多久|送达|到货|delivery|eta|ship|lead.?time/i.test(summary)) fields.push("delivery");
+  // 常见中文问法（“7天到中国”“几天能到”“X 天内发货”）未必带“交期/送达”
+  // 字样；只靠 word 列表会把交期问题误判成 general，商家只能回通用文案。
+  if (
+    /交期|发货|多久|送达|到货|几天|多少天|多少日|(?:[一二两三四五六七八九十]|\d+)\s*(?:个)?\s*(?:工作日|天|日)\s*(?:内|以内|到|到达|送到|送达|发到|发货|到货)?|跨境|清关|delivery|eta|ship|lead.?time|arrive/i.test(
+      summary,
+    )
+  ) {
+    fields.push("delivery");
+  }
   if (/库存|现货|有货|stock|inventory|availability/i.test(summary)) fields.push("stock");
   if (/价格|优惠|便宜|折扣|降价|price|discount/i.test(summary)) fields.push("price");
   if (/型号|规格|替代|其他款|alternatives?|model|spec|sku/i.test(summary)) fields.push("alternatives");

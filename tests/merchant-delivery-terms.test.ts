@@ -109,6 +109,25 @@ async function offerTermsOf(h: NegotiationHandler): Promise<Record<string, unkno
   return terms as Record<string, unknown>;
 }
 
+/** rfq（可带买家到货时限）→ 完整 merchant 回复。 */
+async function rfqReplyOf(
+  h: NegotiationHandler,
+  requestedBefore?: string,
+): Promise<Record<string, unknown>> {
+  const result = await runWith(
+    h,
+    env("rfq", {
+      items: [{ sku: "SKU-001", quantity: { value: 200, unit: "piece" } }],
+      ...(requestedBefore !== undefined
+        ? { requested_terms: { delivery_before: requestedBefore } }
+        : {}),
+    }),
+  );
+  const reply = knpEnvelopeOf(result);
+  expect(reply.action).toBe("offer");
+  return reply;
+}
+
 describe("resolveDeliveryBefore", () => {
   it("配置 lead days → now + 天数；未配置 → undefined", () => {
     expect(resolveDeliveryBefore({ delivery_lead_days: 7 }, NOW)).toBe(
@@ -144,7 +163,7 @@ describe("merchant 报价交期（P0-1）", () => {
     const reply = knpEnvelopeOf(result);
     expect(reply.action).toBe("clarification_response");
     const expected = new Date(Date.parse(NOW) + 10 * 86_400_000).toISOString();
-    expect(String(reply.public_message)).toContain(`delivery before ${expected}`);
+    expect(String(reply.public_message)).toContain(expected.slice(0, 10));
     expect(JSON.stringify(reply)).not.toContain(REMOVED_STATIC_DATE);
   });
 
@@ -157,8 +176,47 @@ describe("merchant 报价交期（P0-1）", () => {
     );
     const reply = knpEnvelopeOf(result);
     expect(reply.action).toBe("clarification_response");
-    expect(String(reply.public_message)).toContain("to be confirmed with the merchant");
+    expect(String(reply.public_message)).toContain("尚未配置可承诺的交期");
     expect(JSON.stringify(reply)).not.toContain("delivery before 20");
     expect(JSON.stringify(reply)).not.toContain(REMOVED_STATIC_DATE);
+  });
+
+  it("RFQ 带 7 天到货时限但未配置交期：明确回答无法确认，不只回价格", async () => {
+    const h = makeHandler();
+    const reply = await rfqReplyOf(h, "2026-09-21T10:00:00Z");
+    expect(reply.public_message).toContain("2026-09-21");
+    expect(reply.public_message).toContain("尚未配置");
+    expect(reply.public_message).toContain("无法确认");
+    const terms = (reply.payload as { terms?: Record<string, unknown> }).terms;
+    expect(JSON.stringify(terms)).not.toContain("delivery_before");
+  });
+
+  it("RFQ 时限早于已配置交期：回答无法承诺", async () => {
+    const h = makeHandler(10);
+    const reply = await rfqReplyOf(h, "2026-09-18T10:00:00Z");
+    expect(reply.public_message).toContain("无法承诺");
+  });
+
+  it("RFQ 时限晚于已配置交期：回答可以满足", async () => {
+    const h = makeHandler(10);
+    const reply = await rfqReplyOf(h, "2026-09-30T10:00:00Z");
+    expect(reply.public_message).toContain("可以满足");
+  });
+
+  it("clarification 的 general 问题带“7天到中国”时仍按交期作答", async () => {
+    const h = makeHandler();
+    await offerTermsOf(h); // OFFER_OPEN
+    const result = await runWith(
+      h,
+      env("clarification", {
+        questions: [{ field: "general", reason: "能不能7天到中国" }],
+      }),
+    );
+    const reply = knpEnvelopeOf(result);
+    expect(reply.action).toBe("clarification_response");
+    const message = String(reply.public_message);
+    expect(message).toContain("7 天");
+    expect(message).toContain("无法确认");
+    expect(message).toContain("。");
   });
 });

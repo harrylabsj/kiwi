@@ -205,7 +205,7 @@ describe("商品发布体验（勾选 + 分类 → 表格预览/结果）", () =
     expect(rows[1]!.box.checked).toBe(false);
   });
 
-  it("预览用表格展示实际链接、fresh_until 与其余公开字段，并区分草稿到期与新鲜期", async () => {
+  it("预览用表格展示实际链接与其余公开字段，并标注草稿到期", async () => {
     const rows = [row("SKU-1", true, "陶瓷杯"), row("SKU-2", true, "玻璃杯")];
     const { context, elements, posts } = await mount({ rows });
     await runInContext("previewPublication()", context);
@@ -224,9 +224,10 @@ describe("商品发布体验（勾选 + 分类 → 表格预览/结果）", () =
     expect(html).toContain("陶瓷杯");
     expect(html).toContain('href="https://shop.example/p?a=1&amp;b=2"');
     expect(html).not.toContain("javascript:");
-    // fresh_until 是商品新鲜期；草稿 expires_at 单独标注为草稿到期时间。
-    expect(html).toContain("2027-01-31T00:00:00+00:00");
-    expect(html).toContain("不是商品新鲜期");
+    // Listing 上架即永久；只有草稿 expires_at 是本次预览的到期时间。
+    expect(html).not.toContain("新鲜期");
+    expect(html).not.toContain("2027-01-31T00:00:00+00:00");
+    expect(html).toContain("商品上架后长期有效");
     expect(html).toContain("2030-12-31T00:00:00Z（草稿到期时间）");
     // 其余公开字段（白名单）可见。
     expect(html).toContain("摘要：手工拉坯");

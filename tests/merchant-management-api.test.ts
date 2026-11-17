@@ -594,6 +594,12 @@ describe("merchant management api — 只读投影与路由", () => {
     expect(policy.status).toBe(200);
     expect(policy.json["policy_revision"]).toBe(3);
     expect(policy.json["digest"]).toBe("sha256:policy");
+    // 规则页安全投影：公开值/是否已设置可回显，私有底价金额不回显。
+    expect(policy.json["auto_quote"]).toBe(true);
+    expect(policy.json["sku_discounts"]).toEqual({ "SKU-OLD": 2 });
+    expect(policy.json["sku_floors_configured"]).toEqual(["SKU-OLD"]);
+    expect(policy.json["global_floor_configured"]).toBe(false);
+    expect(Object.hasOwn(policy.json, "price_floors")).toBe(false);
   });
 
   it("未知路径 404；已知路径错误方法 405", async () => {
@@ -654,6 +660,9 @@ describe("Workbench /merchant/api/v1 — RFC 9457 与兼容读取", () => {
     expect(policy.status).toBe(200);
     expect(policy.json["policy_revision"]).toBe(3);
     expect(policy.json["digest"]).toBe("sha256:policy");
+    expect(policy.json["auto_quote"]).toBe(true);
+    expect(policy.json["sku_discounts"]).toEqual({ "SKU-OLD": 2 });
+    expect(policy.json["sku_floors_configured"]).toEqual(["SKU-OLD"]);
   });
 
   it("v1 管理页写路由的拒绝响应统一使用 RFC 9457", async () => {

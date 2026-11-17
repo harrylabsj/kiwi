@@ -826,6 +826,17 @@ describe("WP11 规则表单 → 草稿（候选）生成", () => {
     expect(html).toContain("policy/form-drafts");
     expect(html).toContain("JSON patch");
     expect(html).toContain("draftPolicyForm()");
+    // 自动应价默认开启，没有“不修改”；按商品规则表覆盖商品行。
+    const autoBlock = html.match(/id="pf-auto"[\s\S]{0,240}/)?.[0] ?? "";
+    expect(autoBlock).toContain("开启");
+    expect(autoBlock).toContain("关闭");
+    expect(autoBlock).not.toContain("不修改");
+    expect(html).toContain('id="pf-sku-rules"');
+    expect(html).toContain("上架/下架在目录商家后台设置");
+    expect(html).toContain("商品上架后长期有效");
+    // 新鲜期概念取消：不再出现旧的下架/新鲜期文案。
+    expect(html).not.toContain("已下架（有效期已过）");
+    expect(html).not.toContain("新鲜期");
     // 页面壳不含 schema 字段名（与既有隐私守卫同口径；映射在服务端）。
     expect(html).not.toMatch(/price_floors|min_unit_price_private|max_auto_discount_percent/);
     // 只读提示：会话旁观不能发消息。
