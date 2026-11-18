@@ -113,6 +113,11 @@ export interface PrepareDeliveryInput {
 
 export type DeliveryGateErrorCode =
   | "feature_disabled"
+  | "channel_unknown"
+  | "consent_missing"
+  | "address_invalid"
+  | "epoch_mismatch"
+  | "invalid_transition"
   | "binding_missing"
   | "binding_revoked"
   | "binding_unverified"
