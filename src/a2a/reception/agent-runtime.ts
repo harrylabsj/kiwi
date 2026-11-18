@@ -306,6 +306,11 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** 严格 schema：模型块只允许固定字段，未知字段直接拒绝（X02）。 */
+function hasOnlyKeys(item: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(item).every((key) => allowed.includes(key));
+}
+
 /** 把模型提交的 blocks 限缩到白名单结构；引用仍由发布器校验。 */
 export function sanitizeReceptionBlocks(
   value: unknown,
@@ -326,6 +331,9 @@ export function sanitizeReceptionBlocks(
     if (kind === undefined || !BLOCK_KINDS.has(kind)) return undefined;
     switch (kind) {
       case "acknowledge_need": {
+        if (!hasOnlyKeys(item, ["kind", "type", "sku", "quantity", "unit", "convertedFrom"])) {
+          return undefined;
+        }
         const sku = typeof item.sku === "string" && item.sku.trim() !== "" ? item.sku.trim() : undefined;
         const quantity =
           typeof item.quantity === "number" && Number.isSafeInteger(item.quantity) && item.quantity > 0
@@ -341,6 +349,9 @@ export function sanitizeReceptionBlocks(
         break;
       }
       case "ask_clarification": {
+        if (!hasOnlyKeys(item, ["kind", "type", "reason", "candidates", "missing"])) {
+          return undefined;
+        }
         const reason = item.reason;
         if (
           reason !== "missing_sku" &&
@@ -365,6 +376,19 @@ export function sanitizeReceptionBlocks(
         break;
       }
       case "ask_registered_question": {
+        if (
+          !hasOnlyKeys(item, [
+            "kind",
+            "type",
+            "question_id",
+            "schema_version",
+            "slot",
+            "reason_code",
+            "candidate_refs",
+          ])
+        ) {
+          return undefined;
+        }
         const questionId =
           typeof item.question_id === "string" ? item.question_id.trim() : "";
         if (questionId.length === 0 || questionId.length > 64) return undefined;
@@ -406,6 +430,7 @@ export function sanitizeReceptionBlocks(
         break;
       }
       case "show_commercial_terms": {
+        if (!hasOnlyKeys(item, ["kind", "type", "ref", "topics"])) return undefined;
         const ref = item.ref;
         if (
           !isObject(ref) ||
@@ -428,6 +453,9 @@ export function sanitizeReceptionBlocks(
         break;
       }
       case "recommend_option": {
+        if (!hasOnlyKeys(item, ["kind", "type", "ref", "comparedRefs", "reasonCode"])) {
+          return undefined;
+        }
         const ref = item.ref;
         if (!isObject(ref) || typeof ref.sku !== "string" || typeof ref.revision !== "string") {
           return undefined;
@@ -455,7 +483,12 @@ export function sanitizeReceptionBlocks(
         break;
       }
       case "request_human_help": {
-        if (item.topic !== "price_below_public_bound") return undefined;
+        if (
+          !hasOnlyKeys(item, ["kind", "type", "topic", "buyerTargetPrice", "currency"]) ||
+          item.topic !== "price_below_public_bound"
+        ) {
+          return undefined;
+        }
         const buyerTargetPrice =
           typeof item.buyerTargetPrice === "number" && Number.isFinite(item.buyerTargetPrice)
             ? item.buyerTargetPrice
@@ -470,7 +503,9 @@ export function sanitizeReceptionBlocks(
         break;
       }
       case "next_step": {
-        if (item.action !== "send_rfq") return undefined;
+        if (!hasOnlyKeys(item, ["kind", "type", "action"]) || item.action !== "send_rfq") {
+          return undefined;
+        }
         blocks.push({ kind: "next_step", action: "send_rfq" });
         break;
       }

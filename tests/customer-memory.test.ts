@@ -644,6 +644,55 @@ describe("客户记忆 M3", () => {
     expect(identity.currentSubjectForActor(MERCHANT, actorB.actor_id)).toBeUndefined();
   });
 
+  it("B03：绑定挑战过期/重复消费被拒绝，不建立第二条绑定", () => {
+    const short = identity.linkChallenge({
+      merchant_id: MERCHANT,
+      actor: customer(),
+      source_session_id: "session-exp",
+      target_subject_id: subjectId,
+      ttl_seconds: 60,
+    });
+    clock = new Date(Date.parse(NOW) + 61_000).toISOString();
+    expectError(
+      () =>
+        identity.linkConfirm({
+          merchant_id: MERCHANT,
+          actor: customer(),
+          challenge_id: short.challenge_id,
+          source_session_id: "session-exp",
+          proof: short.proof,
+        }),
+      "confirmation_expired",
+      "challenge_expired",
+    );
+    clock = NOW;
+    const challenge = identity.linkChallenge({
+      merchant_id: MERCHANT,
+      actor: customer(),
+      source_session_id: "session-1",
+      target_subject_id: subjectId,
+    });
+    identity.linkConfirm({
+      merchant_id: MERCHANT,
+      actor: customer(),
+      challenge_id: challenge.challenge_id,
+      source_session_id: "session-1",
+      proof: challenge.proof,
+    });
+    expectError(
+      () =>
+        identity.linkConfirm({
+          merchant_id: MERCHANT,
+          actor: customer(),
+          challenge_id: challenge.challenge_id,
+          source_session_id: "session-1",
+          proof: challenge.proof,
+        }),
+      "confirmation_consumed",
+      "challenge_consumed",
+    );
+  });
+
   it("B04：未绑定到该主体的会话不能确认/纠错他人记忆", () => {
     const otherSubject = identity.createSubject({
       merchant_id: MERCHANT,

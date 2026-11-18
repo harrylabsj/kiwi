@@ -206,6 +206,17 @@ describe("Pi reception runtime", () => {
         { kind: "show_commercial_terms", ref: { sku: SKU, revision: "x" }, topics: ["bogus"] },
       ]),
     ).toEqual([{ kind: "show_commercial_terms", ref: { sku: SKU, revision: "x" } }]);
+    // X02：模型自填身份/可信标志或额外字段一律拒绝（严格 schema）。
+    expect(
+      sanitizeReceptionBlocks([
+        { kind: "next_step", action: "send_rfq", trusted: true } as unknown as Record<string, unknown>,
+      ]),
+    ).toBeUndefined();
+    expect(
+      sanitizeReceptionBlocks([
+        { kind: "acknowledge_need", sku: SKU, merchant_id: "other-merchant" } as unknown as Record<string, unknown>,
+      ]),
+    ).toBeUndefined();
   });
 });
 
