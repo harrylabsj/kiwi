@@ -17,9 +17,10 @@
 /**
  * 客户授权请求与一次性确认（设计 v1.1 §9.2 / D-M0-02 / M3-1）。
  *
- * 文本路径：服务端生成一次性确认短语，客户在同一会话原样回传。
- * 卡片路径：宿主卡片回调携带 grant_request_id + confirmation_ref。
- * 两条路径共用同一校验；自由文本不构成确认，消费后重放/跨会话均拒绝。
+ * 两方流程（48 小时审查 P0-1）：商家侧（memory:write）创建请求并取得
+ * 一次性短语/卡片引用，经带外渠道送达已验证的客户联系方式；客户会话
+ * （customer:self）回传短语或卡片引用完成确认。签发者不得自我确认，且
+ * 确认方必须已绑定到请求主体——短语本身不能替代主体绑定。
  */
 
 import { randomBytes, randomUUID } from "node:crypto";
@@ -97,6 +98,29 @@ export class GrantRequestService {
     this.grants = new DataUseGrantStore({ db: options.db, now: options.now });
   }
 
+  /** 当前 actor 的有效绑定主体；未绑定/已撤销/过期返回 undefined。 */
+  private boundSubject(merchantId: string, actorId: string, stamp: string): string | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT subject_id FROM subject_bindings
+          WHERE merchant_id = ? AND actor_id = ? AND status = 'ACTIVE' AND expires_at > ?
+          ORDER BY binding_epoch DESC LIMIT 1`,
+      )
+      .get(merchantId, actorId, stamp) as { subject_id: string } | undefined;
+    return row?.subject_id;
+  }
+
+  private assertScopeUsable(merchantId: string, scopeId: string): void {
+    const row = this.db
+      .prepare("SELECT state FROM data_scopes WHERE merchant_id = ? AND erase_scope_id = ?")
+      .get(merchantId, scopeId) as { state: string } | undefined;
+    // 未登记 scope 允许首次授权时建立（见下方 INSERT）；已封存/删除的 scope
+    // 不能被新的 ACTIVE grant 复活。
+    if (row !== undefined && row.state !== "ACTIVE") {
+      throw new CustomerMemoryError("access_denied", "scope_sealed", "数据域已封存，不能新建授权");
+    }
+  }
+
   /**
    * 创建授权请求：返回一次性短语与卡片引用（各存摘要）。请求 TTL 默认 15
    * 分钟；授权 TTL 默认 90 天，受 90 天上限（试点值）。
@@ -115,19 +139,9 @@ export class GrantRequestService {
     confirmation_ref: string;
   } {
     const merchantId = text(input.merchant_id, "merchant_id");
-    if (
-      !hasCapability(input.actor, "memory:write") &&
-      !hasCapability(input.actor, "customer:self")
-    ) {
-      throw new CustomerMemoryError(
-        "access_denied",
-        "capability_missing",
-        "缺少 memory:write/customer:self",
-      );
-    }
-    if (input.actor.merchant_id !== merchantId) {
-      throw new CustomerMemoryError("access_denied", "actor_merchant_mismatch", "ActorContext 与商家作用域不一致");
-    }
+    // P0-1：只有商家侧（memory:write）能签发授权请求。客户会话拿到短语
+    // 就等于拿到证明——证明必须由商家经带外渠道送达，不能由客户自签自发。
+    requireActor(input.actor, merchantId, "memory:write");
     if (!(DATA_USE_PURPOSES as readonly string[]).includes(input.purpose)) {
       throw new CustomerMemoryError("validation", "purpose_unknown", "未知数据用途");
     }
@@ -157,8 +171,8 @@ export class GrantRequestService {
         `INSERT INTO grant_requests
           (grant_request_id, merchant_id, subject_id, purpose, resource_scope_id,
            grant_ttl_seconds, phrase_digest, confirmation_ref_digest, expires_at,
-           consumed_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+           consumed_at, created_at, issuer_actor_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
       )
       .run(
         grantRequestId,
@@ -171,6 +185,7 @@ export class GrantRequestService {
         contentDigest({ purpose: "grant_ref", ref: confirmationRef }),
         expiresAt,
         stamp,
+        input.actor.actor_id,
       );
     return {
       grant_request: {
@@ -191,7 +206,8 @@ export class GrantRequestService {
 
   /**
    * 一次性确认：phrase 或 confirmation_ref 任一匹配即可；消费后重放/过期/
-   * 错误引用一律拒绝，不创建 grant。
+   * 错误引用一律拒绝，不创建 grant。确认方必须是已绑定到请求主体的客户
+   * 会话，且不能是请求签发者本人。
    */
   confirmGrant(input: {
     merchant_id: string;
@@ -211,13 +227,21 @@ export class GrantRequestService {
     return inImmediateTransaction(this.db, () => {
       const row = this.db
         .prepare(
-          "SELECT * FROM grant_requests WHERE merchant_id = ? AND grant_request_id = ?",
+          `SELECT grant_requests.grant_request_id, grant_requests.merchant_id,
+                  grant_requests.subject_id, grant_requests.purpose,
+                  grant_requests.resource_scope_id, grant_requests.grant_ttl_seconds,
+                  grant_requests.expires_at, grant_requests.consumed_at,
+                  grant_requests.created_at, grant_requests.phrase_digest,
+                  grant_requests.confirmation_ref_digest, grant_requests.issuer_actor_id
+             FROM grant_requests
+            WHERE grant_requests.merchant_id = ? AND grant_requests.grant_request_id = ?`,
         )
         .get(merchantId, requestId) as
         | (GrantRequestRecord & {
             phrase_digest: string;
             confirmation_ref_digest: string;
             purpose: DataUsePurpose;
+            issuer_actor_id: string | null;
           })
         | undefined;
       if (row === undefined) {
@@ -230,6 +254,30 @@ export class GrantRequestService {
       if (row.expires_at <= stamp) {
         throw new CustomerMemoryError("confirmation_expired", "grant_request_expired", "授权请求已过期");
       }
+      // P0-1：同一 actor 既是签发者又是确认者 → 证明不成立；旧版自签自发
+      // 记录（issuer_actor_id 为 NULL）同样不可确认。
+      if (row.issuer_actor_id === null || row.issuer_actor_id === input.actor.actor_id) {
+        throw new CustomerMemoryError(
+          "access_denied",
+          "issuer_cannot_confirm",
+          "授权请求必须由已绑定的客户会话确认，签发者不能自我确认",
+        );
+      }
+      const boundSubject = this.boundSubject(merchantId, input.actor.actor_id, stamp);
+      if (boundSubject !== row.subject_id) {
+        throw new CustomerMemoryError(
+          "access_denied",
+          "subject_not_bound",
+          "当前会话未绑定到该授权主体",
+        );
+      }
+      const subjectRow = this.db
+        .prepare("SELECT status FROM customer_subjects WHERE merchant_id = ? AND subject_id = ?")
+        .get(merchantId, row.subject_id) as { status: string } | undefined;
+      if (subjectRow === undefined || subjectRow.status !== "ACTIVE") {
+        throw new CustomerMemoryError("not_found", "subject_not_found", "主体不存在或不可见");
+      }
+      this.assertScopeUsable(merchantId, row.resource_scope_id);
       const phraseOk =
         input.confirmation_phrase !== undefined &&
         row.phrase_digest === contentDigest({ purpose: "grant_phrase", phrase: input.confirmation_phrase });

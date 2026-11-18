@@ -134,6 +134,43 @@ describe("P1 发送领取与回执", () => {
     ).toBe("stream_busy");
   });
 
+  it("P1-2：另一 worker 持有未过期租约时不能重复领取", () => {
+    const store = new MemoryStore();
+    store.save(prepare());
+    const claimed = claimDelivery({
+      store,
+      merchant_id: MERCHANT,
+      delivery_id: "dlv-1",
+      worker_id: "w1",
+      lease_ms: 30_000,
+      now: NOW,
+    });
+    expect(claimed.attempts).toBe(1);
+    expect(store.records.get("dlv-1")?.lease_owner).toBe("w1");
+    expect(
+      codeOf(() =>
+        claimDelivery({
+          store,
+          merchant_id: MERCHANT,
+          delivery_id: "dlv-1",
+          worker_id: "w2",
+          lease_ms: 30_000,
+          now: NOW,
+        }),
+      ),
+    ).toBe("lease_busy");
+    // 租约过期后允许另一 worker 接管，attempts 递增。
+    const retaken = claimDelivery({
+      store,
+      merchant_id: MERCHANT,
+      delivery_id: "dlv-1",
+      worker_id: "w2",
+      lease_ms: 30_000,
+      now: "2026-11-18T00:00:31.000Z",
+    });
+    expect(retaken.attempts).toBe(2);
+  });
+
   it("accepted → SENT；read 必须另有证据", () => {
     const store = new MemoryStore();
     store.save(prepare());

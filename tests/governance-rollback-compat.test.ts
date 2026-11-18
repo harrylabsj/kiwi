@@ -74,7 +74,7 @@ describe("回退兼容（X10/X11）", () => {
       const versions = reopened
         .prepare("SELECT version FROM merchant_ops_schema_migrations ORDER BY version")
         .all() as Array<{ version: number }>;
-      expect(versions.map((row) => row.version)).toEqual([1, 2, 3, 4, 5]);
+      expect(versions.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6]);
     } finally {
       reopened.close();
     }

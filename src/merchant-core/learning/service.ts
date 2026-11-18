@@ -92,6 +92,9 @@ export interface EvaluationRecoveryBinding {
   readonly variant: "baseline" | "candidate";
   readonly attempt: number;
   readonly dispatch_id: string;
+  /** 派发时刻与自动过期时刻（P1-6）；旧 marker 没有这两个字段。 */
+  readonly dispatched_at?: string;
+  readonly expires_at?: string;
 }
 
 /** not_executed 必须证明该 dispatch 已被不可逆取消或拒绝，今后不可能执行；未观察到或 404 不足以证明。 */
@@ -889,7 +892,14 @@ export class LearningService {
             `候选 revision 已变化（当前 ${existing.revision}）`,
           );
         }
-        if (existing.state === "APPROVED" || existing.state === "STALE" || existing.state === "EXPIRED") {
+        // P2-6：EVALUATING 期间改 revision 会让待核对 marker 永久变成
+        // evaluation_attempt_changed 并阻塞同 artifact 重评。
+        if (
+          existing.state === "APPROVED" ||
+          existing.state === "STALE" ||
+          existing.state === "EXPIRED" ||
+          existing.state === "EVALUATING"
+        ) {
           throw new LearningError(
             "version_conflict",
             "candidate_state_locked",
@@ -1063,7 +1073,7 @@ export class LearningService {
       this.repository.claimEvaluation(keys, owner, requestDigest, Date.now(), ttl);
       this.repository.checkEvaluationConfig(evaluationKey, configDigest, this.repository.findEvaluation(
         merchantId, candidateId, candidate.compiled_artifact_hash, input.suite.suite_version,
-      )?.runs_completed ?? 0);
+      )?.runs_completed ?? 0, Date.parse(this.now()));
       if (commandId !== undefined) {
         const existing = this.repository.readIdempotent(merchantId, input.actor.actor_id, "learning.evaluateCandidate", commandId);
         if (existing !== undefined && existing.requestDigest !== requestDigest) {
@@ -1128,10 +1138,10 @@ export class LearningService {
     const key = contentDigest({ merchantId: input.merchant_id, candidateId: evaluation.candidate_id, artifact: evaluation.artifact_hash, suite: evaluation.suite_version });
     const config = this.repository.readEvaluationConfig(key);
     if (config === undefined || config.pending_attempt === null) return { pending: null };
-    let marker: { scenario_id: string; kind: "target" | "adjacent" | "boundary"; repetitions: number; variant: "baseline" | "candidate"; attempt: number; dispatch_id: string; phase?: string };
+    let marker: { scenario_id: string; kind: "target" | "adjacent" | "boundary"; repetitions: number; variant: "baseline" | "candidate"; attempt: number; dispatch_id: string; phase?: string; dispatched_at?: string; expires_at?: string };
     try { marker = JSON.parse(config.pending_attempt) as typeof marker; } catch { return { pending: "legacy_unverifiable" }; }
     if (marker === null || typeof marker !== "object" || typeof marker.dispatch_id !== "string" || typeof marker.scenario_id !== "string" || !["target", "adjacent", "boundary"].includes(marker.kind) || marker.repetitions !== 3 || !["baseline", "candidate"].includes(marker.variant) || !Number.isSafeInteger(marker.attempt) || marker.attempt < 1 || marker.attempt > marker.repetitions) return { pending: "legacy_unverifiable" };
-    const binding: EvaluationRecoveryBinding = { merchant_id: input.merchant_id, candidate_id: evaluation.candidate_id, candidate_revision: evaluation.candidate_revision, artifact_hash: evaluation.artifact_hash, suite_version: evaluation.suite_version, config_digest: config.config_digest, scenario_id: marker.scenario_id, kind: marker.kind, repetitions: marker.repetitions, variant: marker.variant, attempt: marker.attempt, dispatch_id: marker.dispatch_id };
+    const binding: EvaluationRecoveryBinding = { merchant_id: input.merchant_id, candidate_id: evaluation.candidate_id, candidate_revision: evaluation.candidate_revision, artifact_hash: evaluation.artifact_hash, suite_version: evaluation.suite_version, config_digest: config.config_digest, scenario_id: marker.scenario_id, kind: marker.kind, repetitions: marker.repetitions, variant: marker.variant, attempt: marker.attempt, dispatch_id: marker.dispatch_id, ...(typeof marker.dispatched_at === "string" ? { dispatched_at: marker.dispatched_at } : {}), ...(typeof marker.expires_at === "string" ? { expires_at: marker.expires_at } : {}) };
     const evidenceRef = `local:${binding.dispatch_id}`;
     const receipt = this.repository.readEvaluationReceipt(evidenceRef);
     const preparedRef = `local-prepared:${binding.dispatch_id}`;

@@ -302,7 +302,7 @@ export class LearningRepository {
     });
   }
 
-  checkEvaluationConfig(key: string, digest: string, legacyRuns: number): void {
+  checkEvaluationConfig(key: string, digest: string, legacyRuns: number, nowMs = Date.now()): void {
     const row = this.db.prepare("SELECT config_digest, pending_attempt FROM learning_evaluation_config WHERE evaluation_key = ?")
       .get(key) as { config_digest: string; pending_attempt: string | null } | undefined;
     if (row === undefined) {
@@ -311,7 +311,19 @@ export class LearningRepository {
     } else if (row.config_digest !== digest) {
       throw new LearningError("version_conflict", "evaluation_config_mismatch", "评测配置与已有记录不一致");
     } else if (row.pending_attempt !== null) {
-      throw new LearningError("version_conflict", "evaluation_attempt_uncertain", "上次模型调用结果不确定，不能自动重跑");
+      // P1-6：dispatched/prepared marker 超过 TTL 视为中断并清除；旧 marker
+      // 没有 expires_at，同样视为中断（旧版没有恢复路径，不能永久阻塞）。
+      let expired = true;
+      try {
+        const marker = JSON.parse(row.pending_attempt) as { expires_at?: unknown };
+        expired = typeof marker.expires_at !== "string" || Date.parse(marker.expires_at) <= nowMs;
+      } catch {
+        expired = true;
+      }
+      if (!expired) {
+        throw new LearningError("version_conflict", "evaluation_attempt_uncertain", "上次模型调用结果不确定，不能自动重跑");
+      }
+      this.db.prepare("UPDATE learning_evaluation_config SET pending_attempt = NULL WHERE evaluation_key = ?").run(key);
     }
   }
 

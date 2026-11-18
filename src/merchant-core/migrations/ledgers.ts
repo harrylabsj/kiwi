@@ -649,10 +649,32 @@ CREATE INDEX idx_published_offers_subject_sku
   ON published_offers (merchant_id, subject_id, sku, quoted_at);
 `;
 
+/**
+ * 客户记忆账本 v5（48 小时审查 P0-1/P0-2）。
+ *
+ * 绑定挑战与授权请求记录签发者 actor：签发者不能在同一条记录上自我确认，
+ * 证明必须是经带外渠道送达客户的一次性秘密。旧行 `issuer_actor_id` 为
+ * NULL，确认路径一律拒绝（无法证明两方）。
+ */
+const CUSTOMER_MEMORY_V5 = `
+ALTER TABLE binding_challenges ADD COLUMN issuer_actor_id TEXT;
+ALTER TABLE grant_requests ADD COLUMN issuer_actor_id TEXT;
+CREATE INDEX idx_binding_challenges_issuer
+  ON binding_challenges (merchant_id, issuer_actor_id, created_at);
+CREATE INDEX idx_grant_requests_issuer
+  ON grant_requests (merchant_id, issuer_actor_id, created_at);
+`;
+
 export const CUSTOMER_MEMORY_LEDGER: ModuleLedgerSpec = {
   module: "customer-memory",
   ledgerTable: "customer_memory_schema_migrations",
-  migrations: { 1: DATA_GRANTS_V1, 2: SOURCE_GOVERNANCE_V2, 3: CUSTOMER_MEMORY_V3, 4: CUSTOMER_MEMORY_V4 },
+  migrations: {
+    1: DATA_GRANTS_V1,
+    2: SOURCE_GOVERNANCE_V2,
+    3: CUSTOMER_MEMORY_V3,
+    4: CUSTOMER_MEMORY_V4,
+    5: CUSTOMER_MEMORY_V5,
+  },
 };
 
 const LEARNING_V2 = `

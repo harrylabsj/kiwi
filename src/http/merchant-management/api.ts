@@ -133,6 +133,7 @@ import type { GovernanceFeatureFlags } from "../../merchant-core/context-governa
 import { GovernanceRuntimeError } from "../../merchant-core/ownership/runtime.js";
 import { InstanceOwnershipError } from "../../merchant-core/ownership/instance-ownership.js";
 import { LearningError } from "../../merchant-core/learning/types.js";
+import { retryUnknownDelivery } from "../../merchant-core/customer-delivery/dispatcher.js";
 import { OperationsJobsError } from "../../merchant-core/operations-jobs/service.js";
 import {
   parseExactMoney,
@@ -363,6 +364,8 @@ export interface MerchantManagementApiOptions {
   merchantOperations?: MerchantOperationsSurface;
   /** M6-3 收件人绑定/订阅（P1 管理面；无则路由不存在）。 */
   deliveryConsent?: import("../../merchant-core/customer-delivery/consent-repository.js").DeliveryConsentRepository;
+  /** M6 投递记录（UNKNOWN 核对路径；无则路由不存在）。 */
+  customerDeliveries?: import("../../merchant-core/customer-delivery/repository.js").CustomerDeliveryRepository;
   governance?: {
     flags: GovernanceFeatureFlags;
     write: <T>(work: () => T) => T;
@@ -676,6 +679,14 @@ export function createMerchantManagementApiHandler(
   ): Promise<void> {
     if (governanceRouteDisabled(rest)) {
       writeWorkbenchProblem(res, "RESOURCE_NOT_FOUND", requestId, "资源不存在", "Workbench API 路由不存在或尚未实现。");
+      return;
+    }
+    if (options.customerDeliveries !== undefined && rest === "/delivery/unknown") {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "followups:read");
+      writeJson(res, 200, {
+        deliveries: options.customerDeliveries.listByStatus(auth.ctx.merchantId, "UNKNOWN"),
+      }, { "x-request-id": requestId });
       return;
     }
     if (options.deliveryConsent !== undefined && rest.startsWith("/delivery/")) {
@@ -1379,7 +1390,36 @@ export function createMerchantManagementApiHandler(
         "max_per_day",
         "expires_at",
         "consent_evidence_ref",
+        "verified_not_executed",
+        "channel_idempotent",
       ]);
+      const retryMatch = /^\/delivery\/unknown\/([^/]+)\/retry$/.exec(rest);
+      if (retryMatch !== null) {
+        if (options.customerDeliveries === undefined) {
+          writeWorkbenchProblem(res, "RESOURCE_NOT_FOUND", requestId, "资源不存在", "投递记录不可用。");
+          return;
+        }
+        if (fields["verified_not_executed"] !== true || fields["channel_idempotent"] !== true) {
+          throw new ManagementError(
+            "invalid_input",
+            "必须同时确认已证实未执行且渠道支持同 ID 幂等",
+          );
+        }
+        const retried = deliveryCall(() =>
+          (options.governance?.write ?? ((work: () => unknown) => work()))(() =>
+            retryUnknownDelivery({
+              store: options.customerDeliveries!,
+              merchant_id: auth.ctx.merchantId,
+              delivery_id: pathSegment(retryMatch[1] ?? ""),
+              now: new Date().toISOString(),
+              verified_not_executed: true,
+              channel_idempotent: true,
+            }),
+          ),
+        );
+        writeJson(res, 200, retried, { "x-request-id": requestId });
+        return;
+      }
       if (rest === "/delivery/bindings") {
         writeJson(res, 201, deliveryCall(() =>
           options.deliveryConsent!.createBinding({

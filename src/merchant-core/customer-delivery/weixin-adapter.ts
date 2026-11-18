@@ -32,9 +32,21 @@ export interface WeixinSender {
 export interface WeixinChannelAdapterOptions {
   readonly sender: WeixinSender;
   readonly credentials: BotCredentials;
-  /** 测试收件人：默认使用 bot 扫码者本人（ilink_user_id）。 */
+  /** 仅测试注入；生产必须由调用方按授权绑定传入 recipient。 */
   readonly recipient_user_id?: string;
   readonly max_text_chars?: number;
+}
+
+/** 确定性拒绝（凭证/协议/参数无效）可证明未发送；网络/超时结果不明。 */
+function deterministicRejection(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return (
+    code === "validation" ||
+    code === "not_configured" ||
+    code === "auth" ||
+    code === "qr_expired" ||
+    code === "protocol"
+  );
 }
 
 export function createWeixinChannelAdapter(
@@ -42,13 +54,13 @@ export function createWeixinChannelAdapter(
 ): DeliveryChannelAdapter {
   const maxChars = options.max_text_chars ?? 2000;
   return {
-    async send({ delivery }) {
+    async send({ delivery, recipient }) {
       if (delivery.channel !== "wechat") {
         return { outcome: "not_sent", reason: "channel_mismatch" };
       }
-      const to = options.recipient_user_id ?? options.credentials.ilink_user_id;
+      const to = recipient ?? options.recipient_user_id;
       if (typeof to !== "string" || to.trim() === "") {
-        return { outcome: "not_sent", reason: "recipient_missing" };
+        return { outcome: "not_sent", reason: "recipient_unresolved" };
       }
       const title = typeof delivery.payload.title === "string" ? delivery.payload.title : "";
       const body = typeof delivery.payload.body === "string" ? delivery.payload.body : "";
@@ -58,7 +70,11 @@ export function createWeixinChannelAdapter(
         await options.sender.sendMessage({ to_user_id: to, text }, options.credentials);
         // iLink 成功响应只证明平台接受，不等于客户已读。
         return { outcome: "accepted", receipt: { channel: "weixin", accepted: true } };
-      } catch {
+      } catch (err) {
+        // P2-7：确定性拒绝归 not_sent，避免一条 4xx 让整条流永久 UNKNOWN。
+        if (deterministicRejection(err)) {
+          return { outcome: "not_sent", reason: `weixin_${String((err as { code?: unknown }).code)}` };
+        }
         return { outcome: "unknown" };
       }
     },

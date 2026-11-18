@@ -50,6 +50,8 @@ interface OutboxRow {
   lease_owner: string | null;
   lease_expires_at: string | null;
   started_at: string | null;
+  attempts: number;
+  next_attempt_at: string | null;
   accepted_at: string | null;
   read_at: string | null;
   read_evidence_ref: string | null;
@@ -94,6 +96,8 @@ function rowToRecord(row: OutboxRow): DeliveryRecord | undefined {
     ...(row.lease_owner !== null ? { lease_owner: row.lease_owner } : {}),
     ...(row.lease_expires_at !== null ? { lease_expires_at: row.lease_expires_at } : {}),
     ...(row.started_at !== null ? { started_at: row.started_at } : {}),
+    attempts: row.attempts,
+    ...(row.next_attempt_at !== null ? { next_attempt_at: row.next_attempt_at } : {}),
     ...(row.provider_request_id !== null ? { provider_request_id: row.provider_request_id } : {}),
     ...(row.receipt_json !== null
       ? { receipt: JSON.parse(row.receipt_json) as Record<string, unknown> }
@@ -126,8 +130,9 @@ export class CustomerDeliveryRepository implements DeliveryStore {
            stream_key, seq, payload_digest, valid_until, binding_id, binding_epoch,
            subscription_id, subscription_epoch, purpose, channel, source_grants_json,
            lease_owner, lease_expires_at, started_at, accepted_at, read_at,
-           read_evidence_ref, blocked_reason, provider_request_id, receipt_json)
-         VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           read_evidence_ref, blocked_reason, provider_request_id, receipt_json,
+           attempts, next_attempt_at)
+         VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.delivery_id,
@@ -156,6 +161,8 @@ export class CustomerDeliveryRepository implements DeliveryStore {
         record.blocked_reason ?? null,
         record.provider_request_id ?? null,
         record.receipt !== undefined ? JSON.stringify(record.receipt) : null,
+        record.attempts ?? 0,
+        record.next_attempt_at ?? null,
       );
   }
 
@@ -192,7 +199,8 @@ export class CustomerDeliveryRepository implements DeliveryStore {
            status = ?, payload_json = ?, payload_digest = ?, valid_until = ?,
            lease_owner = ?, lease_expires_at = ?, started_at = ?, accepted_at = ?,
            read_at = ?, read_evidence_ref = ?, blocked_reason = ?,
-           provider_request_id = ?, receipt_json = ?, updated_at = ?
+           provider_request_id = ?, receipt_json = ?, attempts = ?,
+           next_attempt_at = ?, updated_at = ?
          WHERE merchant_id = ? AND outbox_id = ?`,
       )
       .run(
@@ -209,6 +217,8 @@ export class CustomerDeliveryRepository implements DeliveryStore {
         record.blocked_reason ?? null,
         record.provider_request_id ?? null,
         record.receipt !== undefined ? JSON.stringify(record.receipt) : null,
+        record.attempts ?? 0,
+        record.next_attempt_at ?? null,
         this.now(),
         record.merchant_id,
         record.delivery_id,
@@ -218,22 +228,53 @@ export class CustomerDeliveryRepository implements DeliveryStore {
     }
   }
 
-  /** dispatcher 扫描：PENDING、未过期、无有效租约。 */
+  /** dispatcher 扫描：PENDING、未过期、无有效租约、已过重试退避。 */
   listDue(merchantId: string, now: string, limit = 20): DeliveryRecord[] {
     const rows = this.db
       .prepare(
         `SELECT * FROM followup_outbox
           WHERE merchant_id = ? AND status = 'PENDING' AND valid_until > ?
             AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+            AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
           ORDER BY seq ASC, created_at ASC
           LIMIT ?`,
       )
-      .all(merchantId, now, now, limit) as unknown as OutboxRow[];
+      .all(merchantId, now, now, now, limit) as unknown as OutboxRow[];
+    return rows.map((row) => rowToRecord(row)).filter((row): row is DeliveryRecord => row !== undefined);
+  }
+
+  /** 当日（UTC 日）同一订阅已 accepted 的发送数；频控复核用。 */
+  countSentToday(merchantId: string, subscriptionId: string, now: string): number {
+    const dayStart = `${now.slice(0, 10)}T00:00:00.000Z`;
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM followup_outbox
+          WHERE merchant_id = ? AND subscription_id = ? AND status = 'SENT'
+            AND accepted_at >= ?`,
+      )
+      .get(merchantId, subscriptionId, dayStart) as { n: number };
+    return Number(row.n);
+  }
+
+  /** 运营核对：列出指定状态的投递记录（默认 UNKNOWN）。 */
+  listByStatus(merchantId: string, status: DeliveryStatus, limit = 50): DeliveryRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM followup_outbox
+          WHERE merchant_id = ? AND status = ?
+          ORDER BY created_at ASC LIMIT ?`,
+      )
+      .all(merchantId, status, limit) as unknown as OutboxRow[];
     return rows.map((row) => rowToRecord(row)).filter((row): row is DeliveryRecord => row !== undefined);
   }
 
   /** 在 IMMEDIATE 事务内执行领取/回执组合，确保单流约束与写入原子。 */
   inTransaction<T>(fn: () => T): T {
     return inImmediateTransaction(this.db, fn);
+  }
+
+  /** DeliveryStore.transaction：dispatcher 在领取时使用。 */
+  transaction<T>(fn: () => T): T {
+    return this.inTransaction(fn);
   }
 }

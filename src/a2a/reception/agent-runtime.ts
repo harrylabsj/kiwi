@@ -416,10 +416,18 @@ export function sanitizeReceptionBlocks(
         ) {
           return undefined;
         }
+        // P2-8：候选引用会原样渲染进买家可见文本；模型输出是不可信数据，
+        // 只允许短、无控制字符的引用，并去重（不能借模板注入任意文案）。
         const candidateRefs = Array.isArray(item.candidate_refs)
-          ? item.candidate_refs
-              .filter((candidate): candidate is string => typeof candidate === "string")
-              .slice(0, 8)
+          ? [
+              ...new Set(
+                item.candidate_refs
+                  .filter((candidate): candidate is string => typeof candidate === "string")
+                  .map((candidate) => candidate.trim())
+                  // eslint-disable-next-line no-control-regex
+                  .filter((candidate) => candidate.length > 0 && candidate.length <= 64 && !/[\u0000-\u001f\u007f]/.test(candidate)),
+              ),
+            ].slice(0, 8)
           : undefined;
         blocks.push({
           kind: "ask_registered_question",

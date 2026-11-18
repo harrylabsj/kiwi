@@ -18,7 +18,9 @@
  * 客户主体与绑定（设计 v1.1 §9.1 / §9.2 / D-M0-01 / M3-0）。
  *
  * - P0 只创建 organization / agent_scope 主体；person / verified_person 拒绝。
- * - 绑定挑战由服务端生成，5 分钟有效、单次消费；确认后创建新 binding_epoch。
+ * - 绑定挑战由商家侧（memory:write）签发，5 分钟有效、单次消费；挑战证明
+ *   经带外渠道送达客户，由客户会话（customer:self）确认后创建新 binding_epoch。
+ *   签发者不能自我确认——同一会话既是挑战签发者又是证明消费者不构成身份证明。
  * - 撤销绑定递增 epoch；旧主体绑定不复用。昵称/电话/IP/文本相似度不能建立身份。
  */
 
@@ -132,7 +134,9 @@ export class CustomerIdentityService {
     ttl_seconds?: number;
   }): { challenge_id: string; proof: string; expires_at: string } {
     const merchantId = id(input.merchant_id, "merchant_id");
-    requireActor(input.actor, merchantId, "customer:self");
+    // P0-2：挑战只能由商家侧签发；证明由商家带外送达客户，客户会话不能
+    // 为任意主体自行签发挑战。
+    requireActor(input.actor, merchantId, "memory:write");
     const sessionId = id(input.source_session_id, "source_session_id");
     const subjectId = id(input.target_subject_id, "target_subject_id");
     const subject = this.getSubject(merchantId, subjectId);
@@ -155,8 +159,8 @@ export class CustomerIdentityService {
       .prepare(
         `INSERT INTO binding_challenges
           (challenge_id, merchant_id, actor_id, source_session_id, target_subject_id,
-           scope_json, proof_digest, expires_at, consumed_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+           scope_json, proof_digest, expires_at, consumed_at, created_at, issuer_actor_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
       )
       .run(
         challengeId,
@@ -168,6 +172,7 @@ export class CustomerIdentityService {
         contentDigest({ purpose: "binding_challenge", proof }),
         expiresAt,
         stamp,
+        input.actor.actor_id,
       );
     return { challenge_id: challengeId, proof, expires_at: expiresAt };
   }
@@ -190,6 +195,7 @@ export class CustomerIdentityService {
         .get(merchantId, challengeId) as unknown as
         | {
             actor_id: string;
+            issuer_actor_id: string | null;
             source_session_id: string;
             target_subject_id: string;
             proof_digest: string;
@@ -197,7 +203,7 @@ export class CustomerIdentityService {
             consumed_at: string | null;
           }
         | undefined;
-      if (row === undefined || row.actor_id !== input.actor.actor_id) {
+      if (row === undefined) {
         throw new CustomerMemoryError("not_found", "challenge_not_found", "绑定挑战不存在或不可见");
       }
       if (row.consumed_at !== null) {
@@ -207,8 +213,17 @@ export class CustomerIdentityService {
       if (row.expires_at <= stamp) {
         throw new CustomerMemoryError("confirmation_expired", "challenge_expired", "挑战已过期");
       }
-      if (row.source_session_id !== sessionId) {
-        throw new CustomerMemoryError("confirmation_invalid", "session_mismatch", "会话与挑战不匹配");
+      // P0-2：签发者不能自我确认；旧版自签挑战（无签发者）一律拒绝。
+      if (row.issuer_actor_id === null || row.issuer_actor_id === input.actor.actor_id) {
+        throw new CustomerMemoryError(
+          "access_denied",
+          "issuer_cannot_confirm",
+          "绑定挑战必须由客户会话确认，签发者不能自我确认",
+        );
+      }
+      const subject = this.getSubject(merchantId, row.target_subject_id);
+      if (subject === undefined || subject.status !== "ACTIVE") {
+        throw new CustomerMemoryError("not_found", "subject_not_found", "主体不存在或不可见");
       }
       if (row.proof_digest !== contentDigest({ purpose: "binding_challenge", proof: input.proof })) {
         throw new CustomerMemoryError("confirmation_invalid", "proof_mismatch", "绑定证明不匹配");
@@ -229,8 +244,8 @@ export class CustomerIdentityService {
         merchant_id: merchantId,
         subject_id: row.target_subject_id,
         actor_id: input.actor.actor_id,
-        issuer: "session-proof",
-        assurance_class: "session",
+        issuer: "operator-out-of-band",
+        assurance_class: "operator_verified",
         binding_epoch: Number(epochRow.epoch) + 1,
         status: "ACTIVE",
         expires_at: input.expires_at ?? new Date(Date.parse(stamp) + BINDING_TTL_MS).toISOString(),
@@ -251,7 +266,7 @@ export class CustomerIdentityService {
           binding.actor_id,
           binding.issuer,
           binding.assurance_class,
-          contentDigest({ purpose: "binding_proof", challenge_id: challengeId }),
+          contentDigest({ purpose: "binding_proof", challenge_id: challengeId, session_id: sessionId }),
           binding.binding_epoch,
           binding.expires_at,
           binding.created_at,

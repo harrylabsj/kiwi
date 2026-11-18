@@ -80,6 +80,10 @@ describe("客户记忆 M3", () => {
   afterEach(() => db.close());
 
   function grant(purpose: "customer_memory" | "history_recall", resourceScope = scope) {
+    // 两方流程：客户会话先绑定到主体，商家侧签发请求，客户确认。
+    if (identity.currentSubjectForActor(MERCHANT, "buyer-session-1") === undefined) {
+      bindCustomer();
+    }
     const request = grantRequests.createGrantRequest({
       merchant_id: MERCHANT,
       actor: manager(),
@@ -99,8 +103,8 @@ describe("客户记忆 M3", () => {
   function bindCustomer(targetSubjectId = subjectId, sessionId = "session-1") {
     const challenge = identity.linkChallenge({
       merchant_id: MERCHANT,
-      actor: customer(),
-      source_session_id: sessionId,
+      actor: manager(),
+      source_session_id: "operator-session",
       target_subject_id: targetSubjectId,
     });
     identity.linkConfirm({
@@ -125,8 +129,8 @@ describe("客户记忆 M3", () => {
     );
     const challenge = identity.linkChallenge({
       merchant_id: MERCHANT,
-      actor: customer(),
-      source_session_id: "session-1",
+      actor: manager(),
+      source_session_id: "operator-session",
       target_subject_id: subjectId,
     });
     const binding = identity.linkConfirm({
@@ -165,6 +169,7 @@ describe("客户记忆 M3", () => {
   });
 
   it("授权：一次性短语/卡片引用；自由文本不入口；重放/错误短语拒绝", () => {
+    bindCustomer();
     const request = grantRequests.createGrantRequest({
       merchant_id: MERCHANT,
       actor: manager(),
@@ -357,6 +362,7 @@ describe("客户记忆 M3", () => {
   });
 
   it("B15：确认前卡片引用被篡改 → 摘要校验失败，不建 grant", () => {
+    bindCustomer();
     const request = grantRequests.createGrantRequest({
       merchant_id: MERCHANT,
       actor: manager(),
@@ -441,19 +447,13 @@ describe("客户记忆 M3", () => {
       actor: manager(),
       subject_kind: "organization",
     }).subject_id;
-    const otherRequest = grantRequests.createGrantRequest({
+    // 商家侧直接登记另一客户的检索授权（索引由系统 worker 写入）。
+    new DataUseGrantStore({ db, now: () => clock }).createGrant({
       merchant_id: MERCHANT,
-      actor: manager(),
       subject_id: otherSubject,
       purpose: "history_recall",
       resource_scope_id: scopeA,
-      grant_ttl_seconds: 24 * 60 * 60,
-    });
-    grantRequests.confirmGrant({
-      merchant_id: MERCHANT,
-      actor: customer(),
-      grant_request_id: otherRequest.grant_request.grant_request_id,
-      confirmation_phrase: otherRequest.confirmation_phrase,
+      expires_at: "2026-11-18T00:00:00.000Z",
     });
     history.indexHistoryDocument({
       merchant_id: MERCHANT,
@@ -474,9 +474,42 @@ describe("客户记忆 M3", () => {
       query: "纸箱包装",
     });
     expect(mine.status).toBe("no_match");
+    // P0-1：持 grant 但未绑定到 otherSubject 的会话不能检索他人历史。
+    expectError(
+      () =>
+        history.search({
+          merchant_id: MERCHANT,
+          actor: customer(),
+          subject_id: otherSubject,
+          resource_scope_id: scopeA,
+          query: "纸箱包装",
+        }),
+      "access_denied",
+      "subject_not_bound",
+    );
+    const ownerB = createActorContext({
+      merchant_id: MERCHANT,
+      actor_id: "buyer-session-b",
+      auth_strength: "session",
+      subject_binding: "none",
+      capabilities: ["customer:self"],
+    });
+    const challengeB = identity.linkChallenge({
+      merchant_id: MERCHANT,
+      actor: manager(),
+      source_session_id: "operator-session",
+      target_subject_id: otherSubject,
+    });
+    identity.linkConfirm({
+      merchant_id: MERCHANT,
+      actor: ownerB,
+      challenge_id: challengeB.challenge_id,
+      source_session_id: "session-b",
+      proof: challengeB.proof,
+    });
     const theirs = history.search({
       merchant_id: MERCHANT,
-      actor: customer(),
+      actor: ownerB,
       subject_id: otherSubject,
       resource_scope_id: scopeA,
       query: "纸箱包装",
@@ -589,8 +622,15 @@ describe("客户记忆 M3", () => {
     });
     clock = candidate.purge_at;
     expect(memory.listMine(MERCHANT, subjectId)).toEqual([]);
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM binding_challenges").get() as { n: number }).n,
+    ).toBeGreaterThanOrEqual(1);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM grant_requests").get()).toEqual({ n: 1 });
     const expired = memory.expireDue();
     expect(expired.memories).toBeGreaterThanOrEqual(1);
+    // P1-7：保留期清算同时清理已消费的挑战/授权请求。
+    expect(db.prepare("SELECT COUNT(*) AS n FROM binding_challenges").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM grant_requests").get()).toEqual({ n: 0 });
     expect(memory.listMine(MERCHANT, subjectId)).toEqual([]);
     expect(memory.getMemory(MERCHANT, candidate.memory_id)).toMatchObject({
       state: "expired", key: "", value_ref: "", source_refs: [],
@@ -651,8 +691,8 @@ describe("客户记忆 M3", () => {
     expect(identity.currentSubjectForActor(MERCHANT, actorB.actor_id)).toBeUndefined();
     const challenge = identity.linkChallenge({
       merchant_id: MERCHANT,
-      actor: actorA,
-      source_session_id: "session-a",
+      actor: manager(),
+      source_session_id: "operator-session",
       target_subject_id: agentSubject,
     });
     identity.linkConfirm({
@@ -671,8 +711,8 @@ describe("客户记忆 M3", () => {
   it("B03：绑定挑战过期/重复消费被拒绝，不建立第二条绑定", () => {
     const short = identity.linkChallenge({
       merchant_id: MERCHANT,
-      actor: customer(),
-      source_session_id: "session-exp",
+      actor: manager(),
+      source_session_id: "operator-session-exp",
       target_subject_id: subjectId,
       ttl_seconds: 60,
     });
@@ -692,8 +732,8 @@ describe("客户记忆 M3", () => {
     clock = NOW;
     const challenge = identity.linkChallenge({
       merchant_id: MERCHANT,
-      actor: customer(),
-      source_session_id: "session-1",
+      actor: manager(),
+      source_session_id: "operator-session",
       target_subject_id: subjectId,
     });
     identity.linkConfirm({
@@ -717,6 +757,129 @@ describe("客户记忆 M3", () => {
     );
   });
 
+  it("P0-1：客户会话不能自签授权，签发者不能自我确认", () => {
+    expectError(
+      () =>
+        grantRequests.createGrantRequest({
+          merchant_id: MERCHANT,
+          actor: customer(),
+          subject_id: subjectId,
+          purpose: "customer_memory",
+          resource_scope_id: scope,
+        }),
+      "access_denied",
+      "capability_missing",
+    );
+    const operator = createActorContext({
+      merchant_id: MERCHANT,
+      actor_id: "operator-1",
+      auth_strength: "verified",
+      subject_binding: "organization",
+      capabilities: ["memory:write", "customer:self"],
+    });
+    const request = grantRequests.createGrantRequest({
+      merchant_id: MERCHANT,
+      actor: operator,
+      subject_id: subjectId,
+      purpose: "customer_memory",
+      resource_scope_id: scope,
+    });
+    expectError(
+      () =>
+        grantRequests.confirmGrant({
+          merchant_id: MERCHANT,
+          actor: operator,
+          grant_request_id: request.grant_request.grant_request_id,
+          confirmation_phrase: request.confirmation_phrase,
+        }),
+      "access_denied",
+      "issuer_cannot_confirm",
+    );
+  });
+
+  it("P0-2：绑定挑战只能由商家侧签发，签发者不能自我确认", () => {
+    expectError(
+      () =>
+        identity.linkChallenge({
+          merchant_id: MERCHANT,
+          actor: customer(),
+          source_session_id: "session-1",
+          target_subject_id: subjectId,
+        }),
+      "access_denied",
+      "capability_missing",
+    );
+    const operator = createActorContext({
+      merchant_id: MERCHANT,
+      actor_id: "operator-1",
+      auth_strength: "verified",
+      subject_binding: "organization",
+      capabilities: ["memory:write", "customer:self"],
+    });
+    const challenge = identity.linkChallenge({
+      merchant_id: MERCHANT,
+      actor: operator,
+      source_session_id: "operator-session",
+      target_subject_id: subjectId,
+    });
+    expectError(
+      () =>
+        identity.linkConfirm({
+          merchant_id: MERCHANT,
+          actor: operator,
+          challenge_id: challenge.challenge_id,
+          source_session_id: "operator-session",
+          proof: challenge.proof,
+        }),
+      "access_denied",
+      "issuer_cannot_confirm",
+    );
+  });
+
+  it("P1-1：客户不能凭他人 erase_scope_id 跨主体删除", () => {
+    bindCustomer();
+    const otherSubject = identity.createSubject({
+      merchant_id: MERCHANT,
+      actor: manager(),
+      subject_kind: "organization",
+    }).subject_id;
+    new DataUseGrantStore({ db, now: () => clock }).createGrant({
+      merchant_id: MERCHANT,
+      subject_id: otherSubject,
+      purpose: "customer_memory",
+      resource_scope_id: "other-delete-scope",
+      expires_at: "2026-12-01T00:00:00.000Z",
+    });
+    db.prepare(
+      `INSERT INTO data_scopes
+        (merchant_id, erase_scope_id, data_epoch, state, sealed_at, updated_at)
+       VALUES (?, ?, 1, 'ACTIVE', NULL, ?)`,
+    ).run(MERCHANT, "other-delete-scope", clock);
+    memory.proposeMemory({
+      merchant_id: MERCHANT,
+      actor: manager(),
+      subject_id: otherSubject,
+      resource_scope_id: "other-delete-scope",
+      namespace: "preference",
+      key: "unit",
+      value_ref: "箱",
+      value_type: "enum",
+      source_kind: "explicit",
+    });
+    expectError(
+      () =>
+        memory.requestDeletion({
+          merchant_id: MERCHANT,
+          actor: customer(),
+          erase_scope_id: "other-delete-scope",
+          requested_by: "buyer-session-1",
+          reason: "越权删除",
+        }),
+      "access_denied",
+      "subject_not_bound",
+    );
+  });
+
   it("B04：未绑定到该主体的会话不能确认/纠错他人记忆", () => {
     const otherSubject = identity.createSubject({
       merchant_id: MERCHANT,
@@ -731,9 +894,42 @@ describe("客户记忆 M3", () => {
       resource_scope_id: "other-scope",
       grant_ttl_seconds: 24 * 60 * 60,
     });
+    // P0-1：未绑定到 otherSubject 的会话即使持有短语也不能确认授权。
+    expectError(
+      () =>
+        grantRequests.confirmGrant({
+          merchant_id: MERCHANT,
+          actor: customer(),
+          grant_request_id: otherGrantRequest.grant_request.grant_request_id,
+          confirmation_phrase: otherGrantRequest.confirmation_phrase,
+        }),
+      "access_denied",
+      "subject_not_bound",
+    );
+    // 另一条真实绑定到 otherSubject 的客户会话可以完成确认。
+    const ownerB = createActorContext({
+      merchant_id: MERCHANT,
+      actor_id: "buyer-session-b",
+      auth_strength: "session",
+      subject_binding: "none",
+      capabilities: ["customer:self"],
+    });
+    const challengeB = identity.linkChallenge({
+      merchant_id: MERCHANT,
+      actor: manager(),
+      source_session_id: "operator-session",
+      target_subject_id: otherSubject,
+    });
+    identity.linkConfirm({
+      merchant_id: MERCHANT,
+      actor: ownerB,
+      challenge_id: challengeB.challenge_id,
+      source_session_id: "session-b",
+      proof: challengeB.proof,
+    });
     grantRequests.confirmGrant({
       merchant_id: MERCHANT,
-      actor: customer(),
+      actor: ownerB,
       grant_request_id: otherGrantRequest.grant_request.grant_request_id,
       confirmation_phrase: otherGrantRequest.confirmation_phrase,
     });

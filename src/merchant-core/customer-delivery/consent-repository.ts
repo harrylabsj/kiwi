@@ -155,13 +155,17 @@ export class DeliveryConsentRepository {
       now: this.now(),
     });
     const stamp = this.now();
-    this.db
+    const result = this.db
       .prepare(
         `UPDATE customer_delivery_bindings
             SET revoked_at = ?, binding_epoch = ?, updated_at = ?
           WHERE merchant_id = ? AND binding_id = ? AND binding_epoch = ?`,
       )
       .run(revoked.revoked_at, revoked.binding_epoch, stamp, merchantId, bindingId, expectedEpoch);
+    // P2-5：并发撤销时 UPDATE 可能匹配 0 行；不能返回按旧读算出的对象冒充成功。
+    if (Number(result.changes) !== 1) {
+      throw new DeliveryGateError("epoch_mismatch", "收件人绑定已变化");
+    }
     return revoked;
   }
 
@@ -249,7 +253,7 @@ export class DeliveryConsentRepository {
       expected_epoch: expectedEpoch,
       now: this.now(),
     });
-    this.db
+    const result = this.db
       .prepare(
         `UPDATE customer_delivery_subscriptions
             SET unsubscribed_at = ?, grant_epoch = ?, updated_at = ?
@@ -263,6 +267,9 @@ export class DeliveryConsentRepository {
         subscriptionId,
         expectedEpoch,
       );
+    if (Number(result.changes) !== 1) {
+      throw new DeliveryGateError("epoch_mismatch", "目的授权已变化");
+    }
     return updated;
   }
 }

@@ -23,7 +23,6 @@
 
 import { connect as netConnect, type Socket } from "node:net";
 import { connect as tlsConnect, type TLSSocket } from "node:tls";
-import { randomUUID } from "node:crypto";
 
 import type { DeliveryChannelAdapter } from "./channel.js";
 
@@ -36,34 +35,47 @@ export interface SmtpChannelAdapterOptions {
   /** 缺省 true；测试/内网明文可显式关闭。 */
   readonly starttls?: boolean;
   readonly from: string;
-  readonly to: string;
+  /** 仅测试注入；生产必须由调用方按授权绑定传入 recipient。 */
+  readonly to?: string;
   readonly timeout_ms?: number;
 }
 
 type SmtpSocket = Socket | TLSSocket;
 
-function readResponse(socket: SmtpSocket): Promise<string> {
+/** 每条命令的响应 deadline（P1-3）：服务器停在任意阶段都会销毁 socket
+ * 并归为 UNKNOWN，不让 tick 永久挂起。 */
+function readResponse(socket: SmtpSocket, timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
     let buffer = "";
+    const finish = (fn: () => void): void => {
+      clearTimeout(timer);
+      socket.off("data", onData);
+      socket.off("error", onError);
+      socket.off("close", onClose);
+      fn();
+    };
     const onData = (chunk: Buffer): void => {
       buffer += chunk.toString("utf8");
       const lines = buffer.split(/\r?\n/);
       // 多行响应以 "250-" 继续，最后一行 "250 "。
       const last = lines.filter((line) => /^\d{3}[ ]/.test(line)).pop();
-      if (last !== undefined) {
-        socket.off("data", onData);
-        resolve(buffer);
-      }
+      if (last !== undefined) finish(() => resolve(buffer));
     };
+    const onError = (err: Error): void => finish(() => reject(err));
+    const onClose = (): void => finish(() => reject(new Error("smtp_closed")));
+    const timer = setTimeout(() => {
+      finish(() => reject(new Error("smtp_timeout")));
+      socket.destroy();
+    }, timeoutMs);
     socket.on("data", onData);
-    socket.once("error", reject);
-    socket.once("close", () => reject(new Error("smtp_closed")));
+    socket.once("error", onError);
+    socket.once("close", onClose);
   });
 }
 
-async function command(socket: SmtpSocket, line: string): Promise<string> {
+async function command(socket: SmtpSocket, line: string, timeoutMs: number): Promise<string> {
   socket.write(`${line}\r\n`);
-  return readResponse(socket);
+  return readResponse(socket, timeoutMs);
 }
 
 function statusCode(response: string): number {
@@ -95,54 +107,61 @@ async function connectSmtp(options: SmtpChannelAdapterOptions): Promise<SmtpSock
   });
 }
 
-async function upgradeTls(socket: SmtpSocket, host: string): Promise<TLSSocket> {
+async function upgradeTls(socket: SmtpSocket, host: string, timeoutMs: number): Promise<TLSSocket> {
   return new Promise((resolve, reject) => {
-    const secure = tlsConnect({ socket, servername: host }, () => resolve(secure));
+    const secure = tlsConnect({ socket, servername: host, timeout: timeoutMs }, () => resolve(secure));
     secure.once("error", reject);
+    secure.once("timeout", () => reject(new Error("smtp_timeout")));
   });
 }
 
 export function createSmtpChannelAdapter(options: SmtpChannelAdapterOptions): DeliveryChannelAdapter {
   return {
-    async send({ delivery }) {
+    async send({ delivery, recipient, timeout_ms }) {
       if (delivery.channel !== "email") return { outcome: "not_sent", reason: "channel_mismatch" };
+      const to = recipient ?? options.to;
+      if (to === undefined || to.trim() === "") {
+        return { outcome: "not_sent", reason: "recipient_unresolved" };
+      }
+      const timeoutMs = Math.max(1, Math.min(timeout_ms, options.timeout_ms ?? timeout_ms));
       const subject = typeof delivery.payload.title === "string" ? delivery.payload.title : "通知";
       const body = typeof delivery.payload.body === "string" ? delivery.payload.body : "";
       if (body.trim() === "") return { outcome: "not_sent", reason: "payload_empty" };
       let socket: SmtpSocket | undefined;
       try {
-        socket = await connectSmtp(options);
-        const greeting = await readResponse(socket);
+        socket = await connectSmtp({ ...options, timeout_ms: timeoutMs });
+        const greeting = await readResponse(socket, timeoutMs);
         if (statusCode(greeting) !== 220) return { outcome: "not_sent", reason: "smtp_greeting" };
-        let ehlo = await command(socket, "EHLO kiwi.local");
+        let ehlo = await command(socket, "EHLO kiwi.local", timeoutMs);
         if (statusCode(ehlo) !== 250) return { outcome: "not_sent", reason: "smtp_ehlo" };
         if (options.starttls !== false && !(options.secure === true || options.port === 465)) {
-          const starttls = await command(socket, "STARTTLS");
+          const starttls = await command(socket, "STARTTLS", timeoutMs);
           if (statusCode(starttls) !== 220) return { outcome: "not_sent", reason: "smtp_starttls" };
-          socket = await upgradeTls(socket, options.host);
-          ehlo = await command(socket, "EHLO kiwi.local");
+          socket = await upgradeTls(socket, options.host, timeoutMs);
+          ehlo = await command(socket, "EHLO kiwi.local", timeoutMs);
           if (statusCode(ehlo) !== 250) return { outcome: "not_sent", reason: "smtp_ehlo_tls" };
         }
         if (options.user !== undefined && options.password !== undefined) {
-          const auth = await command(socket, "AUTH LOGIN");
+          const auth = await command(socket, "AUTH LOGIN", timeoutMs);
           if (statusCode(auth) !== 334) return { outcome: "not_sent", reason: "smtp_auth" };
-          const user = await command(socket, Buffer.from(options.user).toString("base64"));
+          const user = await command(socket, Buffer.from(options.user).toString("base64"), timeoutMs);
           if (statusCode(user) !== 334) return { outcome: "not_sent", reason: "smtp_auth_user" };
-          const pass = await command(socket, Buffer.from(options.password).toString("base64"));
+          const pass = await command(socket, Buffer.from(options.password).toString("base64"), timeoutMs);
           if (statusCode(pass) !== 235) return { outcome: "not_sent", reason: "smtp_auth_password" };
         }
-        const mailFrom = await command(socket, `MAIL FROM:<${options.from}>`);
+        const mailFrom = await command(socket, `MAIL FROM:<${options.from}>`, timeoutMs);
         if (statusCode(mailFrom) !== 250) return { outcome: "not_sent", reason: "smtp_mail_from" };
-        const rcpt = await command(socket, `RCPT TO:<${options.to}>`);
+        const rcpt = await command(socket, `RCPT TO:<${to}>`, timeoutMs);
         if (statusCode(rcpt) !== 250 && statusCode(rcpt) !== 251) {
           return { outcome: "not_sent", reason: "smtp_rcpt" };
         }
-        const data = await command(socket, "DATA");
+        const data = await command(socket, "DATA", timeoutMs);
         if (statusCode(data) !== 354) return { outcome: "not_sent", reason: "smtp_data" };
-        const messageId = `<${randomUUID()}@kiwi.local>`;
+        // P2-12：同一 delivery_id 必须映射同一 Message-ID，重发才能被下游关联/去重。
+        const messageId = `<${delivery.delivery_id}@kiwi.local>`;
         const payload = [
           `From: ${options.from}`,
-          `To: ${options.to}`,
+          `To: ${to}`,
           `Subject: ${subject.replace(/[\r\n]/g, " ")}`,
           `Message-ID: ${messageId}`,
           "MIME-Version: 1.0",
@@ -152,9 +171,9 @@ export function createSmtpChannelAdapter(options: SmtpChannelAdapterOptions): De
           ".",
         ].join("\r\n");
         socket.write(`${payload}\r\n`);
-        const accepted = await readResponse(socket);
+        const accepted = await readResponse(socket, timeoutMs);
         if (statusCode(accepted) !== 250) return { outcome: "unknown", receipt: { status: statusCode(accepted) } };
-        await command(socket, "QUIT").catch(() => undefined);
+        await command(socket, "QUIT", timeoutMs).catch(() => undefined);
         return { outcome: "accepted", provider_request_id: messageId, receipt: { accepted: true } };
       } catch {
         return { outcome: "unknown" };

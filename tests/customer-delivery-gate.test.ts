@@ -8,7 +8,10 @@ import {
   type PrepareDeliveryInput,
   type RecipientBinding,
 } from "../src/merchant-core/customer-delivery/types.js";
-import { prepareDelivery } from "../src/merchant-core/customer-delivery/gate.js";
+import {
+  assertDeliveryStillAuthorized,
+  prepareDelivery,
+} from "../src/merchant-core/customer-delivery/gate.js";
 import {
   GOVERNANCE_FLAGS_DEFAULT,
   type GovernanceFeatureFlags,
@@ -103,7 +106,7 @@ describe("P1 客户发送门", () => {
       binding_epoch: 3,
       subscription_epoch: 1,
     });
-    expect(delivery.stream_key).toBe(`${MERCHANT}:wechat:bind-1:arrival_notification`);
+    expect(delivery.stream_key).toBe(`${MERCHANT}:wechat:bind-1`);
     expect(delivery.payload_digest).toMatch(/^sha256:[0-9a-f]{64}$/);
   });
 
@@ -163,6 +166,33 @@ describe("P1 客户发送门", () => {
     expect(
       codeOf(() => prepareDelivery(input({ valid_until: "2026-11-20T00:00:00.000Z" }))),
     ).toBe("valid_until_invalid");
+  });
+
+  it("P1-4：发送时复核退订/频控/epoch 变化", () => {
+    const check = (overrides: Partial<Parameters<typeof assertDeliveryStillAuthorized>[0]> = {}) =>
+      assertDeliveryStillAuthorized({
+        merchant_id: MERCHANT,
+        binding: BINDING,
+        subscription: SUBSCRIPTION,
+        purpose: "arrival_notification",
+        source_grants: [GRANT],
+        now: NOW,
+        sent_today: 0,
+        expected_binding_epoch: 3,
+        expected_subscription_epoch: 1,
+        ...overrides,
+      });
+    expect(() => check()).not.toThrow();
+    expect(() =>
+      check({ subscription: { ...SUBSCRIPTION, unsubscribed_at: NOW } }),
+    ).toThrowError(DeliveryGateError);
+    expect(() => check({ sent_today: 2 })).toThrowError(DeliveryGateError);
+    expect(() => check({ binding: { ...BINDING, binding_epoch: 4 } })).toThrowError(
+      DeliveryGateError,
+    );
+    expect(() =>
+      check({ subscription: { ...SUBSCRIPTION, grant_epoch: 2 } }),
+    ).toThrowError(DeliveryGateError);
   });
 
   it("payload 为空或含明文手机号/邮箱时拒绝", () => {

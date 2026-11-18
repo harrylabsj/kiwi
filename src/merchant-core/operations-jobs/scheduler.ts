@@ -248,14 +248,25 @@ export class OperationsScheduler {
           break;
         }
         result.failed += 1;
+        // P2-1：模型/SDK 错误消息可能含换行等控制字符，直接作为 error_code
+        // 会让 failClaimedTask 在写库前校验失败；先清洗再落库。
+        const rawMessage = err instanceof Error ? err.message : "";
+        // eslint-disable-next-line no-control-regex
+        const errorCode = rawMessage.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 100) || "executor_error";
         try {
           this.options.service.failClaimedTask({
             merchant_id: merchantId,
             task_id: claimed.task_id,
             worker_id: workerId,
             fencing: claimed.fencing_token,
-            error_code: err instanceof Error ? err.message.slice(0, 100) : "executor_error",
+            error_code: errorCode,
           });
+        } catch {
+          // 任务已被取消/租约失效：保留现状，交 sweep 处理。
+        }
+        // retryTask 独立 try：fail 成功但 retry 超限时保留 FAILED 即可，
+        // 不能因为重试失败而跳过失败落库。
+        try {
           this.options.service.retryTask({
             merchant_id: merchantId,
             task_id: claimed.task_id,

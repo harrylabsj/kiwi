@@ -115,7 +115,7 @@ describe("governance 运行时接线（M1 收尾）", () => {
     ).toEqual({ n: 0 });
     expect(
       dbA.prepare("SELECT COUNT(*) AS n FROM customer_memory_schema_migrations").get(),
-    ).toEqual({ n: 4 }); // customer-memory v4（买家识别与交易回执）
+    ).toEqual({ n: 5 }); // customer-memory v5（两方绑定/授权）
     void again;
   });
 
@@ -276,7 +276,7 @@ describe("governance 运行时接线（M1 收尾）", () => {
         legacy
           .prepare("SELECT version FROM merchant_ops_schema_migrations ORDER BY version")
           .all(),
-      ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }]);
+      ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }]);
       // 随后 facade 打开（完整迁移）幂等，不干扰已持有的所有权。
       migrateMerchantOpsSchema(legacy);
       expect(runtime.assertOwner({ expected_fencing: 1 }).fencing).toBe(1);

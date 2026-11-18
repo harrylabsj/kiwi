@@ -31,9 +31,11 @@ import { assembleMerchantRuntime } from "../mcp/merchant-runtime-assembly.js";
 import { createOperationAdviceRunner } from "../merchant-core/operations-jobs/advice-runner.js";
 import { OperationsScheduler } from "../merchant-core/operations-jobs/scheduler.js";
 import { OperationsProjection } from "../merchant-core/operations-jobs/projection.js";
+import { CustomerDataMaintenance } from "../merchant-core/customer-memory/maintenance.js";
 import { DeliveryConsentRepository } from "../merchant-core/customer-delivery/consent-repository.js";
 import { CustomerDeliveryRepository } from "../merchant-core/customer-delivery/repository.js";
 import { DeliveryDispatcherLoop } from "../merchant-core/customer-delivery/dispatcher-loop.js";
+import { assertDeliveryStillAuthorized } from "../merchant-core/customer-delivery/gate.js";
 import { createSmtpChannelAdapter } from "../merchant-core/customer-delivery/smtp-adapter.js";
 import { buildModel, realStreamFn } from "../runtime/model.js";
 import { PRODUCT_VERSION } from "../product-cli.js";
@@ -65,6 +67,11 @@ function allowedOrigins(host: string, port: number, publicOrigin?: string): stri
   if (host === "0.0.0.0" || host === "::" || host === "127.0.0.1" || host === "::1" || host === "localhost") {
     origins.add(`http://127.0.0.1:${port}`);
     origins.add(`http://localhost:${port}`);
+  }
+  // P2-11：绑定具体网卡 IP（如 192.168.x）时浏览器同源 Origin 就是
+  // host:port；未配置 --public-url 也应允许，而不是静默 403 全部写请求。
+  if (host !== "" && host !== "0.0.0.0" && host !== "::") {
+    origins.add(`http://${host}:${port}`);
   }
   return [...origins];
 }
@@ -203,6 +210,8 @@ export async function startStandaloneMerchantWorkbench(
   }
 
   const db = new DatabaseSync(`${dataDir}/state.sqlite`);
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA busy_timeout = 5000");
   const deliveryConsent = new DeliveryConsentRepository({ db, now: () => new Date().toISOString() });
   const serviceState = MutableServiceState.fromDeclared(process.env.KIWI_WORKBENCH_SERVICE_STATE);
   serviceState.attachPersistence(db, profile.owner_id);
@@ -241,8 +250,25 @@ export async function startStandaloneMerchantWorkbench(
     });
     operationsScheduler.start();
   }
-  // P1 邮件投递循环：仅在显式开关且 SMTP/收件人配置齐全时启动。
+  // 保留期清算：与经营调度并列，只由所有权持有进程每小时执行（P1-7）。
+  let customerDataMaintenance: CustomerDataMaintenance | undefined;
+  if (
+    governance !== undefined &&
+    (governance.flags as unknown as { memory_enabled?: boolean }).memory_enabled === true
+  ) {
+    customerDataMaintenance = new CustomerDataMaintenance({
+      db,
+      now,
+      write: governance.write,
+      log: (line: string) => process.stderr.write(line),
+    });
+    customerDataMaintenance.start();
+  }
+  // P1 邮件投递循环：显式开关 + SMTP + 按绑定解析的收件人映射齐全才启动。
+  // 收件人只来自 `KIWI_DELIVERY_RECIPIENTS`（address_ref → 地址），不再使用
+  // 固定 env 收件人，避免所有绑定共用一个地址（P1-5）。
   let deliveryDispatcher: DeliveryDispatcherLoop | undefined;
+  const deliveryRepository = new CustomerDeliveryRepository({ db, now });
   const deliveryFlagEnabled =
     governance !== undefined &&
     (governance.flags as unknown as { customer_delivery_enabled: boolean })
@@ -254,22 +280,84 @@ export async function startStandaloneMerchantWorkbench(
       user: String(process.env.KIWI_DELIVERY_EMAIL_SMTP_USER ?? "").trim(),
       password: String(process.env.KIWI_DELIVERY_EMAIL_SMTP_PASSWORD ?? ""),
       from: String(process.env.KIWI_DELIVERY_EMAIL_FROM ?? "").trim(),
-      to: String(process.env.KIWI_DELIVERY_EMAIL_TO ?? "").trim(),
     };
-    if (smtp.host !== "" && smtp.user !== "" && smtp.password !== "" && smtp.from !== "" && smtp.to !== "") {
+    let recipients: Record<string, string> = {};
+    try {
+      const parsed = JSON.parse(String(process.env.KIWI_DELIVERY_RECIPIENTS ?? "{}")) as unknown;
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+        recipients = Object.fromEntries(
+          Object.entries(parsed as Record<string, unknown>).filter(
+            (entry): entry is [string, string] =>
+              entry[0].trim() !== "" && typeof entry[1] === "string" && entry[1].trim() !== "",
+          ),
+        );
+      }
+    } catch {
+      process.stderr.write(
+        "[delivery dispatcher] KIWI_DELIVERY_RECIPIENTS 不是合法 JSON，投递保持关闭\n",
+      );
+    }
+    if (
+      smtp.host !== "" &&
+      smtp.user !== "" &&
+      smtp.password !== "" &&
+      smtp.from !== "" &&
+      Object.keys(recipients).length > 0
+    ) {
       const emailAdapter = createSmtpChannelAdapter({
         host: smtp.host,
         port: smtp.port,
         user: smtp.user,
         password: smtp.password,
         from: smtp.from,
-        to: smtp.to,
       });
-      const deliveryRepository = new CustomerDeliveryRepository({ db, now });
       deliveryDispatcher = new DeliveryDispatcherLoop({
         store: deliveryRepository,
         merchant_id: profile.owner_id,
         adapterFor: (delivery) => (delivery.channel === "email" ? emailAdapter : undefined),
+        // 发送时复核绑定/订阅/退订/频控（P1-4）。
+        authorize: (delivery) => {
+          const binding = deliveryConsent.getBinding(profile.owner_id, delivery.binding_id);
+          const subscription = deliveryConsent.getSubscription(
+            profile.owner_id,
+            delivery.subscription_id,
+          );
+          assertDeliveryStillAuthorized({
+            merchant_id: profile.owner_id,
+            binding,
+            subscription,
+            purpose: delivery.purpose,
+            source_grants: delivery.source_grants,
+            now: now(),
+            sent_today: deliveryRepository.countSentToday(
+              profile.owner_id,
+              delivery.subscription_id,
+              now(),
+            ),
+            expected_binding_epoch: delivery.binding_epoch,
+            expected_subscription_epoch: delivery.subscription_epoch,
+          });
+          // 来源授权以账本为准复核：prepare 后撤销/过期不得继续发送。
+          const grantLookup = db.prepare(
+            "SELECT status, expires_at FROM data_grants WHERE merchant_id = ? AND grant_id = ?",
+          );
+          for (const grant of delivery.source_grants) {
+            const row = grantLookup.get(profile.owner_id, grant.grant_id) as
+              | { status: string; expires_at: string }
+              | undefined;
+            if (
+              row === undefined ||
+              row.status !== "ACTIVE" ||
+              Date.parse(row.expires_at) <= Date.parse(now())
+            ) {
+              throw new Error("delivery_source_grant_revoked");
+            }
+          }
+        },
+        resolveRecipient: (delivery) => {
+          const binding = deliveryConsent.getBinding(profile.owner_id, delivery.binding_id);
+          return binding === undefined ? undefined : recipients[binding.address_ref];
+        },
         now,
         assertOwner: () => governance.write(() => undefined),
         log: (line) => process.stderr.write(line),
@@ -330,6 +418,7 @@ export async function startStandaloneMerchantWorkbench(
     workbenchConfirmations,
     ...(merchantOperations !== undefined ? { merchantOperations } : {}),
     deliveryConsent,
+    customerDeliveries: deliveryRepository,
     ...(governance !== undefined ? { governance } : {}),
   });
   const adminHandle = createMerchantHttpHandler(assembly.serverOptions);
@@ -381,6 +470,7 @@ export async function startStandaloneMerchantWorkbench(
     if (closed) return;
     closed = true;
     operationsScheduler?.stop();
+    customerDataMaintenance?.stop();
     deliveryDispatcher?.stop();
     if (memoryServer) await new Promise<void>((resolve) => memoryServer!.close(() => resolve()));
     await new Promise<void>((resolve) => listening.close(resolve));

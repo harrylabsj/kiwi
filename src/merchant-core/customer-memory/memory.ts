@@ -199,6 +199,13 @@ export class CustomerMemoryService {
         "缺少有效数据用途授权或已撤销/过期",
       );
     }
+    // 审查 P2-10：授权存活不代表数据域可用；已封存/删除的 scope 不能再写入。
+    const scope = this.db
+      .prepare("SELECT state FROM data_scopes WHERE merchant_id = ? AND erase_scope_id = ?")
+      .get(input.merchantId, input.scopeId) as { state: string } | undefined;
+    if (scope === undefined || scope.state !== "ACTIVE") {
+      throw new CustomerMemoryError("access_denied", "scope_sealed", "数据域已封存或不存在");
+    }
     return grant;
   }
 
@@ -459,26 +466,41 @@ export class CustomerMemoryService {
     const scopeId = text(input.erase_scope_id, "erase_scope_id");
     const stamp = nowUtc(this.now);
     return inImmediateTransaction(this.db, () => {
+      // P1-1：删除必须验证 actor 绑定于该 scope 涉及的主体。范围取记忆与
+      // 历史索引的并集——仅凭 erase_scope_id 不能跨客户删除。
       const subjects = this.db
         .prepare(
-          `SELECT DISTINCT subject_id FROM customer_memories
-            WHERE merchant_id = ? AND erase_scope_id = ? AND state <> 'deleted'`,
+          `SELECT subject_id FROM customer_memories
+            WHERE merchant_id = ? AND erase_scope_id = ?
+           UNION
+           SELECT subject_id FROM history_index
+            WHERE merchant_id = ? AND erase_scope_id = ?`,
         )
-        .all(merchantId, scopeId) as unknown as Array<{ subject_id: string }>;
+        .all(merchantId, scopeId, merchantId, scopeId) as unknown as Array<{ subject_id: string }>;
+      if (subjects.length === 0 && !hasCapability(input.actor, "memory:write")) {
+        throw new CustomerMemoryError(
+          "access_denied",
+          "subject_not_bound",
+          "空数据域只能由商家管理员登记删除",
+        );
+      }
+      for (const subject of subjects) {
+        this.assertActorOwnsSubject(input.actor, subject.subject_id);
+      }
       const job = this.sourceGovernance?.requestDeletion({
         merchant_id: merchantId,
         erase_scope_id: scopeId,
         requested_by: text(input.requested_by, "requested_by"),
         reason: text(input.reason, "reason", 500),
       });
-      this.db
+      const evidence = this.db
         .prepare(
           `DELETE FROM customer_memory_evidence
             WHERE merchant_id = ? AND memory_id IN (
               SELECT memory_id FROM customer_memories WHERE merchant_id = ? AND erase_scope_id = ?)`,
         )
         .run(merchantId, merchantId, scopeId);
-      this.db
+      const memories = this.db
         .prepare(
           `UPDATE customer_memories
               SET state = 'deleted', key = '', value_ref = '', source_refs_json = '[]',
@@ -494,11 +516,14 @@ export class CustomerMemoryService {
             SELECT document_id FROM history_index WHERE merchant_id = ? AND erase_scope_id = ?)`,
         )
         .run(merchantId, merchantId, scopeId);
-      this.db
+      const history = this.db
         .prepare("DELETE FROM history_index WHERE merchant_id = ? AND erase_scope_id = ?")
         .run(merchantId, scopeId);
-      for (const subject of subjects) {
-        this.bumpSetVersion(merchantId, subject.subject_id, stamp);
+      // 幂等重放：没有任何真实变更时不再递增 memory_set_version。
+      if (Number(evidence.changes) + Number(memories.changes) + Number(history.changes) > 0) {
+        for (const subject of subjects) {
+          this.bumpSetVersion(merchantId, subject.subject_id, stamp);
+        }
       }
       // 此处只清理记忆与历史索引；跨模块存储面由对应清理方回执。
       return job;
@@ -551,6 +576,15 @@ export class CustomerMemoryService {
       for (const doc of expiredDocs) deleteFts.run(doc.document_id);
       const history = this.db
         .prepare("DELETE FROM history_index WHERE purge_at <= ?")
+        .run(stamp);
+      // P1-7：同一次保留期清算顺便清理过期的游标、已消费/过期的挑战与
+      // 授权请求；它们此前无任何清理路径（无界增长 + 超期留存）。
+      this.db.prepare("DELETE FROM history_cursors WHERE expires_at <= ?").run(stamp);
+      this.db
+        .prepare("DELETE FROM binding_challenges WHERE consumed_at IS NOT NULL OR expires_at <= ?")
+        .run(stamp);
+      this.db
+        .prepare("DELETE FROM grant_requests WHERE consumed_at IS NOT NULL OR expires_at <= ?")
         .run(stamp);
       return { memories: Number(memories.changes), history: Number(history.changes) };
     });

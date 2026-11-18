@@ -251,6 +251,28 @@ describe("候选评测（M2-4）", () => {
     expect(calls).toBe(5);
   });
 
+  it("P1-6：dispatched 标记超时后自动视为中断，可用新 dispatch 续跑", async () => {
+    let clock = NOW;
+    const resumed = new LearningService({ repository, now: () => clock });
+    const call = (runner: EvaluationRunner) =>
+      resumed.evaluateCandidate({
+        merchant_id: "m-1",
+        actor: actor(),
+        candidate_id: candidateId,
+        content_hash: contentHash,
+        suite: suite(),
+        runner,
+      });
+    await expect(call(async () => { throw new Error("provider timeout"); }))
+      .rejects.toMatchObject({ reason: "evaluation_attempt_uncertain" });
+    await expect(call(passRunner())).rejects.toMatchObject({ reason: "evaluation_attempt_uncertain" });
+    clock = new Date(Date.parse(NOW) + 16 * 60 * 1000).toISOString();
+    const completed = await call(passRunner());
+    expect(completed.state).toBe("READY_FOR_REVIEW");
+    expect(completed.run_status).toBe("completed");
+    expect(completed.runs_completed).toBe(120);
+  });
+
   it("持久化基线会传入恢复后的候选回放", async () => {
     let calls = 0;
     await expect(evaluate(() => {

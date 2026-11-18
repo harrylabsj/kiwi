@@ -186,6 +186,19 @@ export class HistorySearchService {
     if (grant === undefined) {
       throw new CustomerMemoryError("grant_unavailable", "grant_not_active", "缺少历史检索授权");
     }
+    // P0-1 配套：客户会话必须绑定到被检索主体；持 grant 本身不足以跨主体读取。
+    if (!(hasCapability(input.actor, "memory:write") && input.actor.subject_binding !== "none")) {
+      const bound = this.db
+        .prepare(
+          `SELECT subject_id FROM subject_bindings
+            WHERE merchant_id = ? AND actor_id = ? AND status = 'ACTIVE' AND expires_at > ?
+            ORDER BY binding_epoch DESC LIMIT 1`,
+        )
+        .get(merchantId, input.actor.actor_id, nowUtc(this.now)) as { subject_id: string } | undefined;
+      if (bound === undefined || bound.subject_id !== subjectId) {
+        throw new CustomerMemoryError("access_denied", "subject_not_bound", "当前会话未绑定到该历史主体");
+      }
+    }
     const stamp = nowUtc(this.now);
     const queryDigest = contentDigest({ query, subject: subjectId, scope: scopeId });
     let offset = 0;

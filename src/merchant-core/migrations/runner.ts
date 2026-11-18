@@ -166,6 +166,12 @@ export function migrateModuleSchema(
     }
     try {
       inImmediateTransaction(db, () => {
+        // 并发启动（首次部署/重叠重启）：拿到写锁后复读版本；赢家已提交时
+        // 跳过，避免输家重放非幂等 DDL 导致进程启动失败。
+        const latest = db
+          .prepare(`SELECT MAX(version) AS v FROM ${spec.ledgerTable}`)
+          .get() as { v: number | null };
+        if ((latest.v ?? 0) >= v) return;
         db.exec(sql);
         db.prepare(
           `INSERT INTO ${spec.ledgerTable} (version, applied_at, checksum) VALUES (?, ?, ?)`,

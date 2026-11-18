@@ -131,6 +131,46 @@ function checkGrants(grants: readonly DeliverySourceGrant[], now: string): void 
 }
 
 /**
+ * 发送时复核（P1-4）：prepare 之后客户可能退订/撤销/过期，或已发送频次
+ * 达到上限。调用方在 claim 事务内重读绑定/订阅/回执后调用本函数；失败
+ * 抛 `DeliveryGateError`，该条不得发送。
+ */
+export function assertDeliveryStillAuthorized(input: {
+  merchant_id: string;
+  binding: RecipientBinding | undefined;
+  subscription: NotificationSubscription | undefined;
+  purpose: DeliveryPurpose;
+  source_grants: readonly DeliverySourceGrant[];
+  now: string;
+  sent_today: number;
+  expected_binding_epoch?: number;
+  expected_subscription_epoch?: number;
+}): void {
+  const binding = checkBinding(input.merchant_id, input.binding);
+  if (
+    input.expected_binding_epoch !== undefined &&
+    binding.binding_epoch !== input.expected_binding_epoch
+  ) {
+    throw new DeliveryGateError("epoch_mismatch", "收件人绑定已变化");
+  }
+  const subscription = checkSubscription({
+    merchantId: input.merchant_id,
+    binding,
+    purpose: input.purpose,
+    subscription: input.subscription,
+    now: input.now,
+    sentToday: input.sent_today,
+  });
+  if (
+    input.expected_subscription_epoch !== undefined &&
+    subscription.grant_epoch !== input.expected_subscription_epoch
+  ) {
+    throw new DeliveryGateError("epoch_mismatch", "目的授权已变化");
+  }
+  checkGrants(input.source_grants, input.now);
+}
+
+/**
  * 校验并冻结一条 P1 待发送通知。成功返回 PENDING 记录；失败抛错，
  * 调用方不得落发送队列。
  */
@@ -178,7 +218,9 @@ export function prepareDelivery(input: PrepareDeliveryInput): PreparedDelivery {
   }
 
   const payload = Object.freeze({ ...input.payload });
-  const streamKey = `${input.merchant_id}:${binding.channel}:${binding.binding_id}:${input.purpose}`;
+  // P2-3：流按“商家 + 渠道 + 收件人绑定”划分；purpose 不能成为并行旁路，
+  // 否则同一收件人会同时收到多条在途通知。
+  const streamKey = `${input.merchant_id}:${binding.channel}:${binding.binding_id}`;
   return Object.freeze({
     delivery_id: input.delivery_id,
     merchant_id: input.merchant_id,

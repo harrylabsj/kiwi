@@ -40,12 +40,12 @@ describe("独立迁移账本（D-M0-05）", () => {
     registerGovernanceLedgers(db);
     expect(ledgerRows("learning_schema_migrations")).toBe(3);
     expect(ledgerRows("operations_jobs_schema_migrations")).toBe(3);
-    expect(ledgerRows("customer_memory_schema_migrations")).toBe(4);
+    expect(ledgerRows("customer_memory_schema_migrations")).toBe(5);
     const rows = db
       .prepare("SELECT version, checksum FROM customer_memory_schema_migrations ORDER BY version")
       .all() as Array<{ version: number; checksum: string }>;
-    // customer-memory v4（买家识别与交易回执）追加；版本链保持连续。
-    expect(rows.map((row) => row.version)).toEqual([1, 2, 3, 4]);
+    // customer-memory v5（两方绑定/授权签发者列）追加；版本链保持连续。
+    expect(rows.map((row) => row.version)).toEqual([1, 2, 3, 4, 5]);
     expect(rows[0]!.checksum).toBe(migrationChecksum(CUSTOMER_MEMORY_LEDGER.migrations[1]!));
     expect(rows[1]!.checksum).toBe(migrationChecksum(CUSTOMER_MEMORY_LEDGER.migrations[2]!));
     const learningRow = db
@@ -84,7 +84,7 @@ describe("独立迁移账本（D-M0-05）", () => {
     registerGovernanceLedgers(db);
     registerGovernanceLedgers(db);
 
-    expect(ledgerRows("customer_memory_schema_migrations")).toBe(4);
+    expect(ledgerRows("customer_memory_schema_migrations")).toBe(5);
     expect(ledgerRows("learning_schema_migrations")).toBe(3);
     const after = repo.getTask("m-1", task.task_id);
     expect(after?.task_id).toBe(task.task_id);

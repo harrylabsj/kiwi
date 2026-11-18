@@ -24,7 +24,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const MERCHANT_OPS_SCHEMA_VERSION = 5;
+export const MERCHANT_OPS_SCHEMA_VERSION = 6;
 
 const MIGRATION_9 = `
 -- 商家持续经营 M1（设计 v0.2 §5.1/§16/§17.1）：经营计划与命令幂等。
@@ -527,6 +527,16 @@ CREATE INDEX idx_customer_delivery_subscriptions_binding
   ON customer_delivery_subscriptions (merchant_id, binding_id, purpose);
 `;
 
+/**
+ * M6 审查修复：not_sent 重试需要尝试计数与退避时刻；旧行保持兼容。
+ */
+const MIGRATION_OPS_V6 = `
+ALTER TABLE followup_outbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE followup_outbox ADD COLUMN next_attempt_at TEXT;
+CREATE INDEX idx_followup_outbox_retry
+  ON followup_outbox (merchant_id, status, next_attempt_at);
+`;
+
 const MIGRATIONS: Readonly<Record<number, string>> = {
   1: `${MIGRATION_9}
 ${MIGRATION_10}
@@ -536,6 +546,7 @@ ${MIGRATION_12}`,
   3: MIGRATION_OPS_V3,
   4: MIGRATION_OPS_V4,
   5: MIGRATION_OPS_V5,
+  6: MIGRATION_OPS_V6,
 };
 
 export function migrateMerchantOpsSchema(
@@ -558,8 +569,19 @@ export function migrateMerchantOpsSchema(
   for (let v = current + 1; v <= targetVersion; v++) {
     const sql = MIGRATIONS[v];
     if (sql === undefined) throw new Error(`missing merchant ops migration for version ${v}`);
-    db.exec("BEGIN");
+    // P2-5：BEGIN IMMEDIATE 内复读账本。并发启动时输家进程看到赢家已提交的
+    // 版本后跳过，而不是重放 DDL 撞 "table already exists"。
+    db.exec("BEGIN IMMEDIATE");
     try {
+      const latest = (
+        db.prepare("SELECT MAX(version) AS v FROM merchant_ops_schema_migrations").get() as {
+          v: number | null;
+        }
+      ).v ?? 0;
+      if (latest >= v) {
+        db.exec("COMMIT");
+        continue;
+      }
       db.exec(sql);
       db.prepare("INSERT INTO merchant_ops_schema_migrations (version, applied_at) VALUES (?, ?)").run(
         v,

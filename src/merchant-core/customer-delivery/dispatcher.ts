@@ -32,6 +32,10 @@ export interface DeliveryRecord extends PreparedDelivery {
   readonly lease_owner?: string;
   readonly lease_expires_at?: string;
   readonly started_at?: string;
+  /** 已尝试发送次数（含当前在途）。 */
+  readonly attempts?: number;
+  /** not_sent 退避：早于该时刻不重新领取。 */
+  readonly next_attempt_at?: string;
   readonly provider_request_id?: string;
   readonly receipt?: Readonly<Record<string, unknown>>;
   readonly accepted_at?: string;
@@ -49,6 +53,8 @@ export interface DeliveryStore {
     deliveryId: string,
   ): DeliveryRecord | undefined;
   save(record: DeliveryRecord): void;
+  /** 持久存储可提供写事务；领取/复核在同一 IMMEDIATE 事务内执行。 */
+  transaction?<T>(work: () => T): T;
 }
 
 export type DeliveryDispatchErrorCode =
@@ -56,6 +62,8 @@ export type DeliveryDispatchErrorCode =
   | "not_pending"
   | "stream_busy"
   | "lease_lost"
+  | "lease_busy"
+  | "backoff"
   | "expired"
   | "invalid_transition"
   | "read_requires_evidence";
@@ -76,9 +84,17 @@ export interface ClaimDeliveryInput {
   readonly worker_id: string;
   readonly lease_ms: number;
   readonly now: string;
+  /**
+   * 领取前的发送时复核（P1-4）：重读绑定/订阅/授权并抛错阻止发送。
+   * 在同一事务内由调用方提供；抛错即不领取。
+   */
+  readonly authorize?: (record: DeliveryRecord) => void;
 }
 
-/** 领取一条 PENDING 通知；同 stream 已有在途/UNKNOWN 时拒绝。 */
+/**
+ * 领取一条 PENDING 通知；同 stream 已有在途/UNKNOWN 时拒绝。
+ * 已有未过期租约（其他 worker）或处于 not_sent 退避期时同样拒绝。
+ */
 export function claimDelivery(input: ClaimDeliveryInput): DeliveryRecord {
   const record = requireRecord(input.store, input.merchant_id, input.delivery_id);
   if (record.status !== "PENDING") {
@@ -90,18 +106,61 @@ export function claimDelivery(input: ClaimDeliveryInput): DeliveryRecord {
   if (!Number.isSafeInteger(input.lease_ms) || input.lease_ms <= 0) {
     throw new DeliveryDispatchError("invalid_transition", "lease_ms 必须是正整数");
   }
+  if (
+    record.lease_owner !== undefined &&
+    record.lease_owner !== input.worker_id &&
+    record.lease_expires_at !== undefined &&
+    Date.parse(record.lease_expires_at) > Date.parse(input.now)
+  ) {
+    throw new DeliveryDispatchError("lease_busy", "该通知已有未过期的发送租约");
+  }
+  if (record.next_attempt_at !== undefined && Date.parse(record.next_attempt_at) > Date.parse(input.now)) {
+    throw new DeliveryDispatchError("backoff", "尚未到重试时间");
+  }
   const blocking = input.store.findBlocking(input.merchant_id, record.stream_key, record.delivery_id);
   if (blocking !== undefined) {
     throw new DeliveryDispatchError("stream_busy", "同一发送流已有未完成通知");
   }
+  input.authorize?.(record);
   const claimed: DeliveryRecord = {
     ...record,
     lease_owner: input.worker_id,
     lease_expires_at: new Date(Date.parse(input.now) + input.lease_ms).toISOString(),
     started_at: input.now,
+    attempts: (record.attempts ?? 0) + 1,
   };
   input.store.save(claimed);
   return claimed;
+}
+
+/**
+ * not_sent 释放：必须仍持有未过期租约（P2-1）。租约已被其他 worker 接管时
+ * 抛 `lease_lost`，不得把对方在途记录无条件重置为 PENDING。
+ */
+export function releaseDelivery(input: {
+  store: DeliveryStore;
+  merchant_id: string;
+  delivery_id: string;
+  worker_id: string;
+  now: string;
+  reason: string;
+  next_attempt_at?: string;
+}): DeliveryRecord {
+  const record = requireRecord(input.store, input.merchant_id, input.delivery_id);
+  if (record.status !== "PENDING") {
+    throw new DeliveryDispatchError("invalid_transition", `状态 ${record.status} 不能释放`);
+  }
+  requireLease(record, input.worker_id, input.now);
+  const released: DeliveryRecord = {
+    ...record,
+    lease_owner: undefined,
+    lease_expires_at: undefined,
+    started_at: undefined,
+    blocked_reason: `not_sent:${input.reason}`,
+    ...(input.next_attempt_at !== undefined ? { next_attempt_at: input.next_attempt_at } : {}),
+  };
+  input.store.save(released);
+  return released;
 }
 
 function requireRecord(

@@ -60,4 +60,21 @@ describe("接待回复 outbox 流门", () => {
     box.record(record("resp-1", "dispatched"));
     expect(gate.isHeld("m-1:a2a:buyer-1:ctx-1", NOW)).toBe(false);
   });
+
+  it("P2-4：dispatched 转 unknown 时占用；重启后持久 unknown 重新占用", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kiwi-reply-gate-"));
+    dirs.push(dir);
+    const file = join(dir, "reply-outbox.json");
+    const gate = new StreamGate();
+    const box = new ReceptionReplyOutbox({ file, now: () => NOW, gate });
+    box.record(record("resp-1", "dispatched"));
+    const key = "m-1:a2a:buyer-1:ctx-1";
+    expect(gate.isHeld(key, NOW)).toBe(false);
+    box.markStatus("resp-1", "unknown");
+    expect(gate.isHeld(key, NOW)).toBe(true);
+
+    const restartedGate = new StreamGate();
+    new ReceptionReplyOutbox({ file, now: () => NOW, gate: restartedGate });
+    expect(restartedGate.isHeld(key, NOW)).toBe(true);
+  });
 });

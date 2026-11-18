@@ -26,8 +26,8 @@ import type { DeliveryChannelAdapter } from "./channel.js";
 export interface EmailChannelAdapterOptions {
   readonly api_key: string;
   readonly from: string;
-  /** 测试/单收件人验收；生产应从受控地址库解析。 */
-  readonly to: string;
+  /** 仅测试注入；生产必须由调用方按授权绑定传入 recipient。 */
+  readonly to?: string;
   readonly endpoint?: string;
   readonly fetchImpl?: typeof fetch;
 }
@@ -38,9 +38,13 @@ export function createEmailChannelAdapter(
   const endpoint = options.endpoint ?? "https://api.resend.com/emails";
   const fetchImpl = options.fetchImpl ?? fetch;
   return {
-    async send({ delivery, idempotency_key, timeout_ms }) {
+    async send({ delivery, idempotency_key, timeout_ms, recipient }) {
       if (delivery.channel !== "email") {
         return { outcome: "not_sent", reason: "channel_mismatch" };
+      }
+      const to = recipient ?? options.to;
+      if (to === undefined || to.trim() === "") {
+        return { outcome: "not_sent", reason: "recipient_unresolved" };
       }
       const subject = typeof delivery.payload.title === "string" ? delivery.payload.title : "通知";
       const body = typeof delivery.payload.body === "string" ? delivery.payload.body : "";
@@ -57,7 +61,7 @@ export function createEmailChannelAdapter(
           },
           body: JSON.stringify({
             from: options.from,
-            to: [options.to],
+            to: [to],
             subject,
             text: body,
           }),

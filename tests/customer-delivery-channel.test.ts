@@ -121,7 +121,53 @@ describe("M6-6 渠道发送", () => {
     });
     expect(released).toMatchObject({ status: "PENDING", blocked_reason: "not_sent:rate_limited" });
     expect(released.lease_owner).toBeUndefined();
+    expect(released.attempts).toBe(1);
+    // P2-2：not_sent 后有退避时刻，下一 tick 不会立即重试。
+    expect(released.next_attempt_at).toBe("2026-11-18T00:00:15.000Z");
     expect(released.payload_digest).toBe(store2.records.get("dlv-1")?.payload_digest);
+  });
+
+  it("P1-4：发送时复核失败则不领取；缺少收件人则 not_sent", async () => {
+    const store = new MemoryStore();
+    store.save(record());
+    await expect(
+      dispatchDelivery({
+        store,
+        merchant_id: MERCHANT,
+        delivery_id: "dlv-1",
+        worker_id: "w1",
+        lease_ms: 30_000,
+        timeout_ms: 5_000,
+        now: NOW,
+        adapter: accepted,
+        authorize: () => {
+          throw new Error("subscription_revoked");
+        },
+      }),
+    ).rejects.toThrow("subscription_revoked");
+    expect(store.records.get("dlv-1")?.status).toBe("PENDING");
+    expect(store.records.get("dlv-1")?.lease_owner).toBeUndefined();
+
+    let received: string | undefined;
+    const released = await dispatchDelivery({
+      store,
+      merchant_id: MERCHANT,
+      delivery_id: "dlv-1",
+      worker_id: "w1",
+      lease_ms: 30_000,
+      timeout_ms: 5_000,
+      now: NOW,
+      adapter: {
+        async send({ recipient }) {
+          received = recipient;
+          return recipient === undefined
+            ? { outcome: "not_sent", reason: "recipient_unresolved" }
+            : { outcome: "accepted" };
+        },
+      },
+    });
+    expect(received).toBeUndefined();
+    expect(released).toMatchObject({ status: "PENDING", blocked_reason: "not_sent:recipient_unresolved" });
   });
 
   it("unknown/异常 → UNKNOWN 并阻塞该流", async () => {
@@ -162,9 +208,14 @@ describe("M6-6 渠道发送", () => {
       },
     });
     const delivery = record();
-    expect(await adapter.send({ delivery, idempotency_key: "dlv-1", timeout_ms: 1_000 })).toMatchObject({
-      outcome: "accepted",
-    });
+    expect(
+      await adapter.send({
+        delivery,
+        idempotency_key: "dlv-1",
+        timeout_ms: 1_000,
+        recipient: "wxid-owner",
+      }),
+    ).toMatchObject({ outcome: "accepted" });
     expect(calls).toEqual([{ to_user_id: "wxid-owner", text: "到货\n已到货" }]);
     const failing = createWeixinChannelAdapter({
       sender: { async sendMessage() { throw new Error("timeout"); } },
@@ -177,8 +228,43 @@ describe("M6-6 渠道发送", () => {
       },
     });
     expect(
-      (await failing.send({ delivery, idempotency_key: "dlv-1", timeout_ms: 1_000 })).outcome,
+      (
+        await failing.send({
+          delivery,
+          idempotency_key: "dlv-1",
+          timeout_ms: 1_000,
+          recipient: "wxid-owner",
+        })
+      ).outcome,
     ).toBe("unknown");
+  });
+
+  it("P2-7：微信确定性拒绝归 not_sent，网络异常仍是 unknown", async () => {
+    const credentials = {
+      ilink_bot_id: "bot-1",
+      bot_token: "token",
+      base_url: "https://ilinkai.weixin.qq.com",
+      ilink_user_id: "wxid-owner",
+      saved_at: NOW,
+    };
+    const rejected = createWeixinChannelAdapter({
+      sender: {
+        async sendMessage() {
+          throw Object.assign(new Error("invalid recipient"), { code: "validation" });
+        },
+      },
+      credentials,
+    });
+    expect(
+      (
+        await rejected.send({
+          delivery: record(),
+          idempotency_key: "dlv-1",
+          timeout_ms: 1_000,
+          recipient: "wxid-buyer",
+        })
+      ).outcome,
+    ).toBe("not_sent");
   });
 
   it("邮件：2xx accepted（带 provider id）；4xx not_sent；5xx unknown", async () => {

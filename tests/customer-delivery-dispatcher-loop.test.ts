@@ -50,13 +50,14 @@ describe("M6-6 投递循环", () => {
     const adapter = createEmailChannelAdapter({
       api_key: "k",
       from: "from@test",
-      to: "to@test",
       fetchImpl: (async () => new Response(JSON.stringify({ id: "mail-1" }), { status: 200 })) as typeof fetch,
     });
     const loop = new DeliveryDispatcherLoop({
       store: deliveries,
       merchant_id: MERCHANT,
       adapterFor: () => adapter,
+      // P1-5：收件人由绑定地址引用解析，不使用适配器固定地址。
+      resolveRecipient: () => "to@test",
       now: () => NOW,
       worker_id: "w1",
     });
@@ -71,5 +72,28 @@ describe("M6-6 投递循环", () => {
     });
     // Already SENT: nothing due.
     expect(await loop2.tick()).toMatchObject({ skipped: 0 });
+  });
+
+  it("P1-4：send 时复核失败保持 PENDING、不调用渠道", async () => {
+    let sent = 0;
+    const loop = new DeliveryDispatcherLoop({
+      store: deliveries,
+      merchant_id: MERCHANT,
+      adapterFor: () => ({
+        async send() {
+          sent += 1;
+          return { outcome: "accepted" };
+        },
+      }),
+      authorize: () => {
+        throw new Error("subscription_revoked");
+      },
+      now: () => NOW,
+      worker_id: "w1",
+      log: () => undefined,
+    });
+    expect(await loop.tick()).toMatchObject({ claimed: 0, skipped: 1 });
+    expect(sent).toBe(0);
+    expect(deliveries.get(MERCHANT, deliveryId)?.status).toBe("PENDING");
   });
 });

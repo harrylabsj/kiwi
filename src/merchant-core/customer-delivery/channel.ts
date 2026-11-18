@@ -25,9 +25,19 @@ import type { StreamGate } from "./stream-gate.js";
 import {
   claimDelivery,
   completeDelivery,
+  releaseDelivery,
   type DeliveryRecord,
   type DeliveryStore,
 } from "./dispatcher.js";
+
+/** not_sent 重试上限与退避：15s 起，指数增长，封顶 5 分钟。 */
+const MAX_NOT_SENT_ATTEMPTS = 5;
+const NOT_SENT_BASE_BACKOFF_MS = 15_000;
+const NOT_SENT_MAX_BACKOFF_MS = 5 * 60_000;
+
+function notSentBackoff(attempts: number): number {
+  return Math.min(NOT_SENT_BASE_BACKOFF_MS * 2 ** Math.max(0, attempts - 1), NOT_SENT_MAX_BACKOFF_MS);
+}
 
 export type ChannelSendOutcome =
   | { outcome: "accepted"; provider_request_id?: string; receipt?: Record<string, unknown> }
@@ -40,6 +50,8 @@ export interface DeliveryChannelAdapter {
     delivery: DeliveryRecord;
     idempotency_key: string;
     timeout_ms: number;
+    /** 由宿主按授权绑定解析的实际收件人；适配器不得回退到固定地址。 */
+    recipient?: string;
   }): Promise<ChannelSendOutcome>;
 }
 
@@ -54,6 +66,10 @@ export interface DispatchDeliveryInput {
   readonly adapter: DeliveryChannelAdapter;
   /** 与接待回复共用的流门；缺省仅依赖 DeliveryStore 的单流约束。 */
   readonly stream_gate?: StreamGate;
+  /** 发送时复核：重读绑定/订阅/授权；抛错则不领取（P1-4）。 */
+  readonly authorize?: (record: DeliveryRecord) => void;
+  /** 从授权绑定解析收件人；缺省视为不可发送（P1-5）。 */
+  readonly resolveRecipient?: (record: DeliveryRecord) => string | undefined;
 }
 
 /**
@@ -69,34 +85,49 @@ export async function dispatchDelivery(
     lease_ms: input.lease_ms,
     now: input.now,
   });
-  const claimed = claimDelivery({
-    store: input.store,
-    merchant_id: input.merchant_id,
-    delivery_id: input.delivery_id,
-    worker_id: input.worker_id,
-    lease_ms: input.lease_ms,
-    now: input.now,
-  });
+  const claim = () =>
+    claimDelivery({
+      store: input.store,
+      merchant_id: input.merchant_id,
+      delivery_id: input.delivery_id,
+      worker_id: input.worker_id,
+      lease_ms: input.lease_ms,
+      now: input.now,
+      ...(input.authorize !== undefined ? { authorize: input.authorize } : {}),
+    });
+  // P1-2/P1-4：持久存储下，租约检查、发送时复核与领取写入必须在同一
+  // IMMEDIATE 事务内，跨进程的两个 worker 不能同时领取。
+  const claimed = input.store.transaction !== undefined
+    ? input.store.transaction(claim)
+    : claim();
+  const recipient = input.resolveRecipient?.(claimed);
   let result: ChannelSendOutcome;
   try {
     result = await input.adapter.send({
       delivery: claimed,
       idempotency_key: claimed.delivery_id,
       timeout_ms: input.timeout_ms,
+      ...(recipient !== undefined ? { recipient } : {}),
     });
   } catch {
     result = { outcome: "unknown" };
   }
   if (result.outcome === "not_sent") {
+    const attempts = claimed.attempts ?? 1;
+    const nextAttemptAt =
+      attempts >= MAX_NOT_SENT_ATTEMPTS
+        ? claimed.valid_until
+        : new Date(Date.parse(input.now) + notSentBackoff(attempts)).toISOString();
+    const released = releaseDelivery({
+      store: input.store,
+      merchant_id: input.merchant_id,
+      delivery_id: claimed.delivery_id,
+      worker_id: input.worker_id,
+      now: input.now,
+      reason: result.reason,
+      next_attempt_at: nextAttemptAt,
+    });
     input.stream_gate?.leave(claimed.stream_key, input.worker_id);
-    const released: DeliveryRecord = {
-      ...claimed,
-      lease_owner: undefined,
-      lease_expires_at: undefined,
-      started_at: undefined,
-      blocked_reason: `not_sent:${result.reason}`,
-    };
-    input.store.save(released);
     return released;
   }
   if (result.outcome === "accepted") {

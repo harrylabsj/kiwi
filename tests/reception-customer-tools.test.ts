@@ -109,8 +109,8 @@ describe("接待客户记忆工具（M3-6）", () => {
     }).subject_id;
     const challenge = identity.linkChallenge({
       merchant_id: MERCHANT,
-      actor: buyer(),
-      source_session_id: "session-1",
+      actor: manager(),
+      source_session_id: "operator-session",
       target_subject_id: subjectId,
     });
     identity.linkConfirm({
@@ -164,7 +164,7 @@ describe("接待客户记忆工具（M3-6）", () => {
       grant_id: "unused",
       erase_scope_id: scope,
     });
-    provider = new SqliteCustomerMemoryProvider({ dbPath, now });
+    provider = new SqliteCustomerMemoryProvider({ dbPath, now, allowWrites: true });
   });
   afterEach(() => {
     provider.close();

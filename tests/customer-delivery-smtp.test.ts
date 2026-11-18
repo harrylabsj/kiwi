@@ -72,7 +72,41 @@ describe("M6-6 SMTP", () => {
       expect(result.outcome).toBe("accepted");
       expect(data).toContain("Subject: 测试主题");
       expect(data).toContain("测试正文");
+      // P2-12：Message-ID 由 delivery_id 派生，重发可被下游关联。
+      expect(data).toContain("Message-ID: <dlv-1@kiwi.local>");
     } finally {
+      server.close();
+    }
+  });
+
+  it("P1-3：服务器接受连接后停止响应 → 命令 deadline 归为 unknown", async () => {
+    const sockets: Socket[] = [];
+    const server = createServer((socket: Socket) => {
+      sockets.push(socket);
+      // 故意不写任何响应（连 greeting 都不发）。
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    const port = typeof address === "object" && address !== null ? address.port : 0;
+    try {
+      const adapter = createSmtpChannelAdapter({
+        host: "127.0.0.1",
+        port,
+        starttls: false,
+        from: "from@test",
+        to: "to@test",
+        timeout_ms: 200,
+      });
+      const started = Date.now();
+      const result = await adapter.send({
+        delivery: delivery(),
+        idempotency_key: "dlv-1",
+        timeout_ms: 200,
+      });
+      expect(result.outcome).toBe("unknown");
+      expect(Date.now() - started).toBeLessThan(2_000);
+    } finally {
+      for (const socket of sockets) socket.destroy();
       server.close();
     }
   });

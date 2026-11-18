@@ -107,6 +107,8 @@ export interface RunEvaluationInput {
 
 const SUITE_VERSION_PATTERN = /^[a-z0-9][a-z0-9._-]{2,63}$/;
 const SCENARIO_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{2,63}$/;
+/** dispatched marker 的自动过期窗口（远大于 90s runner 超时 + 重试余量）。 */
+const DISPATCHED_ATTEMPT_TTL_MS = 15 * 60 * 1000;
 
 function validation(reason: string, message: string): never {
   throw new LearningError("validation", reason, message);
@@ -543,7 +545,19 @@ export async function runCandidateEvaluation(
         }
         let outcome: EvaluationAttemptOutcome;
         const dispatchId = randomUUID();
-        const marker = { scenario_id: scenario.scenario_id, kind: scenario.kind, repetitions, variant, attempt, dispatch_id: dispatchId };
+        // P1-6：dispatched marker 带 TTL。模型调用超时/中断后不可能永远
+        // 等人工核对；超过 TTL 的 marker 由 checkEvaluationConfig 自动
+        // 视为中断并清除，下一次评测用新 dispatch_id 重新派发。
+        const marker = {
+          scenario_id: scenario.scenario_id,
+          kind: scenario.kind,
+          repetitions,
+          variant,
+          attempt,
+          dispatch_id: dispatchId,
+          dispatched_at: now(),
+          expires_at: new Date(Date.parse(now()) + DISPATCHED_ATTEMPT_TTL_MS).toISOString(),
+        };
         const prepared = JSON.stringify({ ...marker, phase: "prepared" });
         const dispatched = JSON.stringify({ ...marker, phase: "dispatched" });
         repository.transaction(() => {
@@ -567,6 +581,10 @@ export async function runCandidateEvaluation(
                 : {}),
             }),
           );
+          // 回执写入与模型调用同属“不确定结果”边界（P2-2）：评测 claim
+          // 丢失时 saveReceipt 会在自己的事务里抛错；结果仍在手，但无法
+          // 安全落库，必须按 uncertain 处理而不是裸抛。
+          input.saveReceipt?.(marker, outcome);
         } catch (err) {
           // A dispatched call may have completed remotely; keep its marker for manual reconciliation.
           if (input.setAttempt !== undefined) throw new LearningError("version_conflict", "evaluation_attempt_uncertain", "模型调用结果不确定，不能自动重跑");
@@ -592,7 +610,6 @@ export async function runCandidateEvaluation(
             ...(err instanceof Error ? {} : {}),
           });
         }
-        input.saveReceipt?.(marker, outcome);
         receiptToClear = dispatchId;
         attempts.push({
           variant,

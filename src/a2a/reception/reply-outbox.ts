@@ -72,6 +72,24 @@ export class ReceptionReplyOutbox {
     this.streamKeyFor = options.streamKeyFor ?? ((record) =>
       `${record.merchantId}:a2a:${record.identity}:${record.contextId}`);
     this.state = this.load();
+    // 重启后持久 UNKNOWN 必须重新占用发送流（P2-4）：否则进程重启即绕过
+    // “UNKNOWN 未核对前保持占用”的不变量。
+    if (this.gate !== undefined) {
+      const now = this.now();
+      for (const record of this.state.records) {
+        if (record.status !== "unknown") continue;
+        try {
+          this.gate.enter({
+            stream_key: this.streamKeyFor(record),
+            holder_id: record.response_id,
+            lease_ms: 24 * 60 * 60 * 1000,
+            now,
+          });
+        } catch {
+          // 同一流已有其他 holder：保持占用即可，不覆盖。
+        }
+      }
+    }
   }
 
   /** 登记一条已发布回复；response_id 重复（重试）时不重复登记。 */
@@ -101,6 +119,14 @@ export class ReceptionReplyOutbox {
     const wasBlocking = record.status === "unknown";
     record.status = status;
     if (reason !== undefined) record.reason = reason;
+    if (this.gate !== undefined && !wasBlocking && status === "unknown") {
+      this.gate.enter({
+        stream_key: this.streamKeyFor(record),
+        holder_id: record.response_id,
+        lease_ms: 24 * 60 * 60 * 1000,
+        now: this.now(),
+      });
+    }
     if (this.gate !== undefined && wasBlocking && status !== "unknown") {
       this.gate.leave(this.streamKeyFor(record), record.response_id);
     }

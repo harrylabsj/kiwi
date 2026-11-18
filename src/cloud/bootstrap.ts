@@ -85,6 +85,7 @@ import { recoverPromotionBroadcastWorkflows } from "../merchant/promotion-broadc
 import { createServiceControlExecutors } from "../merchant/service-control-executors.js";
 import { calculateWorkbenchQuote } from "../merchant/quote-calculator.js";
 import { openMerchantOperationsFacade } from "../merchant-core/ops/facade.js";
+import { CustomerDataMaintenance } from "../merchant-core/customer-memory/maintenance.js";
 import { MerchantOperationsSurface } from "../merchant-core/ops/surface.js";
 import { createOperationAdviceRunner } from "../merchant-core/operations-jobs/advice-runner.js";
 import { createRecoveryGatewayVerifierFromEnv } from "../merchant-core/learning/recovery-gateway.js";
@@ -771,6 +772,7 @@ export async function bootstrapCloudRuntime(
   let enrollmentHeartbeat: EnrollmentHeartbeat | undefined;
   let governanceRuntime: GovernanceRuntime | undefined;
   let operationsScheduler: OperationsScheduler | undefined;
+  let customerDataMaintenance: CustomerDataMaintenance | undefined;
   let catalogMerchantIdForProducts: () => string | undefined = () => undefined;
   // 开关开启但无管理面（无 state.sqlite）时，新功能静默不可用会误导运维：
   // 明确记录「保持关闭」，默认关闭路径行为不变。
@@ -784,6 +786,11 @@ export async function bootstrapCloudRuntime(
   }
   if (adminOptions !== undefined) {
     managementDb = new DatabaseSync(path.join(config.dataDir, "state.sqlite"));
+    // P2-4：与 merchant-runtime 连接一致。node:sqlite 默认 busy_timeout=0，
+    // 并发写者（readiness 探针/备份/第二进程）会让 owner 的 BEGIN IMMEDIATE
+    // 立即 SQLITE_BUSY；WAL 允许单写多读。
+    managementDb.exec("PRAGMA journal_mode = WAL");
+    managementDb.exec("PRAGMA busy_timeout = 5000");
     // M1 收尾（D-M0-05/D-M0-08）：三个独立迁移账本与 data_grants 在功能装配前
     // 就绪；learning/memory/jobs 任一开启时 CAS 获取实例所有权并心跳续约。
     // 获取失败只关闭新功能并记录原因（X12），现有接待/经营路径保持原行为
@@ -812,8 +819,22 @@ export async function bootstrapCloudRuntime(
       merchantId: profile.owner_id,
       now: () => new Date().toISOString(),
       ...(recoveryVerifier !== undefined ? { recoveryVerifier } : {}),
+      // P2-3：评测恢复写与会话写一样受单写者栅栏保护；管理 API 的恢复
+      // 路由刻意不外包 writeGoverned，栅栏必须由服务内部 guard 提供。
+      ...(governanceRuntime !== undefined
+        ? { recoveryWriteGuard: (work) => governanceRuntime!.writeUnderOwnership(work) }
+        : {}),
     });
     const merchantOperations = new MerchantOperationsSurface({ facade: cloudOperationsFacade });
+    if (governanceFlags.memory_enabled && governanceRuntime?.active === true) {
+      customerDataMaintenance = new CustomerDataMaintenance({
+        db: managementDb,
+        now: () => new Date().toISOString(),
+        write: (work) => governanceRuntime!.writeUnderOwnership(work),
+        log: (line) => log(line),
+      });
+      customerDataMaintenance.start();
+    }
     if (
       process.env.KIWI_OPERATIONS_SCHEDULER === "1" &&
       governanceRuntime?.active === true &&
@@ -1620,6 +1641,7 @@ export async function bootstrapCloudRuntime(
     } },
     { id: "heartbeat", run: () => enrollmentHeartbeat?.stop() },
     { id: "operations_scheduler", run: () => operationsScheduler?.stop() },
+    { id: "customer_data_maintenance", run: () => customerDataMaintenance?.stop() },
     { id: "http_server", run: () => closeHttpServer(server) },
     { id: "background_work", after: ["timers"], run: async () => {
       await Promise.allSettled([directConnectionWork, bindingReconcileWork]);

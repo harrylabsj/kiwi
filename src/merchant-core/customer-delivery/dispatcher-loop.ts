@@ -33,6 +33,10 @@ export interface DeliveryDispatcherLoopOptions {
   readonly store: CustomerDeliveryRepositoryLike;
   readonly merchant_id: string;
   readonly adapterFor: (delivery: DeliveryRecord) => DeliveryChannelAdapter | undefined;
+  /** 发送时复核（P1-4）：重读绑定/订阅/频控；抛错则不领取。 */
+  readonly authorize?: (delivery: DeliveryRecord) => void;
+  /** 按授权绑定解析收件人（P1-5）；缺省时适配器必须自行拒绝发送。 */
+  readonly resolveRecipient?: (delivery: DeliveryRecord) => string | undefined;
   readonly now: () => string;
   readonly assertOwner?: () => void;
   readonly write?: <T>(work: () => T) => T;
@@ -47,6 +51,8 @@ export interface DeliveryDispatcherLoopOptions {
 export class DeliveryDispatcherLoop {
   private readonly options: DeliveryDispatcherLoopOptions;
   private timer: ReturnType<typeof setInterval> | undefined;
+  /** 重入互斥：SetInterval tick 不重叠（P1-2）。 */
+  private ticking = false;
 
   constructor(options: DeliveryDispatcherLoopOptions) {
     this.options = options;
@@ -71,46 +77,57 @@ export class DeliveryDispatcherLoop {
 
   async tick(): Promise<{ claimed: number; sent: number; unknown: number; skipped: number }> {
     const result = { claimed: 0, sent: 0, unknown: 0, skipped: 0 };
-    this.options.assertOwner?.();
-    const worker = this.options.worker_id ?? `delivery:${process.pid}`;
-    const due = this.options.store.listDue(
-      this.options.merchant_id,
-      this.options.now(),
-      this.options.max_per_tick ?? 10,
-    );
-    for (const record of due) {
-      const adapter = this.options.adapterFor(record);
-      if (adapter === undefined) {
-        result.skipped += 1;
-        continue;
-      }
-      const run = () =>
-        dispatchDelivery({
-          store: this.options.store,
-          merchant_id: this.options.merchant_id,
-          delivery_id: record.delivery_id,
-          worker_id: worker,
-          lease_ms: this.options.lease_ms ?? 120_000,
-          timeout_ms: this.options.timeout_ms ?? 60_000,
-          now: this.options.now(),
-          adapter,
-        });
-      try {
-        // 渠道调用不能在 SQLite 事务内；所有权由 assertOwner + 仓库状态守卫。
-        const sent = await run();
-        result.claimed += 1;
-        if (sent.status === "UNKNOWN") result.unknown += 1;
-        else if (sent.status === "SENT") result.sent += 1;
-      } catch (err) {
-        const code = (err as { code?: unknown } | null)?.code;
-        if (code === "not_acquired" || code === "feature_disabled") {
-          this.stop();
-          break;
+    // 上一 tick 的渠道调用仍挂起时直接跳过，避免同一循环双重领取。
+    if (this.ticking) return result;
+    this.ticking = true;
+    try {
+      this.options.assertOwner?.();
+      const worker = this.options.worker_id ?? `delivery:${process.pid}`;
+      const due = this.options.store.listDue(
+        this.options.merchant_id,
+        this.options.now(),
+        this.options.max_per_tick ?? 10,
+      );
+      for (const record of due) {
+        const adapter = this.options.adapterFor(record);
+        if (adapter === undefined) {
+          result.skipped += 1;
+          continue;
         }
-        result.skipped += 1;
-        this.options.log?.(`[delivery dispatcher] ${record.delivery_id}: ${err instanceof Error ? err.message : String(err)}\n`);
+        const run = () =>
+          dispatchDelivery({
+            store: this.options.store,
+            merchant_id: this.options.merchant_id,
+            delivery_id: record.delivery_id,
+            worker_id: worker,
+            lease_ms: this.options.lease_ms ?? 120_000,
+            timeout_ms: this.options.timeout_ms ?? 60_000,
+            now: this.options.now(),
+            adapter,
+            ...(this.options.authorize !== undefined ? { authorize: this.options.authorize } : {}),
+            ...(this.options.resolveRecipient !== undefined
+              ? { resolveRecipient: this.options.resolveRecipient }
+              : {}),
+          });
+        try {
+          // 渠道调用不能在 SQLite 事务内；所有权由 assertOwner + 仓库状态守卫。
+          const sent = await run();
+          result.claimed += 1;
+          if (sent.status === "UNKNOWN") result.unknown += 1;
+          else if (sent.status === "SENT") result.sent += 1;
+        } catch (err) {
+          const code = (err as { code?: unknown } | null)?.code;
+          if (code === "not_acquired" || code === "feature_disabled") {
+            this.stop();
+            break;
+          }
+          result.skipped += 1;
+          this.options.log?.(`[delivery dispatcher] ${record.delivery_id}: ${err instanceof Error ? err.message : String(err)}\n`);
+        }
       }
+      return result;
+    } finally {
+      this.ticking = false;
     }
-    return result;
   }
 }

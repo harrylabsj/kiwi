@@ -53,7 +53,8 @@ export class SqliteCustomerMemoryProvider implements CustomerMemoryToolProvider 
   constructor(options: { dbPath: string; now?: () => string; allowWrites?: boolean; socketPath?: string }) {
     this.dbPath = options.dbPath;
     this.now = options.now ?? (() => new Date().toISOString());
-    this.allowWrites = options.allowWrites ?? true;
+    // P2-9：默认只读；直写路径必须由宿主显式开启（生产始终 false）。
+    this.allowWrites = options.allowWrites ?? false;
     this.socketPath = options.socketPath;
   }
 
@@ -274,7 +275,9 @@ export class SqliteCustomerMemoryProvider implements CustomerMemoryToolProvider 
       merchant_id: context.merchant_id,
       actor: this.systemActor(context.merchant_id),
       subject_id: context.subject_id,
-      resource_scope_id: context.resource_scope_id,
+      // P2-8：与 canPropose 的判定一致——写记忆落在 memory scope，而不是
+      // history scope（否则 fail-closed 或归档到错误域）。
+      resource_scope_id: context.memory_scope_id ?? context.resource_scope_id,
       namespace: input.namespace,
       key: input.key,
       value_ref: input.value_ref,
