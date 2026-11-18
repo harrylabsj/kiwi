@@ -41,9 +41,16 @@ function agentMessage(text: string): GenericMessageResponse {
   };
 }
 
+/** 普通文本路径的验签询价钩子（K1 自动建档；由 A2A 节点装配注入）。 */
+export interface ReceptionResponderHooks {
+  onVerifiedInquiry?(input: { identity: string; contextId: string; messageId?: string }): void;
+  historyNote?(input: { identity: string; text: string }): string;
+}
+
 export function createReceptionResponder(
   engine: ReceptionEngine,
   merchantId: string,
+  hooks?: ReceptionResponderHooks,
 ): GenericMessageResponder {
   return async (input: GenericResponderInput): Promise<GenericMessageResponse> => {
     const text = textPartsOf(input.message);
@@ -59,7 +66,25 @@ export function createReceptionResponder(
           ? { messageId: input.message.messageId }
           : {}),
       });
-      return agentMessage(result.text);
+      // K1：判定为有效询价且身份已验签时通知业务边界（建档）；
+      // 建档失败不影响回复（writer 内部已收敛并可靠重试）。
+      if (result.recognizedInquiry && input.identityVerified === true && hooks?.onVerifiedInquiry !== undefined) {
+        try {
+          hooks.onVerifiedInquiry({
+            identity: input.identity as string,
+            contextId: input.contextId,
+            ...(typeof input.message.messageId === "string"
+              ? { messageId: input.message.messageId }
+              : {}),
+          });
+        } catch {
+          // 钩子异常不阻断接待回复。
+        }
+      }
+      const history = input.identityVerified === true && input.identity !== undefined
+        ? hooks?.historyNote?.({ identity: input.identity, text }) ?? ""
+        : "";
+      return agentMessage(result.text + history);
     } catch {
       return agentMessage(FALLBACK_TEXT);
     }

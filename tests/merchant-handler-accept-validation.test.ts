@@ -24,6 +24,26 @@ const NOW = "2026-08-09T10:00:00Z";
 const NEGOTIATION_ID = "neg_p2c_001";
 const MERCHANT_CAPABILITY = "com.harrylabsj.kiwi.shopping.negotiation";
 
+/** K4：从 accepted 结果的 artifact 中提取商家协议号（幂等重放断言用）。 */
+const agreementIdOf = (result: NegotiationHandlerResult): string | undefined =>
+  result.kind === "accepted"
+    ? (
+        result.artifactParts?.[0] as unknown as {
+          data?: { agreement?: { agreement_id?: string } };
+        }
+      )?.data?.agreement?.agreement_id
+    : undefined;
+
+/** K4：链上 agreement_issued 证据条数（一次有效 accept 恰一条）。 */
+const agreementEvidenceCount = (ledger: LedgerStore): number =>
+  ledger
+    .events(NEGOTIATION_ID)
+    .filter(
+      (e) =>
+        e.event_kind === "system" &&
+        (e.outcome as { result?: { kind?: string } }).result?.kind === "agreement_issued",
+    ).length;
+
 describe("merchant accept KNP §15 validation (P2-C/P2-D)", () => {
   let dir: string;
   let ledger: LedgerStore;
@@ -178,16 +198,40 @@ describe("merchant accept KNP §15 validation (P2-C/P2-D)", () => {
       .toBe(offerId);
   });
 
-  it("second accept after agreement is declined — no double agreement (P2-D)", async () => {
+  it("second accept after agreement replays the same agreement — no double agreement (P2-D / K4)", async () => {
     const { offerId, agreedTerms } = await reachConditional();
     const digest = contentDigest(agreedTerms as never);
     const first = await run(
       envelopeFor("accept_nonbinding", { type: "accept_nonbinding", offer_id: offerId, terms_digest: digest }),
     );
     expect(first.kind).toBe("accepted");
-    // 同 negotiation 重发 accept（不同 message_id）→ 终态拒绝
+    const firstAgreementId = agreementIdOf(first);
+    expect(firstAgreementId).toBeTruthy();
+    // 同 negotiation 重发 accept（不同 message_id）→ K4 预写证据命中：
+    // 幂等返回**同一**商家协议号与摘要，绝不生成第二份协议（B6）。
     const second = await run(
       envelopeFor("accept_nonbinding", { type: "accept_nonbinding", offer_id: offerId, terms_digest: digest }),
+    );
+    expect(second.kind).toBe("accepted");
+    expect(agreementIdOf(second)).toBe(firstAgreementId);
+    expect(agreementEvidenceCount(ledger)).toBe(1);
+  });
+
+  // K4 反例：同 offer_id 但摘要不同 → 不命中证据 → 终态拒绝（待核对语义）。
+  it("second accept with mismatched terms_digest after agreement is declined (K4)", async () => {
+    const { offerId, agreedTerms } = await reachConditional();
+    const digest = contentDigest(agreedTerms as never);
+    const first = await run(
+      envelopeFor("accept_nonbinding", { type: "accept_nonbinding", offer_id: offerId, terms_digest: digest }),
+    );
+    expect(first.kind).toBe("accepted");
+    // 同 offer_id 但摘要不同 → 不命中预写证据 → 终态守卫拒绝（不重开、不补发）。
+    const second = await run(
+      envelopeFor("accept_nonbinding", {
+        type: "accept_nonbinding",
+        offer_id: offerId,
+        terms_digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      }),
     );
     expect(second.kind).toBe("declined");
     expect(second.kind === "declined" && second.reasonCode).toBe("state_conflict");
@@ -489,7 +533,8 @@ describe("merchant handler 重启恢复（BUG-03）", () => {
     );
     expect(accepted.kind).toBe("accepted");
 
-    // "重启"后：同 negotiation 的商业动作被终态守卫拒绝
+    // "重启"后：accept 重放命中 K4 预写证据 → 幂等返回原协议；
+    // 其余商业动作仍被终态守卫拒绝。
     const second = makeHandler();
     const reaccept = await runWith(
       second,
@@ -499,8 +544,8 @@ describe("merchant handler 重启恢复（BUG-03）", () => {
         terms_digest: contentDigest(agreedTerms as never),
       }),
     );
-    expect(reaccept.kind).toBe("declined");
-    expect(reaccept.kind === "declined" && reaccept.reasonCode).toBe("state_conflict");
+    expect(reaccept.kind).toBe("accepted");
+    expect(agreementIdOf(reaccept)).toBe(agreementIdOf(accepted));
     const rfq = await runWith(second, env("rfq", { items: [{ sku: "SKU-001" }] }));
     expect(rfq.kind).toBe("declined");
     expect(rfq.kind === "declined" && rfq.reasonCode).toBe("state_conflict");
@@ -820,7 +865,7 @@ describe("merchant accept 相位机权威守卫（P1-C）", () => {
     expect(agreementTransitions()).toHaveLength(0);
   });
 
-  it("成交后重启恢复：二次 accept 被终态守卫拒绝，不产重复协议（P1-C 跨重启）", async () => {
+  it("成交后重启恢复：二次 accept 幂等返回原协议，不产重复协议（P1-C 跨重启 / K4）", async () => {
     const first = makeHandler();
     const { offerId, agreedTerms } = await reachConditional(first);
     await runWith(first, env("clarification", { questions: [{ field: "delivery_before" }] }));
@@ -833,16 +878,17 @@ describe("merchant accept 相位机权威守卫（P1-C）", () => {
     expect(agreementTransitions()).toHaveLength(1);
 
     // “重启”：同 Ledger 重建 handler——恢复按链上 state_transition 把相位
-    // 重建为 AGREEMENT_REACHED（终态 → closedNegotiations），conditional 不再恢复。
+    // 重建为 AGREEMENT_REACHED（终态 → closedNegotiations）。K4：预写证据
+    // 在账本上，重试幂等恢复同一商家协议号与摘要，不生成第二份协议。
     const second = makeHandler();
     const attempt2 = await runWith(
       second,
       env("accept_nonbinding", { type: "accept_nonbinding", offer_id: offerId, terms_digest: digest }),
     );
-    expect(attempt2.kind).toBe("declined");
-    expect(attempt2.kind === "declined" && attempt2.reasonCode).toBe("state_conflict");
-    // 二次 accept 未落第二条 AGREEMENT_REACHED（无重复协议的事实来源）。
+    expect(attempt2.kind).toBe("accepted");
+    expect(agreementIdOf(attempt2)).toBe(agreementIdOf(attempt1));
     expect(agreementTransitions()).toHaveLength(1);
+    expect(agreementEvidenceCount(ledger)).toBe(1);
   });
 
   // (b) 防过修：无 clarification 的正常 accept 仍返回协议——由上文

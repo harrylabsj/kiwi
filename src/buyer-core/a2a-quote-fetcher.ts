@@ -41,6 +41,11 @@ import { contentDigest } from "../negotiation/jcs.js";
 import { GatewayCookieJar } from "../a2a/access/gateway-cookie-jar.js";
 import { BuyerProtocolRecovery, MerchantDeclined, ProtocolOperationUnknown, ProtocolOperationConflict, type ProtocolTaskContext, type ProtocolReply } from "./protocol-recovery.js";
 import { BuyerReplyRejected } from "./receive-gate.js";
+import {
+  buildDelegationMetadata,
+  buildHistoryQueryEnvelope,
+  parseHistoryReply,
+} from "./a2a-quote-history.js";
 
 /**
  * WorkBuddy 访问配置在出站请求里的唯一用途：把签名地址映射成发送地址
@@ -127,6 +132,16 @@ export interface A2AQuoteFetcherOptions {
   onAccessDenied?: (merchant: MerchantRecord) => void | Promise<void>;
   /** Merchant-visible first-RFQ message (e.g. a test/no-fulfillment marker). */
   publicMessage?: string;
+  /**
+   * 买家识别与交易回执 · K2：企业级“允许被询价供应商记住双方的询报价”
+   * 委托配置。存在即启用；merchantIds 缺省表示对全部商家随已签名 RFQ
+   * 附带委托声明（请求体签名覆盖）。声明按任务派生（重试恒定）。
+   */
+  historyDelegation?: {
+    merchantIds?: string[];
+    ttlDays?: number;
+    buyerAgentId?: string;
+  };
 }
 
 /**
@@ -308,6 +323,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
   private readonly signer?: A2AOutboundSigner;
   private readonly onAccessDenied?: (merchant: MerchantRecord) => void | Promise<void>;
   private readonly publicMessage?: string;
+  private readonly historyDelegation?: NonNullable<A2AQuoteFetcherOptions["historyDelegation"]>;
   private readonly endpointCache = new Map<string, string>();
   private readonly now: () => string;
 
@@ -327,12 +343,89 @@ export class A2AQuoteFetcher implements QuoteFetcher {
     this.signer = options.signer;
     this.onAccessDenied = options.onAccessDenied;
     this.publicMessage = options.publicMessage;
+    this.historyDelegation = options.historyDelegation;
     if (options.protocolStateDir && options.localBuyerAgentId) this.recovery = new BuyerProtocolRecovery(options.protocolStateDir, options.localBuyerAgentId, options.now);
   }
 
   /** 对每个 Merchant 独立发起真实 RFQ 并收集回复（部分失败语义）。 */
   async requestQuotes(intent: Record<string, unknown>, merchants: MerchantRecord[], context?: ProtocolTaskContext): Promise<QuoteCandidateInput[]> {
     return Promise.all(merchants.map((merchant) => this.requestQuote(intent, merchant, context)));
+  }
+
+  /**
+   * 买家识别与交易回执 · K2：按本店授权查询上次已发报价（“沿用上次规格”的
+   * 前置步骤）。返回 ok（含历史价/时间/有效期与可溯源规格）或 unavailable
+   * （未授权/扩展不支持/无响应——调用方退回澄清，绝不猜）。
+   */
+  async queryQuoteHistory(
+    merchant: MerchantRecord,
+    input: { skus?: string[]; limit?: number; context?: ProtocolTaskContext } = {},
+  ): Promise<
+    | { status: "ok"; candidates: import("./a2a-quote-history.js").QuoteHistoryCandidate[] }
+    | { status: "unavailable"; reason: string }
+  > {
+    const { agent_card_url: agentCardUrl } = merchant;
+    try {
+      const access = await this.accessForMerchant(merchant);
+      const openEndpoint = access?.openInquiry?.endpoint;
+      let endpoint: string;
+      if (openEndpoint !== undefined && openEndpoint !== "") {
+        endpoint = openEndpoint;
+      } else if (agentCardUrl !== undefined && agentCardUrl !== "") {
+        endpoint = await this.resolveEndpoint(agentCardUrl, access);
+      } else {
+        return { status: "unavailable", reason: "merchant_has_no_endpoint" };
+      }
+      const delegation =
+        input.context !== undefined ? this.delegationMetadataFor(merchant, input.context) : undefined;
+      const delegationMetadata =
+        delegation === undefined ? undefined : { kiwi_delegation: delegation };
+      const request = buildHistoryQueryEnvelope({
+        ...(input.skus !== undefined ? { skus: input.skus } : {}),
+        ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        now: this.now,
+      });
+      const client = buildA2AClient(endpoint, {
+        bearerToken: access === null ? this.bearerToken : undefined,
+        ...(access?.openInquiry ? { signer: access.openInquiry.signer } : this.signer !== undefined ? { signer: this.signer } : {}),
+        allowPrivateRanges: this.allowPrivateRanges,
+        skipDnsCheck: this.skipDnsCheck,
+        timeoutMs: this.timeoutMs,
+        cookieJar: this.gatewayCookies,
+        ...(access !== null && !access.openInquiry && !this.gatewayCookies.has(new URL(endpoint).origin)
+          ? { sendUrl: access.sendUrlFor(endpoint) }
+          : {}),
+        ...(access?.openInquiry ? { fetchImpl: access.openInquiry.fetchImpl } : this.rpcFetchImpl !== undefined ? { fetchImpl: this.rpcFetchImpl } : {}),
+      });
+      const task = await client.sendMessage(envelopeToMessage(request, delegationMetadata));
+      return parseHistoryReply(task, request);
+    } catch (error) {
+      if (error instanceof A2AEndpointResolutionError) {
+        return { status: "unavailable", reason: error.httpStatus === 401 || error.httpStatus === 403 ? "access_denied" : "endpoint_unreachable" };
+      }
+      return { status: "unavailable", reason: "history_query_failed" };
+    }
+  }
+
+  /** 按任务派生稳定委托声明（配置未启用/商家不在委托列表 → undefined）。 */
+  private delegationMetadataFor(
+    merchant: MerchantRecord,
+    context: ProtocolTaskContext,
+  ): import("./a2a-quote-history.js").DelegationMetadata | undefined {
+    if (this.historyDelegation === undefined) return undefined;
+    const allowed = this.historyDelegation.merchantIds;
+    if (allowed !== undefined && !allowed.includes(merchant.merchant_id)) return undefined;
+    return buildDelegationMetadata({
+      merchantId: merchant.merchant_id,
+      ...(this.historyDelegation.buyerAgentId !== undefined
+        ? { buyerAgentId: this.historyDelegation.buyerAgentId }
+        : {}),
+      issuedAt: context.createdAt,
+      ...(this.historyDelegation.ttlDays !== undefined
+        ? { ttlDays: this.historyDelegation.ttlDays }
+        : {}),
+      now: this.now,
+    });
   }
 
   private async requestQuote(
@@ -375,7 +468,9 @@ export class A2AQuoteFetcher implements QuoteFetcher {
         merchant_id: merchantId,
         status: "failed",
         failure: {
-          classification: "invalid_request",
+          // classification 必须在 persistent-task 冻结枚举内（invalid_request
+          // 不在其中——K3 回访实测暴露）；语义为商家不供应该 SKU → rejected。
+          classification: "rejected",
           retryable: false,
           detail: "explicit intent SKU is not offered by the matched merchant",
         },
@@ -430,11 +525,16 @@ export class A2AQuoteFetcher implements QuoteFetcher {
         ...(access?.openInquiry ? { fetchImpl: access.openInquiry.fetchImpl } : this.rpcFetchImpl !== undefined ? { fetchImpl: this.rpcFetchImpl } : {}),
       });
       if (!this.recovery || !context) throw new ProtocolOperationUnknown();
+      const delegation = this.delegationMetadataFor(merchant, context);
+      // 协议约定：委托声明在 message metadata 的 `kiwi_delegation` 键下
+      // （与商家 delegationFromMetadata 对应；请求体签名覆盖整个 metadata）。
+      const delegationMetadata =
+        delegation === undefined ? undefined : { kiwi_delegation: delegation };
       const exchange = await this.recovery.exchange({
         context, stage: "rfq", round: 0, merchantId, endpoint,
-        binding: { intent, merchant, payload: envelope.payload },
+        binding: { intent, merchant, payload: envelope.payload, delegation },
         build: (id) => buildRfqEnvelope({ negotiationId:id, sku, quantity:firstQuantity(intent), deliveryBefore:constraintsDeadline(intent), ...(publicMessage !== undefined ? { publicMessage } : {}), now:()=>context.createdAt }),
-        send: (wire) => client.sendMessage(envelopeToMessage(wire)),
+        send: (wire) => client.sendMessage(envelopeToMessage(wire, delegationMetadata)),
         get: (id) => client.getTask(id), timeoutMs:this.timeoutMs, pollIntervalMs:this.pollIntervalMs,
       });
       return this.project(exchange, requestedSku);

@@ -580,10 +580,79 @@ CREATE INDEX idx_history_cursors_expiry
   ON history_cursors (expires_at);
 `;
 
+/**
+ * 客户记忆账本 v4（买家识别与交易回执 · K1/K2）。
+ *
+ * - verified_customer_identities：K1 自动建档的稳定映射——唯一键
+ *   (merchant_id, verified_actor) → subject_id。当前 subject_bindings 的 actor
+ *   索引不唯一且绑定可过期，不能兼任长期客户号；本映射是“唯一可证明”的
+ *   本店客户关系（设计 §2.2）。绑定过期后由建档动作在同一事务内续绑，
+ *   REVOKED 绑定不自动重建。
+ * - quote_history_delegations：K2 买方委托声明 —— 商家侧持久保存已见版本与
+ *   撤销水位；旧委托重放、撤销后重放均拒绝。授权本体仍是 data_grants
+ *   （purpose=history_recall，复用既有授权词表与 epoch 机制）。
+ * - published_offers：K2 已发报价索引 —— 报价正式发布（message_sent）时
+ *   关联本店客户、SKU、可溯源规格与报价版本；回访历史查询只读本表，
+ *   读前复核绑定与授权。
+ */
+const CUSTOMER_MEMORY_V4 = `
+CREATE TABLE verified_customer_identities (
+  merchant_id TEXT NOT NULL,
+  verified_actor TEXT NOT NULL,
+  subject_id TEXT NOT NULL,
+  binding_epoch INTEGER NOT NULL CHECK (binding_epoch >= 1),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (merchant_id, verified_actor)
+);
+
+CREATE TABLE quote_history_delegations (
+  merchant_id TEXT NOT NULL,
+  buyer_actor TEXT NOT NULL,
+  subject_id TEXT NOT NULL,
+  delegation_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version >= 1),
+  purpose TEXT NOT NULL CHECK (purpose = 'quote_history'),
+  grant_id TEXT NOT NULL,
+  grant_epoch INTEGER NOT NULL CHECK (grant_epoch >= 1),
+  issued_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('ACTIVE','REVOKED')),
+  source_ref TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (merchant_id, buyer_actor)
+);
+CREATE INDEX idx_quote_history_delegations_subject
+  ON quote_history_delegations (merchant_id, subject_id, status);
+
+CREATE TABLE published_offers (
+  merchant_id TEXT NOT NULL,
+  subject_id TEXT NOT NULL,
+  negotiation_id TEXT NOT NULL,
+  offer_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  sku TEXT NOT NULL,
+  quantity INTEGER NOT NULL CHECK (quantity >= 1),
+  unit TEXT NOT NULL,
+  currency TEXT NOT NULL,
+  unit_price_minor INTEGER NOT NULL CHECK (unit_price_minor >= 0),
+  terms_digest TEXT NOT NULL,
+  spec_json TEXT NOT NULL,
+  offer_version INTEGER NOT NULL CHECK (offer_version >= 1),
+  valid_until TEXT,
+  quoted_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (merchant_id, negotiation_id, offer_id)
+);
+CREATE INDEX idx_published_offers_subject_sku
+  ON published_offers (merchant_id, subject_id, sku, quoted_at);
+`;
+
 export const CUSTOMER_MEMORY_LEDGER: ModuleLedgerSpec = {
   module: "customer-memory",
   ledgerTable: "customer_memory_schema_migrations",
-  migrations: { 1: DATA_GRANTS_V1, 2: SOURCE_GOVERNANCE_V2, 3: CUSTOMER_MEMORY_V3 },
+  migrations: { 1: DATA_GRANTS_V1, 2: SOURCE_GOVERNANCE_V2, 3: CUSTOMER_MEMORY_V3, 4: CUSTOMER_MEMORY_V4 },
 };
 
 export const LEARNING_LEDGER: ModuleLedgerSpec = {

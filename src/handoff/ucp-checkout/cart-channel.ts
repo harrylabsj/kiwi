@@ -92,6 +92,7 @@ export interface UcpCartChannelOptions {
   now?: () => string;
   /** 预建 checkout channel 时透传的授权提供方（cart 自身无 complete）。 */
   authorizationProvider?: AuthorizationProvider;
+  orderReceipts?: UcpCheckoutChannelOptions["orderReceipts"];
 }
 
 // ---------------------------------------------------------------------------
@@ -172,6 +173,7 @@ export class UcpCartChannel {
           headers: options.headers,
           now: options.now,
           authorizationProvider: options.authorizationProvider,
+          orderReceipts: options.orderReceipts,
         };
         if (options.profile !== undefined) checkoutOpts.profile = options.profile;
         this.checkout = new UcpCheckoutChannel(checkoutOpts);

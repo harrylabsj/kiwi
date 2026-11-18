@@ -677,6 +677,53 @@ describe("UcpCheckoutChannel state mapping", () => {
 // 4. totals 校验
 // ---------------------------------------------------------------------------
 
+it("reports only completed checkout orders with a matching session and terms", async () => {
+  const { ReceiptOutbox } = await import("../src/commerce/receipt/receipts.js");
+  const { ReceiptDispatcher } = await import("../src/commerce/receipt/dispatcher.js");
+  const { openOrderRecordStore } = await import("../src/handoff/order-record.js");
+  const orders = openOrderRecordStore({ dbPath: ":memory:" });
+  const outbox = new ReceiptOutbox({ dbPath: ":memory:", now: CLOCK });
+  const reports: string[] = [];
+  const dispatcher = new ReceiptDispatcher({
+    outbox,
+    submitter: { submit: async (event) => { reports.push(event.event_type); } },
+  });
+  let state = "incomplete";
+  let sessionId = "cs_1";
+  const { fetchImpl } = routerFetch([{
+    match: () => true,
+    handler: () => jsonResponse({
+      ucp: { status: "success", version: "2026-04-08" },
+      status: state, session_id: sessionId,
+      expires_at: "2026-08-06T18:00:00Z",
+      line_items: [{ sku: SKU, quantity: 200, unit_price: { currency: "CNY", amount_minor: 85000 } }],
+      order: { id: "channel-verified-order-1", permalink_url: "https://merchant.example/orders/1" },
+    }),
+  }]);
+  const channel = makeChannel(fetchImpl, {
+    endpoint: "https://merchant.example/checkout",
+    orderReceipts: { merchantId: "merchant-001", store: orders, dispatcher },
+  });
+  try {
+    const created = await channel.createSession(makePackage());
+    expect(created.status).toBe("ok");
+    expect(orders.count()).toBe(0);
+    state = "completed";
+    sessionId = "cs_wrong";
+    await channel.getSession("cs_1");
+    expect(orders.count()).toBe(0);
+    sessionId = "cs_1";
+    await channel.getSession("cs_1");
+    await channel.getSession("cs_1");
+    await dispatcher.drain();
+    expect(orders.count()).toBe(1);
+    expect(reports).toEqual(["merchant_order_created"]);
+  } finally {
+    outbox.close();
+    orders.close();
+  }
+});
+
 describe("UcpCheckoutChannel totals validation", () => {
   it("refuses completion when sum of non-total fields != total (no complete sent)", async () => {
     const server = new MockCheckoutServer();

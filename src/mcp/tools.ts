@@ -168,6 +168,13 @@ export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] 
           },
           idempotency_key: { type: "string", minLength: 1 },
           merchant_ids: { type: "array", items: { type: "string", minLength: 1 } },
+          reuse_history: {
+            type: "boolean",
+            description: tr(
+              "Reuse-last-spec revisit: query this merchant's previously published quotes for the buyer first (requires authorization); a unique match sends the standard RFQ with that SKU and this call's quantity. Explicit sku in intent takes precedence. No history / ambiguous / unsupported returns a clarification object instead of creating a task.",
+              "沿用上次规格回访：先按本店授权查询上次已发报价（需委托授权）；唯一匹配则以该 SKU 加本次数量走标准 RFQ。intent 已显式给 sku 时以新规格为准。无历史/多义/不支持时返回结构化 clarification，不创建任务。",
+            ),
+          },
         },
       },
       async handle(args) {
@@ -180,12 +187,14 @@ export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] 
               args.merchant_ids === undefined
                 ? undefined
                 : (args.merchant_ids as string[]).map(String),
+            reuse_history: args.reuse_history === undefined ? undefined : args.reuse_history === true,
           });
           return ok(
             JSON.stringify({
               task_id: result.task.task_id,
               task: result.task,
               created: result.created,
+              ...(result.reused_history !== undefined ? { reused_history: result.reused_history } : {}),
             }),
           );
         } catch (error) {

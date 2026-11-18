@@ -301,6 +301,7 @@ describe("reception responder", () => {
               need: { revision: 1, updatedAt: NOW },
             },
             reply: { response_id: "resp_1", reply_seq: 1 },
+            recognizedInquiry: true,
           };
         },
       },

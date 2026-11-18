@@ -115,7 +115,7 @@ describe("governance 运行时接线（M1 收尾）", () => {
     ).toEqual({ n: 0 });
     expect(
       dbA.prepare("SELECT COUNT(*) AS n FROM customer_memory_schema_migrations").get(),
-    ).toEqual({ n: 3 });
+    ).toEqual({ n: 4 }); // customer-memory v4（买家识别与交易回执）
     void again;
   });
 

@@ -232,6 +232,7 @@ describe("merchant inquiry via reception engine (P0a)", () => {
           text: "接待回复",
           conversation: conversationStub,
           reply: { response_id: "resp_1", reply_seq: 1 },
+          recognizedInquiry: true,
         };
       },
     };
@@ -278,6 +279,7 @@ describe("merchant inquiry via reception engine (P0a)", () => {
           text: "接待回复",
           conversation: conversationStub,
           reply: { response_id: "resp_1", reply_seq: 1 },
+          recognizedInquiry: true,
         };
       },
     };

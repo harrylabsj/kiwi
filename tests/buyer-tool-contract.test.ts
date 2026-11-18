@@ -61,15 +61,30 @@ describe("买方已发布工具契约（冻结）", () => {
     const current = toolsByName();
     for (const frozen of fixture.tools) {
       const schema = structuredClone(current.get(frozen.name)?.inputSchema);
+      if (frozen.name === "kiwi_search") {
+        const { region } = (schema as { properties: { region: { description: string } } }).properties;
+        expect(region.description).toBe(locale === "zh"
+          ? "此参数已弃用。Kiwi Network 在全球范围内搜索，到货时间另行确认。"
+          : "Ignored. Kiwi Network search is global. Confirm delivery timing separately.");
+        region.description = "Ignored. Kiwi Network search is global. Confirm delivery timing separately.";
+      }
       if (frozen.name === "kiwi_request_quotes") {
         const request = schema as {
-          properties: { intent: { properties: { items: { items: { properties: { query: { description: string } } } } } } };
+          properties: {
+            intent: { properties: { items: { items: { properties: { query: { description: string } } } } } };
+            reuse_history?: { description?: string };
+          };
         };
         const query = request.properties.intent.properties.items.items.properties.query;
         expect(query.description).toBe(description);
-        // Only this reviewed natural-language leaf is localized; all other
-        // keys, types, required fields, enums and numeric limits remain exact.
+        // Normalize the reviewed description while keeping schema constraints exact.
         query.description = "Short product word (e.g. thermos cup); matches catalog title/category via LIKE; long spec phrases may not match";
+        // K3 增量参数 reuse_history 同样带本地化说明（同规则：机器契约不变，
+        // 文案归一到 EN 基线）。
+        if (request.properties.reuse_history?.description !== undefined) {
+          request.properties.reuse_history.description =
+            "Reuse-last-spec revisit: query this merchant's previously published quotes for the buyer first (requires authorization); a unique match sends the standard RFQ with that SKU and this call's quantity. Explicit sku in intent takes precedence. No history / ambiguous / unsupported returns a clarification object instead of creating a task.";
+        }
       }
       expect(schema, `翻译改变机器契约：${frozen.name}`).toEqual(frozen.inputSchema);
     }

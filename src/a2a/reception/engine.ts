@@ -71,6 +71,38 @@ export interface ReceptionEngineResult {
   conversation: ReceptionConversation;
   /** 本条发布回复的身份（§16.1）：response_id 重试复用，reply_seq 按会话递增。 */
   reply: { response_id: string; reply_seq: number };
+  /**
+   * 确定性判定：本条输入是否构成一次有效询价（买家识别与交易回执 · K1）。
+   * 只有判定为询价且身份已验签时，业务边界才触发本店身份建档；搜索、
+   * 查任务、无关闲聊、空/非中文澄清都不建档。判定不依赖模型输出。
+   */
+  recognizedInquiry: boolean;
+}
+
+/**
+ * 确定性询价判定（不依赖模型）：商务主题词（价格/库存/交期）、数量、
+ * SKU 字样、商品/采购语义词、或序号/上次那款式的商品指代，任一命中即
+ * 视为询价意图。纯寒暄（你好/谢谢/在吗）不命中。
+ */
+export function isRecognizedInquiryText(text: string): boolean {
+  if (inferReceptionTopics(text).length > 0) return true;
+  if (parseChineseQuantity(text) !== undefined) return true;
+  if (/\d+\s*(?:个|件|只|瓶|箱|盒|台|套|包|袋|卷|米|克|千克|公斤|升|毫升)/.test(text)) return true;
+  if (/sku/i.test(text)) return true;
+  if (/商品|产品|货源|货品|采购|订购|购买|下单|样品|规格|型号|起订|批发|零售|上新|这款|那款|哪个款/.test(text)) return true;
+  if (/第[一二三四五六七八九十]+\s*[个款项]/.test(text)) return true;
+  return false;
+}
+
+/** 与 merchant-handler inferInquiryTopicsFromText 同源的本地主题判定（避免反向依赖）。 */
+function inferReceptionTopics(text: string): string[] {
+  const topics: string[] = [];
+  if (/价|多少钱|报价|便宜|优惠|折扣|price|cost|discount/i.test(text)) topics.push("price");
+  if (/库存|现货|有货|缺货|stock|inventory|availability/i.test(text)) topics.push("stock");
+  if (/交期|发货|送达|到货|多久|几天|多少天|\d+\s*(?:天|日)|delivery|eta|ship|lead.?time|arrive/i.test(text)) {
+    topics.push("delivery");
+  }
+  return topics;
 }
 
 export interface ReceptionEngine {
@@ -903,7 +935,15 @@ export function createMerchantReceptionEngine(
       dispatch_class: "automatic",
       status: "dispatched",
     });
-    return { plan, text, conversation, reply: { response_id: responseId, reply_seq: replySeq } };
+    return {
+      plan,
+      text,
+      conversation,
+      reply: { response_id: responseId, reply_seq: replySeq },
+      recognizedInquiry: input.structured?.sku !== undefined ||
+        (input.structured?.topics?.length ?? 0) > 0 ||
+        (input.text.trim() !== "" && isRecognizedInquiryText(input.text.trim())),
+    };
   }
 }
 

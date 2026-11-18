@@ -25,7 +25,9 @@
             "type": "string"
           },
           "region": {
-            "type": "string"
+            "type": "string",
+            "deprecated": true,
+            "description": "Ignored. Kiwi Network search is global. Confirm delivery timing separately."
           }
         }
       }
@@ -112,6 +114,10 @@
               "type": "string",
               "minLength": 1
             }
+          },
+          "reuse_history": {
+            "type": "boolean",
+            "description": "Reuse-last-spec revisit: query this merchant's previously published quotes for the buyer first (requires authorization); a unique match sends the standard RFQ with that SKU and this call's quantity. Explicit sku in intent takes precedence. No history / ambiguous / unsupported returns a clarification object instead of creating a task."
           }
         }
       }

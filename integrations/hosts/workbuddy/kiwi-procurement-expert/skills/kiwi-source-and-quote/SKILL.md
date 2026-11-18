@@ -85,6 +85,15 @@ Kiwi Network 搜索覆盖全球。调用 `kiwi_search` 时省略 `region`。有�
 
 需要具体 JSON 结构时读取 [询价示例](references/rfq-example.json)。示例是虚构数据，必须替换为用户已授权的需求和搜索返回的 merchant_ids。
 
+## 沿用上次规格（回访分支）
+
+用户说“上次那家店/上次那款，改成 N 个”时，走 `kiwi_request_quotes` 的 `reuse_history: true` 分支，**不要**先 `kiwi_search` 换店、也不要把历史报价当作本次选择：
+
+- `merchant_ids` 恰好指定那一家店（用户没有说明是哪家时先澄清）；`intent.items` 仍写商品词与**本次**数量，不需要 SKU。
+- 工具会在正式询价前按本店授权查询上次已发报价：唯一匹配 → 自动以该 SKU + 本次数量发出标准 RFQ，响应里的 `reused_history` 含上次价格、时间与有效期（向买家展示时注明“历史价仅供参考，本次价格以正式报价为准”）；本次实际价格只从本次报价读取。
+- 返回 `clarification_needed`（`history_unavailable` / `history_empty` / `history_ambiguous` / `history_merchant_required`）时不创建任务：向买家澄清后按普通询价重试。多义时把 `candidates` 列给买家选择，不要替买家挑第一款。
+- 用户已明确指定新 SKU 或新规格时，以用户本次要求为准，不使用 `reuse_history`。
+
 ## 结果与恢复
 
 记录返回的 `task_id`；通过 `kiwi_get_task` 查看状态、候选和错误。没有真实报价时只报告已发询价或等待结果，不能把请求预算当作报价。重连后使用已知任务 ID；用户没有提供 ID 时请其提供，当前 Kiwi 工具没有任务列表工具。

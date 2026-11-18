@@ -44,6 +44,7 @@
  * 才是状态权威。
  */
 
+import { ingestAndReportOrderRecord, type OrderReceiptReportInput } from "../order-receipts.js";
 import { validateTermSet, type TermSet } from "../../negotiation/domain/common.js";
 import { contentDigest } from "../../negotiation/jcs.js";
 import {
@@ -124,6 +125,8 @@ export interface UcpCheckoutChannelOptions {
    * `dev.ucp.shopping.cart` capability 时为 true；否则 false。显式传值可覆盖。
    */
   cartCapabilityVerified?: boolean;
+  /** Preconfigured merchant or scoped order adapter for this checkout channel. */
+  orderReceipts?: Omit<OrderReceiptReportInput, "source" | "now" | "channel">;
 }
 
 // ---------------------------------------------------------------------------
@@ -287,6 +290,8 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
   private readonly client: UcpCheckoutHttpClient;
   private readonly now: () => string;
   private readonly authorizationProvider: AuthorizationProvider;
+  private readonly orderReceipts?: UcpCheckoutChannelOptions["orderReceipts"];
+  private readonly orderChannel: string;
   /** cart_id 可用性（cart→checkout 路径；spec：cart_id 仅在 business profile 宣告 cart capability 时可用）。 */
   private readonly cartCapabilityVerified: boolean;
   /** 本地投影：只服务完成门禁（terms/digest 绑定）；远端 checkout 是状态权威。 */
@@ -297,6 +302,7 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
 
   constructor(options: UcpCheckoutChannelOptions = {}) {
     const endpoint = resolveEndpoint(options);
+    this.orderReceipts = options.orderReceipts;
     let client: UcpCheckoutHttpClient;
     try {
       client = new UcpCheckoutHttpClient({
@@ -316,6 +322,7 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
       );
     }
     this.client = client;
+    this.orderChannel = new URL(endpoint).hostname;
     this.now = options.now ?? (() => new Date().toISOString());
     this.authorizationProvider =
       options.authorizationProvider ?? new FailClosedAuthorizationProvider();
@@ -487,6 +494,7 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
       );
     }
 
+    if (mirror !== undefined && checkout.status === "completed") this.recordCompletedOrder(mirror, checkout);
     const session = this.projectTerminalState(ref, mirror, checkout);
     const ctx: ResultContext = {
       sessionRef: ref,
@@ -585,6 +593,7 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
 
     // 2. 状态映射（终态优先）。
     if (checkout.status === "completed") {
+      this.recordCompletedOrder(mirror, checkout);
       const session = this.markCompleted(mirror);
       return { status: "ok", session_ref: ref, session, checkout, checkout_status: "completed" };
     }
@@ -660,6 +669,7 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
     const completedCheckout = this.withEffectiveExpiry(complete.response, this.now());
     this.checkouts.set(ref, completedCheckout);
     if (completedCheckout.status === "completed") {
+      this.recordCompletedOrder(mirror, completedCheckout);
       const session = this.markCompleted(mirror);
       return {
         status: "ok",
@@ -780,6 +790,36 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
       terms_digest: termsDigest,
       checkout,
       created_at: this.now(),
+    });
+  }
+
+  private recordCompletedOrder(session: HandoffSession, checkout: UcpCheckoutSession): void {
+    const receipts = this.orderReceipts;
+    if (receipts === undefined || checkout.session_id !== session.session_ref) return;
+    if (!this.bindFreshCheckout(checkout, session.current_terms, session.current_terms_digest).ok) return;
+    const reference = checkout.reference as { agreement_id?: unknown; negotiation_id?: unknown } | undefined;
+    if ((reference?.agreement_id !== undefined && reference.agreement_id !== session.package.agreement_id) ||
+        (reference?.negotiation_id !== undefined && reference.negotiation_id !== session.package.negotiation_id)) return;
+    const order = checkout.order;
+    if (order === null || typeof order !== "object") return;
+    const { id, permalink_url } = order as { id?: unknown; permalink_url?: unknown };
+    if (typeof id !== "string" || typeof permalink_url !== "string") return;
+    const items = mapTermsToLineItems(session.current_terms);
+    if (!items.ok) return;
+    ingestAndReportOrderRecord({
+      ...receipts,
+      channel: this.orderChannel,
+      now: this.now,
+      source: {
+        order_id: id,
+        permalink_url,
+        line_items: items.items,
+        status: "completed",
+        terms_digest: session.current_terms_digest,
+        agreement_id: session.package.agreement_id,
+        negotiation_id: session.package.negotiation_id,
+        session_ref: session.session_ref,
+      },
     });
   }
 

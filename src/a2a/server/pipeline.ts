@@ -34,6 +34,7 @@
  */
 
 import { uuidv7 } from "../../negotiation/domain/identifiers.js";
+import { contentDigest } from "../../negotiation/jcs.js";
 import { NegotiationValidationError } from "../../negotiation/domain/common.js";
 import { validateEnvelope, verifyEnvelopeDigest } from "../../negotiation/domain/envelope.js";
 import type { NegotiationEnvelope } from "../../negotiation/domain/envelope.js";
@@ -52,6 +53,7 @@ import {
   schemaInvalid,
 } from "./errors.js";
 import { A2AServerThrottle, domainFromUcpProfile, type ThrottleRequest } from "./throttle.js";
+import { isQuoteHistoryRecall, parseHistoryQueryExtension } from "../../merchant-core/customer-memory/quote-history.js";
 import type { TrustLevel } from "../../trust/identity/trust-policy.js";
 import { isKnownTaskState, newArtifactId, newTaskId, TaskRegistry, type TaskOwner } from "./task-registry.js";
 import type {
@@ -338,6 +340,7 @@ export class InboundPipeline {
     envelope: NegotiationEnvelope,
     prior: { event: LedgerEvent },
     taskOverride?: A2ATask,
+    idempotencyDigest: string = envelope.digest,
   ): SendMessageResult {
     // 防御性 sender 一致性（fail-closed）：链上证据必须归属当前 sender——幂等
     // 主键是 (sender_identity, message_id)，他人消息的证据不得被当作自己的。
@@ -345,7 +348,10 @@ export class InboundPipeline {
     if (prior.event.identity.sender_identity !== senderIdentity) {
       throw internalServerError();
     }
-    if (prior.event.wire_digest !== envelope.digest) {
+    const priorRequestDigest = prior.event.outcome.kind === "ok"
+      ? prior.event.outcome.result?.request_digest ?? prior.event.wire_digest
+      : prior.event.wire_digest;
+    if (priorRequestDigest !== idempotencyDigest) {
       throw protocolError(
         "idempotency_conflict",
         `message_id ${envelope.message_id} already processed with a different digest (ledger evidence, §20.3)`,
@@ -361,7 +367,7 @@ export class InboundPipeline {
       this.idempotency.commit({
         sender_identity: senderIdentity,
         message_id: envelope.message_id,
-        digest: envelope.digest,
+        digest: idempotencyDigest,
         negotiation_id: envelope.negotiation_id,
         outcome: { kind: "ok", result: { task } },
         ledger_event_id: prior.event.event_id,
@@ -432,15 +438,38 @@ export class InboundPipeline {
 
       const senderIdentity = caller.senderIdentity;
       const key = idempotencyKey(senderIdentity, envelope.message_id);
+      // 买家识别与交易回执 · K2/A6：message metadata（如委托声明）不进 KNP
+      // envelope digest，但属于操作语义——同一 message ID 相同 KNP 内容但
+      // 不同委托不得被缓存为同一操作。无 metadata 时摘要与既有 wire digest
+      // 完全一致（零迁移影响）；携带 metadata 时取复合摘要。
+      const idempotencyDigest =
+        message.metadata === undefined
+          ? envelope.digest
+          : contentDigest({ envelope: envelope.digest, metadata: message.metadata } as never);
 
+      const privateHistoryRead = envelope.action === "inquiry" &&
+        (parseHistoryQueryExtension((envelope.payload as { subject?: unknown }).subject) !== undefined ||
+          isQuoteHistoryRecall(envelope.public_message ?? ""));
+      const contextFor = (taskId: string): InboundNegotiationContext => ({
+        envelope, message, taskId, contextId, senderIdentity,
+        identityVerified: caller.identityVerified === true,
+        remoteAddress: caller.clientAddress ?? caller.remoteAddress,
+        ucpAgentProfile: caller.ucpAgentProfile,
+      });
+      const freshHistory = async (context: InboundNegotiationContext): Promise<SendMessageResult> => {
+        const result = await this.handler.handle(context);
+        if (result.kind === "error") throw protocolError(result.protocolCode, result.message);
+        return { task: buildTask(result, context, this.now) };
+      };
       return await withKeyLock(`${this.coordinationScope}\0${key}`, async () => {
         // 5. 幂等三态判定（锁内重新判定，防 check/commit 并发窗口）。
         const decision = this.idempotency.check({
           sender_identity: senderIdentity,
           message_id: envelope.message_id,
-          digest: envelope.digest,
+          digest: idempotencyDigest,
         });
         if (decision.status === "replayed") {
+          if (privateHistoryRead) return freshHistory(contextFor(newTaskId()));
           return { task: outcomeToTask(decision.record.outcome) };
         }
         if (decision.status === "conflict") {
@@ -465,7 +494,17 @@ export class InboundPipeline {
         // 独立消息（sender 隔离），不得被他人消息的证据短路。
         const priorOnLedger = this.ledger.findByMessageId(envelope.message_id);
         if (priorOnLedger !== null && priorOnLedger.event.identity.sender_identity === senderIdentity) {
-          return this.recoverFromLedgerEvidence(senderIdentity, envelope, priorOnLedger);
+          const { outcome, wire_digest } = priorOnLedger.event;
+          const priorDigest = outcome.kind === "ok" ? outcome.result?.request_digest ?? wire_digest : wire_digest;
+          if (priorDigest !== idempotencyDigest) {
+            throw protocolError("idempotency_conflict", "ledger evidence has a different request digest");
+          }
+          const context = contextFor(priorOnLedger.event.remote_task_id ?? newTaskId());
+          const accept = envelope.action === "accept_nonbinding"
+            ? await this.handler.recoverAccept?.(context) : undefined;
+          const restoredTask = accept === undefined ? undefined : buildTask(accept, context, this.now);
+          const recovered = this.recoverFromLedgerEvidence(senderIdentity, envelope, priorOnLedger, restoredTask, idempotencyDigest);
+          return privateHistoryRead ? freshHistory(context) : recovered;
         }
 
         // 5.5 崩溃窗口守卫（T022）：若上一次处理"开始了但没留下提交记录"
@@ -473,7 +512,15 @@ export class InboundPipeline {
         // 可能在落账/提交之前就已对外产生副作用，例如已发出报价），改为明确要求
         // 对账（协议词表 reconciliation_required）。任何年龄的未知标记都阻断（见 store）。
         const inFlight = this.idempotency.readInFlight(senderIdentity, envelope.message_id);
-        if (inFlight !== null) {
+        const handlerCtx = contextFor(newTaskId());
+        let recoveredAccept: NegotiationHandlerResult | undefined;
+        if (inFlight !== null && inFlight.digest !== idempotencyDigest) {
+          throw protocolError("idempotency_conflict", "in-flight message has a different request digest");
+        }
+        if (inFlight !== null && envelope.action === "accept_nonbinding") {
+          recoveredAccept = await this.handler.recoverAccept?.(handlerCtx);
+        }
+        if (inFlight !== null && recoveredAccept === undefined && !privateHistoryRead) {
           throw protocolError(
             "reconciliation_required",
             `message_id ${envelope.message_id} has an unfinished attempt (started at ${inFlight.started_at}); ` +
@@ -490,27 +537,17 @@ export class InboundPipeline {
           throw err;
         }
         // 处理开始前落标记：标记随提交清除；进程若在此之前崩溃，标记会留下。
-        this.idempotency.markInFlight({
+        if (inFlight === null) this.idempotency.markInFlight({
           sender_identity: senderIdentity,
           message_id: envelope.message_id,
-          digest: envelope.digest,
+          digest: idempotencyDigest,
         });
 
         // 6. 路由给 NegotiationHandler。
-        const taskId = newTaskId();
-        const handlerCtx: InboundNegotiationContext = {
-          envelope,
-          message,
-          taskId,
-          contextId,
-          senderIdentity,
-          identityVerified: caller.identityVerified === true,
-          remoteAddress: caller.clientAddress ?? caller.remoteAddress,
-          ucpAgentProfile: caller.ucpAgentProfile,
-        };
+        const taskId = handlerCtx.taskId;
         let handlerResult: NegotiationHandlerResult;
         try {
-          handlerResult = await this.handler.handle(handlerCtx);
+          handlerResult = recoveredAccept ?? await this.handler.handle(handlerCtx);
         } catch (err) {
           this.logError(`negotiation handler "${this.handler.name}" failed`, err);
           throw internalServerError();
@@ -528,7 +565,12 @@ export class InboundPipeline {
         // 任务归属 = 本次调用的认证身份（T044）：匿名身份不参与私有任务，
         // 归属写入内存注册表并在 Ledger 事件里留存（恢复时据此过滤）。
         const task = buildTask(handlerResult, handlerCtx, this.now);
-        this.tasks.set(taskId, task, { identity: senderIdentity, identityVerified: caller.identityVerified === true });
+        const storedTask = privateHistoryRead ? { ...task, status: { state: task.status.state } } : task;
+        if (privateHistoryRead) {
+          delete storedTask.artifacts;
+        } else {
+          this.tasks.set(taskId, task, { identity: senderIdentity, identityVerified: caller.identityVerified === true });
+        }
 
         let ledgerEvent: LedgerEvent;
         try {
@@ -557,7 +599,7 @@ export class InboundPipeline {
             },
             wire_digest: envelope.digest,
             wire_payload: envelope as unknown as Record<string, unknown>,
-            outcome: { kind: "ok", result: { task_id: taskId, task_state: task.status.state } },
+            outcome: { kind: "ok", result: { task_id: taskId, task_state: task.status.state, request_digest: idempotencyDigest } },
             occurred_at: envelope.created_at,
           };
           ledgerEvent = this.segmentPayloads
@@ -582,7 +624,7 @@ export class InboundPipeline {
               this.logError("ledger duplicate but prior event unrecoverable", err);
               throw internalServerError();
             }
-            return this.recoverFromLedgerEvidence(senderIdentity, envelope, prior);
+            return this.recoverFromLedgerEvidence(senderIdentity, envelope, prior, undefined, idempotencyDigest);
           }
           this.logError("ledger append failed", err);
           throw internalServerError();
@@ -611,9 +653,9 @@ export class InboundPipeline {
           this.idempotency.commit({
             sender_identity: senderIdentity,
             message_id: envelope.message_id,
-            digest: envelope.digest,
+            digest: idempotencyDigest,
             negotiation_id: envelope.negotiation_id,
-            outcome: { kind: "ok", result: { task } },
+            outcome: { kind: "ok", result: { task: storedTask } },
             ledger_event_id: ledgerEvent.event_id,
             ledger_event_digest: ledgerEvent.event_digest,
           });
@@ -633,7 +675,8 @@ export class InboundPipeline {
           // agreement）。taskOverride 传本回合完整 task（含 message）。ledger
           // 守卫兜底：即使客户端重试，也命中恢复路径。
           this.logError("idempotency commit failed; recovering from ledger evidence", err);
-          return this.recoverFromLedgerEvidence(senderIdentity, envelope, { event: ledgerEvent }, task);
+          this.recoverFromLedgerEvidence(senderIdentity, envelope, { event: ledgerEvent }, storedTask, idempotencyDigest);
+          return { task };
         }
 
         return { task, ledgerEvent };

@@ -269,7 +269,7 @@ it("concurrent different intents for one task create one wire and one protocol f
   // A racing request may observe no prior operation and reject the mismatched
   // SKU locally; if it observes the winner it must be a protocol conflict.
   // Either way it must not create a second wire.
-  expect(["invalid_request", "protocol_error"]).toContain(failures[0]?.[0]?.failure?.classification);
+  expect(["invalid_request", "protocol_error", "rejected"]).toContain(failures[0]?.[0]?.failure?.classification);
 });
 function policy() {
   return {

@@ -39,6 +39,8 @@ export type McpErrorCode =
   | "merchant_declined"
   | "store_corrupted"
   | "legacy_ownership_unproven"
+  // 买家识别与交易回执 · K3：沿用上次规格的结构化澄清（不猜商品，不创建任务）。
+  | "clarification_needed"
   | "internal_error";
 
 const CODE_TO_JSON_RPC: Record<McpErrorCode, number> = {
@@ -61,6 +63,7 @@ const CODE_TO_JSON_RPC: Record<McpErrorCode, number> = {
   merchant_declined: -32000,
   store_corrupted: -32603,
   legacy_ownership_unproven: -32602,
+  clarification_needed: -32000,
   internal_error: -32603,
 };
 

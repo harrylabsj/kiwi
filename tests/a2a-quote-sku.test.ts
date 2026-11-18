@@ -71,7 +71,9 @@ describe("A2AQuoteFetcher：明确 SKU 不能被发现结果覆盖", () => {
     );
     expect(hits).toBe(0);
     expect(results[0]?.status).toBe("failed");
-    expect(results[0]?.failure?.classification).toBe("invalid_request");
+    // classification 受 persistent-task 冻结枚举约束（invalid_request 不在枚举内，
+// K3 回访实测暴露）；语义不变：商家不供应该 SKU → rejected。
+    expect(results[0]?.failure?.classification).toBe("rejected");
     expect(results[0]?.failure?.retryable).toBe(false);
   });
 
@@ -90,7 +92,9 @@ describe("A2AQuoteFetcher：明确 SKU 不能被发现结果覆盖", () => {
     ]);
     expect(hits).toBe(0);
     expect(results[0]?.status).toBe("failed");
-    expect(results[0]?.failure?.classification).toBe("invalid_request");
+    // classification 受 persistent-task 冻结枚举约束（invalid_request 不在枚举内，
+// K3 回访实测暴露）；语义不变：商家不供应该 SKU → rejected。
+    expect(results[0]?.failure?.classification).toBe("rejected");
     expect(results[0]?.failure?.retryable).toBe(false);
   });
 

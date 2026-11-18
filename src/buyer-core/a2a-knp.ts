@@ -191,12 +191,15 @@ export function buildClarificationEnvelope(input: ClarificationInput): Negotiati
   });
 }
 
-/** KNP envelope → A2A message（data part 承载 knp_envelope；1.0 帧由 client 编码）。 */
-export function envelopeToMessage(envelope: NegotiationEnvelope): A2AMessage {
+/** KNP envelope → A2A message（data part 承载 knp_envelope；1.0 帧由 client 编码）。
+ *  metadata（如 K2 委托声明）位于 A2A message 层——由请求体签名（content-digest）
+ *  覆盖，不进入严格校验的 KNP envelope 顶层（KNP §19.2）。 */
+export function envelopeToMessage(envelope: NegotiationEnvelope, metadata?: Record<string, unknown>): A2AMessage {
   return {
     role: "agent",
     messageId: envelope.message_id,
     parts: [{ kind: "data", data: { knp_envelope: envelope } }],
+    ...(metadata !== undefined ? { metadata } : {}),
   };
 }
 

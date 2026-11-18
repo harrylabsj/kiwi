@@ -105,6 +105,11 @@ export async function runHttpServe(args: string[]): Promise<number> {
     return 2;
   }
   const service = buildBuyerService({
+    openInquiryDirect: process.env.KIWI_OPEN_INQUIRY_DIRECT === "true",
+    ...(process.env.KIWI_QUOTE_HISTORY_DELEGATION === "true" ? { historyDelegation: {} } : {}),
+    ...(process.env.KIWI_RECEIPT_CATALOG_URL !== undefined
+      ? { commerceReceiptCatalogUrl: process.env.KIWI_RECEIPT_CATALOG_URL }
+      : {}),
     dbPath,
     principal,
     buyerAgentId: opts.buyerAgentId ?? process.env.KIWI_BUYER_AGENT ?? "buyer-agent:kiwi-http",

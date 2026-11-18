@@ -196,6 +196,11 @@ export async function runMcpServe(args: string[]): Promise<number> {
   // 稳定可跨宿主；dsh/Hermes 等 host 不传 --db 时也能落一致位置，不再依赖 cwd）。
   // 单核心多包装：MCP 与 HTTP 共用同一 buildBuyerService（§6.3）。
   const service = buildBuyerService({
+    openInquiryDirect: process.env.KIWI_OPEN_INQUIRY_DIRECT === "true",
+    ...(process.env.KIWI_QUOTE_HISTORY_DELEGATION === "true" ? { historyDelegation: {} } : {}),
+    ...(process.env.KIWI_RECEIPT_CATALOG_URL !== undefined
+      ? { commerceReceiptCatalogUrl: process.env.KIWI_RECEIPT_CATALOG_URL }
+      : {}),
     dbPath,
     principal,
     buyerAgentId,

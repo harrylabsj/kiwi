@@ -36,7 +36,7 @@ import {
   newMessageId,
   newOfferId,
 } from "../../negotiation/domain/identifiers.js";
-import { finalizeEnvelope } from "../../negotiation/domain/envelope.js";
+import { finalizeEnvelope, type NegotiationEnvelope } from "../../negotiation/domain/envelope.js";
 import { contentDigest } from "../../negotiation/jcs.js";
 import { evaluateConditionalOffer } from "../../negotiation/condition/evaluator.js";
 import { toMinorUnits as losslessToMinorUnits } from "../../protocol/legacy-shopping-negotiation/money.js";
@@ -55,6 +55,22 @@ import type {
 } from "./inquiry-interpreter.js";
 import type { ReceptionEngine } from "../reception/engine.js";
 import { calculateWorkbenchQuote } from "../../merchant/quote-calculator.js";
+import { isOpenInquiryIdentity } from "../open-inquiry-identity.js";
+import type {
+  CustomerIdentityWriter,
+  IdentityRegistrationRequest,
+} from "./customer-identity-gateway.js";
+import {
+  QuoteHistoryStore,
+  delegationFromMetadata,
+  parseHistoryQueryExtension, isQuoteHistoryRecall, quoteHistoryNote,
+  validateDelegationShape,
+} from "../../merchant-core/customer-memory/quote-history.js";
+import type { ReceiptDispatcher } from "../../commerce/receipt/dispatcher.js";
+import {
+  thumbprintFromOpenInquiryIdentity,
+  type EntryReceipt,
+} from "../../commerce/receipt/receipts.js";
 import {
   createNegotiationPhase,
   isTerminalPhase,
@@ -245,6 +261,11 @@ export function applyDiscountPercentMinor(priceMinor: number, discountPercent: n
   return Math.floor((priceMinor * numerator + 50) / 100);
 }
 
+export type QuoteHistoryAccess = Pick<QuoteHistoryStore, "checkActive" | "queryHistory"> & {
+  applyDelegation(input: Parameters<QuoteHistoryStore["applyDelegation"]>[0]): unknown;
+  indexOffer(input: Parameters<QuoteHistoryStore["indexOffer"]>[0]): unknown;
+};
+
 export interface MerchantHandlerOptions {
   ledger: LedgerStore;
   now: () => string;
@@ -298,6 +319,25 @@ export interface MerchantHandlerOptions {
         endsAt: string;
       }
     | undefined;
+  /**
+   * 买家识别与交易回执 · K1：验签买家的本店身份自动建档。
+   * 在正式 RFQ 受理（入参校验后）与判定为有效询价的 inquiry 后调用；
+   * 搜索、查任务、无关消息和被拒请求不建档。写者不可用时询价照常继续。
+   */
+  customerIdentity?: { merchantId: string; writer: CustomerIdentityWriter };
+  /**
+   * 买家识别与交易回执 · K2：委托与已发报价历史。委托随请求体签名覆盖的
+   * message metadata 到达；已发报价在 appendSent 后索引；历史查询扩展
+   * （KNP inquiry subject.kiwi_history_query）读前复核授权。任何委托/查询
+   * 失败都降级为“未委托/无历史”，绝不阻塞询价。
+   */
+  quoteHistory?: { store: QuoteHistoryAccess };
+  /**
+   * 买家识别与交易回执 · K5/K6：向 Catalog 上报商家侧事实的投递通道。
+   * 协议持久化后上报“协议已签发”；带入口的报价正式发出后上报“已提供
+   * 入口”。上报失败不阻塞业务（outbox 退避重试）。
+   */
+  commerceReceipts?: { merchantId: string; dispatcher: ReceiptDispatcher };
 }
 
 /**
@@ -548,7 +588,7 @@ const envelopeReply = (reply: ReturnType<typeof finalizeEnvelope>): NegotiationH
   },
 });
 
-/** 构造生产 merchant KNP handler。 */
+  /** 构造生产 merchant KNP handler。 */
 export function createMerchantHandler(options: MerchantHandlerOptions): NegotiationHandler {
   const { ledger, now, sender, counterparty } = options;
   const offerPriceMinor = options.offerPriceMinor ?? MERCHANT_OFFER_PRICE_MINOR;
@@ -601,6 +641,192 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
     "decline",
     "cancel",
   ]);
+
+  /**
+   * K1：验签开放询价身份的本店自动建档。仅在业务边界（正式受理 RFQ /
+   * 判定为有效询价）调用；写者不可用时静默继续（询价不被阻断、不承诺
+   * 已建档），spooled writer 会可靠重试。匿名/静态凭据/未验签不进入。
+   * 返回本店客户 subject（建档不可用时 undefined）。
+   */
+  const registerVerifiedCustomerIdentity = async (
+    ctx: InboundNegotiationContext,
+    source: IdentityRegistrationRequest["source"],
+  ): Promise<{ subject_id: string } | undefined> => {
+    const identity = options.customerIdentity;
+    if (identity === undefined) return undefined;
+    if (ctx.identityVerified !== true) return undefined;
+    if (!isOpenInquiryIdentity(ctx.senderIdentity)) return undefined;
+    try {
+      const outcome = await identity.writer.ensure({
+        merchant_id: identity.merchantId,
+        verified_actor: ctx.senderIdentity,
+        source,
+        negotiation_id: ctx.envelope.negotiation_id,
+        message_id: ctx.envelope.message_id,
+      });
+      if (outcome.status === "registered") return { subject_id: outcome.subject_id };
+      return undefined;
+    } catch {
+      // Writer 实现不应抛出（失败收敛为 unavailable）；防御性兜底不阻断询价。
+      return undefined;
+    }
+  };
+
+  /**
+   * K2：校验并登记 message metadata 携带的委托声明。失败一律静默降级为
+   * 未委托（旧客户端/未授权/过期均正常询价，不带出历史）。委托生效以
+   * 验签身份对应的本店客户主体为授权主体。
+   */
+  const applyDelegationFromMetadata = async (
+    ctx: InboundNegotiationContext,
+    subjectId: string | undefined,
+  ): Promise<void> => {
+    const history = options.quoteHistory;
+    if (history === undefined) return;
+    if (ctx.identityVerified !== true || !isOpenInquiryIdentity(ctx.senderIdentity)) return;
+    if (subjectId === undefined) return;
+    const raw = delegationFromMetadata(ctx.message.metadata);
+    if (raw === undefined) return;
+    const merchantId = options.customerIdentity?.merchantId;
+    if (merchantId === undefined) return;
+    const validated = validateDelegationShape(raw, merchantId, now());
+    if (!validated.ok) return;
+    try {
+      await history.store.applyDelegation({
+        merchant_id: merchantId,
+        buyer_actor: ctx.senderIdentity,
+        subject_id: subjectId,
+        delegation: validated.delegation,
+      });
+    } catch {
+      // 委托存储失败按未委托处理（静默；下一轮带新 message ID 的 RFQ 可重试）。
+    }
+  };
+
+  const indexHistoryOffer = async (
+    ctx: InboundNegotiationContext,
+    reply: NegotiationEnvelope,
+    product: ResolvedProductFacts,
+  ): Promise<void> => {
+    const store = options.quoteHistory?.store;
+    const merchantId = options.customerIdentity?.merchantId;
+    if (store === undefined || merchantId === undefined ||
+        ctx.identityVerified !== true || !isOpenInquiryIdentity(ctx.senderIdentity)) return;
+    const grant = store.checkActive({ merchant_id: merchantId, buyer_actor: ctx.senderIdentity });
+    if (grant === undefined) return;
+    type OfferTerms = {
+      items?: Array<{ sku: string; quantity: { value: number; unit: string }; unit_price?: { currency: string; amount_minor: number } }>;
+      valid_until?: string;
+    };
+    const payload = reply.payload as {
+      offer_id?: string; terms?: OfferTerms; proposed_terms?: OfferTerms; base_terms?: OfferTerms;
+    };
+    const terms = payload.terms ?? payload.proposed_terms ?? payload.base_terms;
+    const item = terms?.items?.[0];
+    if (payload.offer_id === undefined || terms === undefined || item?.unit_price === undefined) return;
+    try {
+      await store.indexOffer({
+        merchant_id: merchantId, subject_id: grant.subject_id,
+        negotiation_id: reply.negotiation_id, offer_id: payload.offer_id, message_id: reply.message_id,
+        sku: item.sku, quantity: item.quantity.value, unit: item.quantity.unit,
+        currency: item.unit_price.currency, unit_price_minor: item.unit_price.amount_minor,
+        terms_digest: contentDigest(terms),
+        spec: {
+          ...(product.source_evidence !== undefined ? {
+            source_evidence: product.source_evidence,
+            ...(product.title !== undefined ? { title: product.title } : {}),
+            ...(product.unit !== undefined ? { product_unit: product.unit } : {}),
+            ...(product.valid_until !== undefined ? { product_valid_until: product.valid_until } : {}),
+          } : {}),
+        },
+        ...(terms.valid_until !== undefined ? { valid_until: terms.valid_until } : {}),
+        quoted_at: reply.created_at,
+      });
+    } catch {
+      // History is optional when the merchant writer is temporarily unavailable.
+    }
+  };
+
+  /**
+   * K2：历史查询扩展入口（KNP inquiry subject.kiwi_history_query）。
+   * 未验签 / 未委托 / 扩展不支持时返回 undefined（走原接待路径，无泄漏）。
+   * 唯一入口返回结构化候选及来源；本次价格仍走正式 RFQ。
+   */
+  const resolveQuoteHistoryReply = async (
+    ctx: InboundNegotiationContext,
+  ): Promise<NegotiationHandlerResult | undefined> => {
+    const history = options.quoteHistory;
+    const merchantId = options.customerIdentity?.merchantId;
+    if (history === undefined || merchantId === undefined) return undefined;
+    if (ctx.identityVerified !== true || !isOpenInquiryIdentity(ctx.senderIdentity)) return undefined;
+    const inquiry = ctx.envelope.payload as { subject?: unknown } | undefined;
+    const extension = parseHistoryQueryExtension(inquiry?.subject);
+    if (extension === undefined) return undefined;
+    const authorization = history.store.checkActive({
+      merchant_id: merchantId,
+      buyer_actor: ctx.senderIdentity,
+    });
+    if (authorization === undefined) return undefined;
+    const hits = history.store.queryHistory({
+      merchant_id: merchantId,
+      subject_id: authorization.subject_id,
+      ...(extension.skus !== undefined ? { skus: extension.skus } : {}),
+      ...(extension.limit !== undefined ? { limit: extension.limit } : {}),
+    });
+    if (history.store.checkActive({
+      merchant_id: merchantId, buyer_actor: ctx.senderIdentity,
+    })?.subject_id !== authorization.subject_id) return undefined;
+    const historyData: Record<string, unknown> = {
+      type: "kiwi_quote_history",
+      version: 1,
+      hits: hits.map((hit) => ({
+        negotiation_id: hit.negotiation_id,
+        offer_id: hit.offer_id,
+        offer_version: hit.offer_version,
+        sku: hit.sku,
+        quantity: hit.quantity,
+        unit: hit.unit,
+        price: {
+          currency: hit.currency,
+          amount_minor: hit.unit_price_minor,
+        },
+        terms_digest: hit.terms_digest,
+        spec: hit.spec,
+        quoted_at: hit.quoted_at,
+        ...(hit.valid_until !== undefined ? { valid_until: hit.valid_until } : {}),
+      })),
+    };
+    const summary =
+      hits.length === 0
+        ? "本店没有可引用的已发报价历史；请直接发送正式询价（SKU、数量、单位）。"
+        : `找到 ${hits.length} 条上次报价记录（含时间与有效期）；本次价格请以正式 RFQ 返回为准。`;
+    const reply = seedEnvelope({
+      negotiation_id: ctx.envelope.negotiation_id,
+      in_reply_to: ctx.envelope.message_id,
+      actor: "merchant",
+      action: "clarification_response",
+      created_at: now(),
+      payload: {
+        type: "clarification_response",
+        answers: [
+          { code: "quote_history", value: hits.length > 0 ? "available" : "empty", note: summary },
+        ],
+      },
+      public_message: summary,
+    });
+    return {
+      kind: "accepted",
+      taskState: "completed",
+      message: {
+        role: "agent",
+        parts: [
+          { kind: "data", data: { knp_envelope: reply } },
+          { kind: "data", data: historyData },
+        ],
+        messageId: reply.message_id,
+      },
+    };
+  };
 
   /** 审查 BUG-10：把入站 action 映射到相位机事件并推进；非法转换（不在
    *  转换表内的组合）fail-closed 返回 false（调用方 decline state_conflict）。
@@ -727,6 +953,130 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
       occurred_at: now(),
     });
   };
+
+  // 买家识别与交易回执 · K4：商家协议持久化。
+  // 有效 accept 在相位推进前预写 `agreement_issued` 证据事件（商家协议号、
+  // 被接受报价、条款摘要、已验签买方绑定与完整协议结果）。相位与协议无法在
+  // 两次 append 间原子提交，因此按“预写证据补齐”：任一中断点重试都复用
+  // 同一商家协议号与摘要；终态但无证据的历史窗口保持拒绝（不生成替代协议）。
+
+  /** 查找本磋商已落账的协议证据（offer_id 与 terms_digest 强匹配）。 */
+  const findAgreementEvidence = (
+    negotiationId: string,
+    acceptedOfferId: string,
+    termsDigest: string,
+  ): { agreement: Record<string, unknown>; buyer_binding: string; accept_message_id: unknown; accept_wire_digest: unknown } | undefined => {
+    if (acceptedOfferId === "" || termsDigest === "") return undefined;
+    try {
+      for (const event of ledger.events(negotiationId)) {
+        if (event.event_kind !== "system") continue;
+        const result = event.outcome.kind === "ok" ? event.outcome.result : undefined;
+        if (result === undefined || result["kind"] !== "agreement_issued") continue;
+        const agreement = result["agreement"];
+        if (agreement === null || typeof agreement !== "object") continue;
+        const artifact = agreement as Record<string, unknown>;
+        const evidenceOffer = String(result["accepted_offer_id"] ?? artifact["accepted_offer_id"] ?? "");
+        if (evidenceOffer !== acceptedOfferId) continue;
+        if (String(artifact["terms_digest"] ?? "") !== termsDigest) continue;
+        return {
+          agreement: artifact,
+          buyer_binding: String(result["buyer_binding"] ?? ""),
+          accept_message_id: result["accept_message_id"],
+          accept_wire_digest: result["accept_wire_digest"],
+        };
+      }
+    } catch {
+      // 账本不可读：按无证据处理（后续路径各自 fail-closed）。
+    }
+    return undefined;
+  };
+
+  /** 预写协议证据（system 事件，append 原子）。 */
+  const appendAgreementEvidence = async (input: {
+    negotiationId: string;
+    agreement: Record<string, unknown>;
+    acceptedOfferId: string;
+    buyerBinding: string;
+    acceptMessageId: string;
+    acceptWireDigest: string;
+  }): Promise<void> => {
+    await ledger.append({
+      event_kind: "system",
+      negotiation_id: input.negotiationId,
+      agreement_id: String(input.agreement["agreement_id"] ?? ""),
+      terms_digest: String(input.agreement["terms_digest"] ?? ""),
+      identity: {
+        sender_identity: sender,
+        counterparty_identity: boundPeers.get(input.negotiationId) ?? counterparty,
+        actor: "merchant",
+      },
+      capability: { capability: MERCHANT_CAPABILITY, protocol_version: "1.0" },
+      outcome: {
+        kind: "ok",
+        result: {
+          kind: "agreement_issued",
+          agreement: input.agreement,
+          accepted_offer_id: input.acceptedOfferId,
+          buyer_binding: input.buyerBinding,
+          accept_message_id: input.acceptMessageId,
+          accept_wire_digest: input.acceptWireDigest,
+        },
+      },
+      occurred_at: now(),
+    });
+  };
+
+  const recordAgreementReceipt = (negotiationId: string, agreement: Record<string, unknown>, identity: string): void => {
+    const receipts = options.commerceReceipts;
+    const binding = thumbprintFromOpenInquiryIdentity(identity);
+    if (receipts === undefined || binding === undefined) return;
+    const agreementId = String(agreement.agreement_id);
+    void receipts.dispatcher.enqueueAndDeliver({
+      event_id: `merchant-agreement:${agreementId}`,
+      event_type: "merchant_agreement_issued",
+      merchant_id: receipts.merchantId,
+      negotiation_id: negotiationId,
+      merchant_agreement_id: agreementId,
+      accepted_offer_id: String(agreement.accepted_offer_id),
+      terms_digest: String(agreement.terms_digest),
+      buyer_binding: binding,
+      occurred_at: String(agreement.created_at),
+    }).catch(() => {});
+  };
+
+  const recoverReceipts = (): void => {
+    if (options.commerceReceipts === undefined) return;
+    for (const negotiationId of ledger.listNegotiations()) {
+      try {
+        const events = ledger.events(negotiationId);
+        const terminal = [...events].reverse().find((event) => event.state_transition !== undefined);
+        for (const event of events) {
+          if (event.event_kind === "message_sent" && event.wire_payload !== undefined) {
+            recordEntryReceipt(event.wire_payload as unknown as NegotiationEnvelope);
+          }
+          if (terminal?.state_transition?.to_phase !== "AGREEMENT_REACHED" || event.event_kind !== "system") continue;
+          const result = event.outcome.kind === "ok" ? event.outcome.result : undefined;
+          if (result?.kind === "agreement_issued" && result.agreement !== null && typeof result.agreement === "object") {
+            recordAgreementReceipt(negotiationId, result.agreement as Record<string, unknown>, String(result.buyer_binding ?? ""));
+          }
+        }
+      } catch {
+        // One unreadable negotiation must not prevent recovery of later entries.
+      }
+    }
+  };
+
+  /** 终态重放：证据命中时按原协议幂等返回（B6）。 */
+  const replayedAgreementResult = (agreement: Record<string, unknown>): NegotiationHandlerResult => ({
+    kind: "accepted",
+    taskState: "completed",
+    artifactParts: [{ kind: "data", data: { agreement } }],
+    message: {
+      role: "agent",
+      parts: [{ kind: "text", text: "Agreement reached (nonbinding)." }],
+      messageId: newMessageId(),
+    },
+  });
   // 每 negotiation 已解析的真实商品价（sku → {priceMinor, currency}），带
   // TTL（评审项 L3：此前永久累积、价格永不刷新——长驻 merchant 节点内存
   // 单调增长且价目陈旧）。
@@ -881,6 +1231,35 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
     };
   };
 
+  const recordEntryReceipt = (reply: NegotiationEnvelope): void => {
+    // K6：带成交入口的报价正式发出（message_sent 已落账）→ 上报“商家已
+    // 提供入口”（可早于协议，按报价引用关联）。预置公开链接与被拒绝审批
+    // 不触发——本函数只在正式报价发布路径上调用。上报失败不影响报价。
+    if (options.commerceReceipts !== undefined && ["offer", "counter_offer", "conditional_offer"].includes(reply.action)) {
+      const payload = reply.payload as {
+        terms?: { handoff_destination?: unknown };
+        proposed_terms?: { handoff_destination?: unknown };
+        base_terms?: { handoff_destination?: unknown };
+      };
+      const termsPayload = payload.terms ?? payload.proposed_terms ?? payload.base_terms;
+      if (termsPayload !== undefined && termsPayload.handoff_destination !== undefined) {
+        const entry: EntryReceipt = {
+          event_id: `merchant-entry:${reply.message_id}`,
+          event_type: "merchant_entry_offered",
+          merchant_id: options.commerceReceipts.merchantId,
+          entry_type: "quote_handoff",
+          quote_ref: {
+            negotiation_id: reply.negotiation_id,
+            offer_id: String((reply.payload as { offer_id?: unknown }).offer_id ?? ""),
+            terms_digest: contentDigest(termsPayload as never),
+          },
+          occurred_at: reply.created_at,
+        };
+        void options.commerceReceipts.dispatcher.enqueueAndDeliver(entry).catch(() => {});
+      }
+    }
+  };
+
   const appendSent = async (reply: ReturnType<typeof finalizeEnvelope>, snapshot?: QuoteSourceSnapshot): Promise<void> => {
     await ledger.append({
       event_kind: "message_sent",
@@ -903,6 +1282,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
       occurred_at: reply.created_at,
     });
     if (snapshot !== undefined) quoteSources.set(reply.negotiation_id, { offer_id: String((reply.payload as { offer_id?: unknown }).offer_id), snapshot });
+    recordEntryReceipt(reply);
     if (["offer", "counter_offer", "conditional_offer"].includes(reply.action)) {
       activeObjectByNegotiation.set(reply.negotiation_id, {
         offerId: String((reply.payload as { offer_id?: unknown }).offer_id),
@@ -1017,6 +1397,25 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
   }
   return {
     name: "kiwi-agent-serve-merchant",
+    async recoverAccept(ctx: InboundNegotiationContext): Promise<NegotiationHandlerResult | undefined> {
+      if (ctx.envelope.action !== "accept_nonbinding" || ctx.identityVerified !== true) return undefined;
+      const { negotiation_id, message_id, digest } = ctx.envelope;
+      const payload = ctx.envelope.payload as { offer_id: string; terms_digest: string };
+      const evidence = findAgreementEvidence(negotiation_id, payload.offer_id, payload.terms_digest);
+      if (evidence === undefined || evidence.buyer_binding !== ctx.senderIdentity ||
+          evidence.accept_message_id !== message_id || evidence.accept_wire_digest !== digest) return undefined;
+      syncPhaseFromLedger(negotiation_id);
+      const phase = phaseStateByNegotiation.get(negotiation_id)?.phase;
+      if (phase === "OFFER_OPEN") {
+        boundPeers.set(negotiation_id, ctx.senderIdentity);
+        await appendPhaseTransition(negotiation_id, "AGREEMENT_REACHED", phase);
+      } else if (phase !== "AGREEMENT_REACHED") {
+        return undefined;
+      }
+      recordAgreementReceipt(negotiation_id, evidence.agreement, evidence.buyer_binding);
+      return replayedAgreementResult(evidence.agreement);
+    },
+    recoverReceipts,
     async handle(ctx: InboundNegotiationContext): Promise<NegotiationHandlerResult> {
       return serialize(ctx.envelope.negotiation_id, async () => {
       const envelope = ctx.envelope;
@@ -1043,6 +1442,21 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
         (closedNegotiations.has(negotiationId) ||
           (syncedPhase !== undefined && isTerminalPhase(syncedPhase)))
       ) {
+        // K4：accept 重放是幂等恢复不是重开——预写证据命中（同 offer、同摘要）
+        // 时按原商家协议号与摘要返回原协议；无证据（历史窗口/伪造重放）仍拒绝。
+        if (envelope.action === "accept_nonbinding" && syncedPhase === "AGREEMENT_REACHED") {
+          const payload = envelope.payload as { offer_id?: unknown; terms_digest?: unknown };
+          const evidence = findAgreementEvidence(
+            negotiationId,
+            typeof payload.offer_id === "string" ? payload.offer_id : "",
+            typeof payload.terms_digest === "string" ? payload.terms_digest : "",
+          );
+          if (evidence !== undefined && (evidence.buyer_binding === "" ||
+              (ctx.identityVerified === true && evidence.buyer_binding === ctx.senderIdentity))) {
+            recordAgreementReceipt(negotiationId, evidence.agreement, evidence.buyer_binding);
+            return replayedAgreementResult(evidence.agreement);
+          }
+        }
         return declineReply("state_conflict");
       }
 
@@ -1251,6 +1665,13 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           }
           // P0a：inquiry 与普通 A2A 文本统一走接待引擎——结构化 SKU 是协议
           // 数据（权威），自由文本只是补充；引擎故障回退既有确定性路径。
+          // K2：带历史查询扩展的 inquiry 先走授权历史查询（未委托/未验签/
+          // 扩展不支持时返回 undefined → 走原接待路径）。
+          const historyReply = await resolveQuoteHistoryReply(ctx);
+          if (historyReply !== undefined) return historyReply;
+          if (parseHistoryQueryExtension((ctx.envelope.payload as { subject?: unknown }).subject) !== undefined) {
+            return textReply("历史报价不可用，请提供商品规格后继续询价。");
+          }
           if (options.reception !== undefined) {
             try {
               const received = await options.reception.engine.respond({
@@ -1272,7 +1693,20 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
                     }
                   : {}),
               });
-              return textReply(received.text);
+              // K1：接待引擎判定为有效询价后才建档（空文本/无关消息的澄清
+              // 不建档）。结构化 inquiry（带 sku）由引擎判 recognizedInquiry。
+              if (received.recognizedInquiry) {
+                const registered = await registerVerifiedCustomerIdentity(ctx, "inquiry");
+                await applyDelegationFromMetadata(ctx, registered?.subject_id);
+              }
+              const history = options.quoteHistory?.store;
+              const merchantId = options.customerIdentity?.merchantId;
+              const historyNote = history !== undefined && merchantId !== undefined &&
+                ctx.identityVerified === true && isOpenInquiryIdentity(ctx.senderIdentity) &&
+                isQuoteHistoryRecall(buyerMessage ?? "")
+                ? quoteHistoryNote(history, { merchantId, actor: ctx.senderIdentity, sku: structuredSku })
+                : "";
+              return textReply(received.text + historyNote);
             } catch {
               // 接待引擎不可用：回退确定性组装（下述既有路径）。
             }
@@ -1482,6 +1916,9 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             ),
           );
           await appendSent(reply, snapshotFor(sku, quantity, product, promotion));
+          const registeredSubject = await registerVerifiedCustomerIdentity(ctx, "rfq");
+          await applyDelegationFromMetadata(ctx, registeredSubject?.subject_id);
+          await indexHistoryOffer(ctx, reply, product);
           return envelopeReply(reply);
         }
         case "offer": {
@@ -1568,6 +2005,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             ),
           );
           await appendSent(reply, snapshotFor(sku, quantity, product, promotion));
+          await indexHistoryOffer(ctx, reply, product);
           return envelopeReply(reply);
         }
         case "counter_offer": {
@@ -1821,6 +2259,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           });
           if (!advanced) return declineReply("state_conflict");
           await appendSent(reply, snapshotFor(sku, quantity, product, authorityPromotion));
+          await indexHistoryOffer(ctx, reply, product);
           return envelopeReply(reply);
         }
         case "clarification": {
@@ -2040,24 +2479,41 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           }
           // 审查 P1-C：相位机是权威守卫——§15 校验通过后、构建协议之前先
           // 推进相位并检查返回值（BUG-10 语义不变：被拒的 accept 不得进入
-          // AGREEMENT_REACHED）。推进失败（如 AWAITING_CLARIFICATION 下直接
-          // accept）fail-closed：不返回协议、不进 closedNegotiations、不删
-          // conditional，无任何终态副作用——此前忽略返回值，协议照发但相位
-          // 机拒绝推进；进程内 closedNegotiations 挡住二次 accept，重启恢复
-          // 后相位重建为 AWAITING_CLARIFICATION，二次 accept 产出重复协议。
+          // AGREEMENT_REACHED）。accept 的唯一合法来源相位是 OFFER_OPEN，
+          // 先判相位：拒绝路径不产生任何协议证据（无终态副作用）。
+          const phaseBeforeAccept = phaseStateByNegotiation.get(negotiationId)?.phase ?? "OPEN";
+          if (phaseBeforeAccept !== "OFFER_OPEN") {
+            return declineReply("state_conflict");
+          }
+          // K4：预写证据补齐——先复用/生成协议，落账证据，再推进相位。
+          // 任一中断点重试都复用同一商家协议号与摘要（B6）。
+          const priorEvidence = findAgreementEvidence(negotiationId, acceptedOfferId, presentedDigest);
+          const agreement = priorEvidence?.agreement ??
+            buildAgreement({
+              negotiation_id: negotiationId,
+              accepted_offer_id: acceptedOfferId,
+              agreed_terms: agreedTerms,
+              created_at: now(),
+            });
+          if (priorEvidence === undefined) {
+            await appendAgreementEvidence({
+              negotiationId,
+              agreement,
+              acceptedOfferId,
+              buyerBinding: ctx.identityVerified === true ? ctx.senderIdentity : "",
+              acceptMessageId: envelope.message_id,
+              acceptWireDigest: envelope.digest,
+            });
+          }
           const advanced = await advancePhase(negotiationId, {
             type: "accept_nonbinding",
             offer_id: acceptedOfferId,
           });
           if (!advanced) {
+            // OFFER_OPEN 前置判定后推进不会失败；防御性兜底保持 fail-closed。
             return declineReply("state_conflict");
           }
-          const agreement = buildAgreement({
-            negotiation_id: negotiationId,
-            accepted_offer_id: acceptedOfferId,
-            agreed_terms: agreedTerms,
-            created_at: now(),
-          });
+          recordAgreementReceipt(negotiationId, agreement, ctx.identityVerified === true ? ctx.senderIdentity : "");
           const artifactPart: A2APart = { kind: "data", data: { agreement } };
           const message: A2AMessage = {
             role: "agent",

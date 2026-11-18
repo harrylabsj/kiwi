@@ -26,6 +26,7 @@
  *   - 全部身份为测试身份；证据只写临时目录；不触碰生产与真实凭据。
  */
 import { execFile, spawn } from "node:child_process";
+import { once } from "node:events";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request as httpsRequest } from "node:https";
@@ -74,6 +75,7 @@ const cleanups: Array<() => void> = [];
 let EVIDENCE = "";
 let state: {
   grant: string;
+  catalogProcess: ReturnType<typeof spawn>;
   catalog: CatalogClient;
   runtimeDir: string;
   flagFile: string;
@@ -343,6 +345,11 @@ describe("three-party open-inquiry cross-process E2E", () => {
     // 与其他并发测试(demo-runner 等)的目录环境完全隔离,且 pristine sibling
     // 内绝不产生 .venv/缓存(npm-shipping 守卫要求 sibling 连 ignored 文件都干净)。
     const e2eVenv = path.join(EVIDENCE, "e2e-venv");
+    const preinstalledPython = process.env.KIWI_CATALOG_E2E_PYTHON;
+    if (preinstalledPython !== undefined && (!path.isAbsolute(preinstalledPython) || !existsSync(preinstalledPython))) {
+      throw new Error("KIWI_CATALOG_E2E_PYTHON must point to an existing isolated interpreter");
+    }
+    const catalogPython = preinstalledPython ?? path.join(e2eVenv, "bin", "python");
     const e2eUvEnv = { ...process.env,
       UV_PROJECT_ENVIRONMENT: e2eVenv, UV_CACHE_DIR: path.join(EVIDENCE, "uv-cache") };
     // 目录检出必须保持字节级干净：npm-shipping 守卫要求 sibling 连 ignored 文件
@@ -360,10 +367,12 @@ describe("three-party open-inquiry cross-process E2E", () => {
     const seed = path.join(EVIDENCE, "seed.py");
     writeFileSync(seed, SEED_PY.replaceAll("<CATALOG_REPO>", CATALOG_WORK));
     // 专属 venv 需含 API 栈(uvicorn/FastAPI):先按 locked 契约同步 --extra api。
-    await run("uv", ["sync", "--locked", "--extra", "api"], { cwd: CATALOG_WORK, env: e2eUvEnv });
+    if (preinstalledPython === undefined) {
+      await run("uv", ["sync", "--locked", "--extra", "api"], { cwd: CATALOG_WORK, env: e2eUvEnv });
+    }
     const { canonicalize } = await import("../src/negotiation/jcs.js");
     const approvedDigest = `sha256:${createHash("sha256").update(canonicalize(E2E_CARD as unknown as Record<string, unknown>), "utf8").digest("hex")}`;
-    const seedOut = await run("uv", ["run", "--locked", "python", seed, EVIDENCE,
+    const seedOut = await run(catalogPython, [seed, EVIDENCE,
       JSON.stringify(runtimeJwk), approvedDigest], {
       cwd: CATALOG_WORK,
       env: { ...e2eUvEnv, KIWI_CATALOG_OWNER_TOKEN_SECRET: "e2e-owner-secret-not-real" },
@@ -410,7 +419,7 @@ describe("three-party open-inquiry cross-process E2E", () => {
       attemptLogs.push(`--- attempt ${attempt} ---`);
       // 直接用专属 venv python:uv run 的孙进程在 SIGTERM 下可能存活并占用
       // 端口,直启让 kill 精确命中 uvicorn 本体(仅本测试记录的子进程)。
-      catalogChild = spawn(path.join(e2eVenv, "bin", "python"), [driver,
+      catalogChild = spawn(catalogPython, [driver,
         path.join(EVIDENCE, "catalog.sqlite"), catalogCert, path.join(EVIDENCE, "catalog.key")], {
         cwd: CATALOG_WORK,
         env: {
@@ -513,7 +522,7 @@ describe("three-party open-inquiry cross-process E2E", () => {
       return response;
     };
     state = {
-      grant,
+      grant, catalogProcess: catalogChild!,
       catalog: new CatalogClient({ baseUrl: CATALOG_ORIGIN, fetchImpl: debugFetch }),
       runtimeDir, flagFile, merchantEvidence,
       bindingId: "",
@@ -642,6 +651,24 @@ describe("three-party open-inquiry cross-process E2E", () => {
     expect(evidence.some((row) => row.sharecode_on_wire && row.code_valid === false)).toBe(false);
     expect(JSON.stringify(evidence)).not.toContain(SHARE_SECRET);
   });
+
+  it("whole Catalog process offline: the active relay does not retry against the merchant directly", async () => {
+    await state!.catalog.setPublicInquiryConsent(state!.context, state!.identity, true);
+    const route = await state!.buyer.get(AGENT_ID, MERCHANT_ID);
+    expect(route).not.toBeNull();
+    const client = buildA2AClient(route!.endpoint, {
+      signer: route!.signer, skipDnsCheck: true, fetchImpl: route!.fetchImpl,
+    });
+    const request = { role: "user" as const, messageId: "relay-before-outage", parts: [{ kind: "text" as const, text: "请报价" }] };
+    expect((await client.sendMessage(request)).id).toBeTruthy();
+    const before = readFileSync(state!.merchantEvidence, "utf8");
+    const exited = once(state!.catalogProcess, "exit");
+    state!.catalogProcess.kill("SIGTERM");
+    await exited;
+    await expect(client.sendMessage({ ...request, messageId: "relay-during-outage" })).rejects.toThrow();
+    expect(readFileSync(state!.merchantEvidence, "utf8")).toBe(before);
+  });
+
 });
 
 function recording(fetchImpl: typeof fetch): typeof fetch {

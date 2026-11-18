@@ -54,6 +54,10 @@ async function main(){
   const baselineRaw=JSON.parse(readFileSync(join(packageRoot,'mcp-tools-0.12.12.json'),'utf8'));
   const baseline=Array.isArray(baselineRaw)?baselineRaw:baselineRaw.tools;
   if(!Array.isArray(baseline)||baseline.length!==13)throw new Error('TOOL_BASELINE_INVALID');
+  if (backendEnvironment.KIWI_QUOTE_HISTORY_DELEGATION === 'true') {
+    const quoteTool = baseline.find(tool => tool.name === 'kiwi_request_quotes');
+    quoteTool.inputSchema.properties.reuse_history = {type:'boolean'};
+  }
   const cliPath=join(packageRoot,'buyer-session-cli.mjs');
   async function rejectUnanchoredCache(signal,deadlineEpochMs){
     ensureBuyerCacheDirectory(store);

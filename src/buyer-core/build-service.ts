@@ -24,6 +24,8 @@
 
 import path from "node:path";
 import { McpError } from "./errors.js";
+import { ReceiptDispatcher } from "../commerce/receipt/dispatcher.js";
+import { BuyerReceiptSubmitter } from "../commerce/receipt/receipts.js";
 
 import { assertNorthboundContractValid } from "../contracts/northbound-schema.js";
 import { BuyerFollowsSource } from "../discovery/catalog-source/buyer-follows.js";
@@ -31,7 +33,7 @@ import { MerchantAccessSource } from "../discovery/catalog-source/merchant-acces
 import { buildWorkbuddyDualAddress } from "../a2a/access/workbuddy-address.js";
 import { loadOrCreateA2aSigningIdentity } from "../a2a/signing-key.js";
 import { HttpMessageSigner } from "../trust/identity/index.js";
-import { loadOpenInquirySigner } from "./open-inquiry-signer.js";
+import { loadOpenInquiryIdentity, loadOpenInquirySigner } from "./open-inquiry-signer.js";
 import { OpenInquirySource, type OpenInquiryRoute } from "../discovery/catalog-source/open-inquiry.js";
 import { officialCatalogTrust } from "../discovery/catalog-source/official-catalog-trust.js";
 import { KiwiCatalogSource } from "../discovery/catalog-source/kiwi-source.js";
@@ -40,6 +42,7 @@ import { OpenInquiryRouteStore } from "./open-inquiry-route-store.js";
 import { BuyerRouteHintStore } from "./buyer-route-hint-store.js";
 import type { MerchantAccessResolver, MerchantAccessTransport } from "./a2a-quote-fetcher.js";
 import { A2ANegotiator } from "./a2a-negotiator.js";
+import type { KiwiBuyerServiceOptions } from "./service.js";
 import { A2AQuoteFetcher } from "./a2a-quote-fetcher.js";
 import { KiwiCatalogMerchantIndex, MarketplaceMerchantIndex } from "./merchant-index.js";
 import { MarketplaceNegotiator } from "./negotiator.js";
@@ -102,6 +105,29 @@ export interface BuyerServiceConfig {
    * 并持久化（0600），重启不换钥。
    */
   a2aSigningKeyDir?: string;
+  /**
+   * 买家识别与交易回执 · K2：企业一次委托——允许被询价供应商记住双方的
+   * 规格与报价（范围本店、询报价用途、有效期）。缺省关闭（旧客户端语义）。
+   * merchantIds 缺省 = 对全部商家随已签名 RFQ 附带委托声明。
+   */
+  historyDelegation?: {
+    merchantIds?: string[];
+    ttlDays?: number;
+    buyerAgentId?: string;
+  };
+  /**
+   * 买家识别与交易回执 · K5/K6：买方向 Catalog 上报意向/入口回执的配置。
+   * catalogUrl 缺省关闭；binding 缺省 = 回执签名钥 thumbprint（须与商家
+   * 记录的已验签身份同口径）。回执接口故障不阻塞本地采购流程。
+   */
+  commerceReceipts?: {
+    catalogUrl: string;
+    /** Ed25519 PEM 签名密钥对（本次磋商的凭据）。 */
+    publicKeyPem: string;
+    privateKeyPem: string;
+  };
+  commerceReceiptCatalogUrl?: string;
+  openInquiryDirect?: boolean;
   /** Test/embedding override for on-demand stale-merchant wake probes. */
   staleWake?: (merchant: MerchantRecord) => Promise<boolean>;
 }
@@ -465,6 +491,9 @@ export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService 
     // B-05：可选的出站签名身份。没有它时 WorkBuddy 商家只能走到匿名 T0，
     // 受保护操作（任务回读等）会被商家按策略拒绝——这是刻意的 fail-closed。
     const signer = (() => {
+      if (config.openInquiryDirect === true && protocolStateDir !== undefined) {
+        return loadOpenInquirySigner(protocolStateDir, config.principal, config.buyerAgentId);
+      }
       if (config.a2aSigningKeyDir === undefined || config.a2aSigningKeyDir === "") return undefined;
       const identity = loadOrCreateA2aSigningIdentity(config.a2aSigningKeyDir, config.buyerAgentId);
       return new HttpMessageSigner({
@@ -493,6 +522,8 @@ export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService 
       skipDnsCheck: config.a2aSkipDnsCheck,
       timeoutMs: config.a2aTimeoutMs,
       ...(config.rfqPublicMessage !== undefined ? { publicMessage: config.rfqPublicMessage } : {}),
+      // 买家识别与交易回执 · K2：企业配置的委托（允许供应商记住双方询报价）。
+      ...(config.historyDelegation !== undefined ? { historyDelegation: config.historyDelegation } : {}),
     };
     quoteFetcher = new A2AQuoteFetcher(a2a);
     negotiator = new A2ANegotiator({
@@ -511,6 +542,29 @@ export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService 
   // is empirically verified; tests inject staleWake explicitly.
   const staleWake = config.staleWake;
   let serviceRef: KiwiBuyerService | undefined;
+  // 买家识别与交易回执 · K5/K6：买方回执 outbox + 调度器（可选）。
+  let commerceReceipts: KiwiBuyerServiceOptions["commerceReceipts"] | undefined;
+  const receiptConfig = config.commerceReceipts ?? (
+    config.commerceReceiptCatalogUrl !== undefined && protocolStateDir !== undefined
+      ? { catalogUrl: config.commerceReceiptCatalogUrl, ...loadOpenInquiryIdentity(protocolStateDir, config.principal, config.buyerAgentId) }
+      : undefined
+  );
+  if (receiptConfig !== undefined) {
+    const submitter = new BuyerReceiptSubmitter({
+      catalogUrl: receiptConfig.catalogUrl,
+      publicKeyPem: receiptConfig.publicKeyPem,
+      privateKeyPem: receiptConfig.privateKeyPem,
+    });
+    const outbox = store.createReceiptOutbox(JSON.stringify([submitter.buyerBinding, receiptConfig.catalogUrl]));
+    const dispatcher = new ReceiptDispatcher({
+      outbox, submitter,
+      logError: (message) => process.stderr.write(`[kiwi] ${message}\n`),
+    });
+    dispatcher.kick();
+    const retryTimer = setInterval(() => dispatcher.kick(), 30_000);
+    retryTimer.unref();
+    commerceReceipts = { dispatcher, binding: submitter.buyerBinding };
+  }
   const serviceInstance = new KiwiBuyerService({
     store,
     principal: config.principal,
@@ -522,6 +576,7 @@ export function buildBuyerService(config: BuyerServiceConfig): KiwiBuyerService 
     ...(quoteFetcher !== undefined ? { quoteFetcher } : {}),
     ...(negotiator !== undefined ? { negotiator } : {}),
     ...(followsClient !== undefined ? { followsClient } : {}),
+    ...(commerceReceipts !== undefined ? { commerceReceipts } : {}),
     ...(staleWake !== undefined ? { staleWake } : {}),
   });
   serviceRef = serviceInstance;

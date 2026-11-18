@@ -274,6 +274,14 @@ export async function startTestA2aStack(
     now?: () => string;
     /** Test-only replacement handler (raw A2A failure modes). */
     handler?: { name: string; handle(ctx: never): Promise<never> };
+    /**
+     * 买家识别与交易回执 · K2/K3：接入报价历史（state.sqlite 建档 + 索引 +
+     * 授权查询）。identityWriter 缺省真实建档（state.sqlite）。
+     */
+    quoteHistory?: true;
+    merchantId?: string;
+    /** K3 回访场景：目录里另一 SKU 的 listing（排在首位结果之后）。 */
+    extraListing?: Record<string, unknown>;
   } = {},
 ): Promise<{
   catalogUrl: string;
@@ -295,6 +303,24 @@ export async function startTestA2aStack(
   const ledger = new LedgerStore({ dir: merchantDir, now: stackNow });
   const idempotency = new IdempotencyStore({ dir: merchantDir, now: stackNow });
   const holder = { baseUrl: "http://127.0.0.1:0" };
+  // K2/K3：报价历史（本地 writer + store 挂到 merchant state.sqlite）。
+  const stackHolder: { identityWriter?: unknown; merchantId?: string; extraListing?: Record<string, unknown> } = {};
+  if (options.extraListing !== undefined) stackHolder.extraListing = options.extraListing;
+  let quoteHistoryStore: import("../src/merchant-core/customer-memory/quote-history.js").QuoteHistoryStore | undefined;
+  if (options.quoteHistory === true) {
+    const { DatabaseSync } = await import("node:sqlite");
+    const { registerGovernanceLedgers } = await import("../src/merchant-core/migrations/ledgers.js");
+    const { LocalCustomerIdentityWriter } = await import("../src/a2a/server/customer-identity-gateway.js");
+    const { QuoteHistoryStore } = await import("../src/merchant-core/customer-memory/quote-history.js");
+    const db = new DatabaseSync(path.join(merchantDir, "state.sqlite"));
+    registerGovernanceLedgers(db);
+    quoteHistoryStore = new QuoteHistoryStore({ db, now: stackNow });
+    stackHolder.identityWriter = new LocalCustomerIdentityWriter({
+      dbPath: path.join(merchantDir, "state.sqlite"),
+      now: stackNow,
+    });
+    stackHolder.merchantId = options.merchantId ?? "mkt-test-merchant";
+  }
   const inner = createMerchantHandler({
     ledger,
     now: stackNow,
@@ -306,6 +332,15 @@ export async function startTestA2aStack(
     ...(options.negotiationApprovals !== undefined
       ? { negotiationApprovals: options.negotiationApprovals }
       : {}),
+    ...(stackHolder.identityWriter !== undefined
+      ? {
+          customerIdentity: {
+            merchantId: stackHolder.merchantId as string,
+            writer: stackHolder.identityWriter as never,
+          },
+        }
+      : {}),
+    ...(quoteHistoryStore !== undefined ? { quoteHistory: { store: quoteHistoryStore } } : {}),
   });
   const handler = options.handler ?? (options.capture !== undefined
     ? {
@@ -318,6 +353,9 @@ export async function startTestA2aStack(
             action: String(ctx.envelope.action ?? ""),
             senderIdentity: ctx.senderIdentity,
             envelope: ctx.envelope as unknown as Record<string, unknown>,
+            ...(ctx as { message?: unknown }).message !== undefined
+              ? { message: (ctx as { message?: unknown }).message as Record<string, unknown> }
+              : {},
           });
           return inner.handle(ctx as never);
         },
@@ -417,7 +455,13 @@ export async function startTestA2aStack(
       return;
     }
     if (url.includes("/v1/listings/search")) {
-      res.end(JSON.stringify({ results: [listingSearchResult], next_cursor: "" }));
+      // K3：可选的第二个 listing（extraListing）——目录匹配列表第一项为另一
+      // SKU 的回访场景（A5）。默认不启用，既有套件零影响。
+      const results =
+        stackHolder.extraListing !== undefined
+          ? [listingSearchResult, stackHolder.extraListing]
+          : [listingSearchResult];
+      res.end(JSON.stringify({ results, next_cursor: "" }));
       return;
     }
     if (url.includes("/v1/listings/")) {

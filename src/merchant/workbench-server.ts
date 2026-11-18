@@ -11,6 +11,7 @@
  * 一致，独立部署暴露公网时可被 `/portal/account` 直接链接。
  */
 
+import { createCustomerIdentityReceiver } from "../a2a/server/customer-identity-gateway.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import type { AgentProfile } from "../config/profile.js";
@@ -229,6 +230,9 @@ export async function startStandaloneMerchantWorkbench(
     return { ready: Object.values(checks).every((check) => check.ok), checks };
   };
   const api = createMerchantManagementApiHandler({
+    receiveCustomerIdentity: createCustomerIdentityReceiver({
+      db, now, merchantId: profile.owner_id, assertOwner: assembly.assertGovernanceOwner,
+    }),
     merchantId: profile.owner_id,
     merchantName: profile.name ?? profile.owner_id,
     generation: () => 1,

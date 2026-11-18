@@ -652,6 +652,12 @@ export async function bootstrapCloudRuntime(
       serviceState.gateCheck(),
   };
   const core = createA2aNodeCore({
+    ...(governanceFlags.learning_enabled || governanceFlags.memory_enabled || governanceFlags.jobs_enabled
+      ? { assertCustomerWriterOwner: () => {
+          if (governanceRuntime === undefined) throw new Error("customer writer not available");
+          governanceRuntime.assertOwner();
+        } }
+      : {}),
     profile,
     advertisedBase: config.publicOrigin,
     a2aPath: CLOUD_A2A_PATH,

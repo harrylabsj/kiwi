@@ -57,6 +57,11 @@ import {
 import { HttpMessageSignatureVerifier, InMemoryNonceStore } from "../trust/identity/index.js";
 import type { NonceStore } from "../trust/identity/nonce.js";
 import { OpenInquiryVerifier } from "./open-inquiry-verifier.js";
+import { isOpenInquiryIdentity } from "./open-inquiry-identity.js";
+import { isQuoteHistoryRecall, quoteHistoryNote } from "../merchant-core/customer-memory/quote-history.js";
+import { createQuoteHistoryAccess, resolveCustomerIdentityWriter } from "./server/customer-identity-gateway.js";
+import { MerchantReceiptSubmitter, ReceiptOutbox } from "../commerce/receipt/receipts.js";
+import { ReceiptDispatcher } from "../commerce/receipt/dispatcher.js";
 import { InquiryNonceStore } from "./inquiry-nonce-store.js";
 import { AdmissionPolicyVerifier, parseA2aAdmissionPolicy, type A2aAdmissionPolicy } from "./admission.js";
 import { resolveA2aThrottle } from "./throttle-config.js";
@@ -542,6 +547,7 @@ function authVerifierFromEnv(ctx: AuthFromEnvContext): AuthVerifier | undefined 
 
 /** 启动一个 A2A 节点（按 profile 角色）。 */
 export interface A2aNodeCoreOptions {
+  assertCustomerWriterOwner?: () => void;
   profile: AgentProfile;
   /** 对外广告地址（决定 Card/UCP 内的 baseUrl）。 */
   advertisedBase: string;
@@ -853,6 +859,56 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
             : (options.merchantPolicy ?? profile.merchant_policy),
       })
     : undefined;
+  // 买家识别与交易回执 · K1：验签开放询价自动分配本店客户 ID 的共享 Writer。
+  // 临时（ephemeral）节点无持久客户档案，不建档。
+  const customerIdentityWriter =
+    role === "merchant" && !isEphemeral
+      ? resolveCustomerIdentityWriter({
+          dataDir: options.dataDir!,
+          a2aDir: dir,
+          now,
+          assertOwner: options.assertCustomerWriterOwner,
+          logError: (message, err) => process.stderr.write(`⚠️ [kiwi] ${message}: ${String(err)}\n`),
+        })
+      : undefined;
+
+  const quoteHistory = customerIdentityWriter === undefined ? undefined : createQuoteHistoryAccess({
+    dbPath: path.join(options.dataDir!, "state.sqlite"),
+    now,
+    assertOwner: options.assertCustomerWriterOwner,
+  });
+  const retryIdentity = (): void => { void customerIdentityWriter?.drain?.().catch(() => {}); };
+  const identityTimer = customerIdentityWriter?.drain === undefined ? undefined : setInterval(retryIdentity, 30_000);
+  identityTimer?.unref();
+  retryIdentity();
+
+  // 买家识别与交易回执 · K5/K6：商家侧回执投递（Catalog 凭据经环境注入；
+  // 未配置时不上报——本地流程完全不受影响）。临时节点不投递。
+  const receiptDispatcher =
+    role === "merchant" && !isEphemeral &&
+    process.env.KIWI_RECEIPT_CATALOG_URL !== undefined &&
+    process.env.KIWI_RECEIPT_MERCHANT_TOKEN !== undefined
+      ? (() => {
+          try {
+            const outbox = new ReceiptOutbox({
+              dbPath: path.join(dir, "commerce-receipt-outbox.sqlite"),
+              now,
+            });
+            const submitter = new MerchantReceiptSubmitter({
+              catalogUrl: process.env.KIWI_RECEIPT_CATALOG_URL as string,
+              merchantToken: process.env.KIWI_RECEIPT_MERCHANT_TOKEN as string,
+            });
+            return new ReceiptDispatcher({
+              outbox,
+              submitter,
+              logError: (message, err) => process.stderr.write(`⚠️ [kiwi] ${message}: ${String(err)}\n`),
+            });
+          } catch (err) {
+            process.stderr.write(`⚠️ [kiwi] receipt outbox unavailable: ${String(err)}\n`);
+            return undefined;
+          }
+        })()
+      : undefined;
   const handler =
     role === "merchant"
       ? createMerchantHandler({
@@ -861,6 +917,23 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
           sender: profile.agent_id,
           counterparty: "buyer:*",
           productSource: productSource as MerchantProductSource,
+          ...(customerIdentityWriter !== undefined
+            ? {
+                customerIdentity: {
+                  merchantId: profile.owner_id,
+                  writer: customerIdentityWriter,
+                },
+              }
+            : {}),
+          ...(quoteHistory !== undefined ? { quoteHistory } : {}),
+          ...(receiptDispatcher !== undefined
+            ? {
+                commerceReceipts: {
+                  merchantId: profile.owner_id,
+                  dispatcher: receiptDispatcher,
+                },
+              }
+            : {}),
           allowDemoPriceFallback: profile.commerce.allow_demo_price_fallback ?? false,
           // 商家显式声明的单位同义词（`个`/`件` → `piece`）；未配置就不接受别名。
           ...(profile.commerce.unit_aliases !== undefined && profile.commerce.default_unit !== undefined
@@ -922,8 +995,34 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
         })
       : defaultHandler();
 
+  const retryReceipts = (): void => {
+    handler.recoverReceipts?.();
+    receiptDispatcher?.kick();
+  };
+  const receiptTimer = receiptDispatcher === undefined ? undefined : setInterval(retryReceipts, 60_000);
+  receiptTimer?.unref();
+  retryReceipts();
+
   const genericResponder = receptionEngine !== undefined
-    ? createReceptionResponder(receptionEngine, profile.owner_id)
+    ? createReceptionResponder(receptionEngine, profile.owner_id, {
+        // K1：普通文本询价的建档钩子——只对验签开放询价身份触发；
+        // 与 KNP 路径共用同一 Writer 实例（spool 持久、句柄复用）。
+        historyNote: ({ identity, text }) =>
+          quoteHistory !== undefined && isOpenInquiryIdentity(identity) && isQuoteHistoryRecall(text)
+            ? quoteHistoryNote(quoteHistory.store, { merchantId: profile.owner_id, actor: identity })
+            : "",
+        onVerifiedInquiry: (input) => {
+          if (customerIdentityWriter === undefined) return;
+          if (!isOpenInquiryIdentity(input.identity)) return;
+          void customerIdentityWriter
+            .ensure({
+              merchant_id: profile.owner_id,
+              verified_actor: input.identity,
+              source: "reception-text",
+            })
+            .catch(() => {});
+        },
+      })
     : undefined;
 
   // D10：启动时与每 6 小时清理一次会话/用量留存；临时目录不清理。
@@ -1001,6 +1100,10 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
     ...(genericResponder !== undefined ? { genericResponder } : {}),
   });
   const closeStats = createSyncCleanup([
+    { id: "commerce_receipt_retry", run: () => clearInterval(receiptTimer) },
+    { id: "customer_identity_retry", run: () => clearInterval(identityTimer) },
+    { id: "customer_identity", run: () => customerIdentityWriter?.close?.() },
+    { id: "quote_history", run: () => quoteHistory?.close() },
     { id: "statistics", run: () => statsStore?.close() },
     { id: "reception_budget", run: () => receptionBudgetStore?.close() },
     { id: "reception_skill_catalog", run: () => receptionSkillCatalog?.close() },
@@ -1019,6 +1122,7 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
   ]);
   return {
     server, ledger, idempotency, dir, ephemeral: isEphemeral,
+    ...(receiptDispatcher !== undefined ? { receiptDispatcher } : {}),
     ...(productSource !== undefined ? { productSource } : {}),
     close: (closeOptions) => {
       try {

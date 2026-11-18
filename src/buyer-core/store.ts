@@ -29,6 +29,7 @@
 import { mkdirSync, chmodSync, existsSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { ReceiptOutbox } from "../commerce/receipt/receipts.js";
 
 import { contentDigest } from "../negotiation/jcs.js";
 import { McpError } from "./errors.js";
@@ -153,8 +154,45 @@ export class TaskApprovalStore {
     withInitRetry(() => this.migrate());
   }
 
+  createReceiptOutbox(reporterScope: string): ReceiptOutbox {
+    return new ReceiptOutbox({ db: this.db, now: this.now, reporterScope });
+  }
+
+  setAgreementReceiptBinding(agreementId: string, binding: string): void {
+    this.db.prepare(
+      "INSERT INTO mcp_agreement_receipt_bindings (agreement_id, binding) VALUES (?, ?) ON CONFLICT DO NOTHING",
+    ).run(agreementId, binding);
+  }
+
+  agreementReceiptBinding(agreementId: string): string | undefined {
+    const row = this.db.prepare(
+      "SELECT binding FROM mcp_agreement_receipt_bindings WHERE agreement_id = ?",
+    ).get(agreementId);
+    return typeof row?.binding === "string" ? row.binding : undefined;
+  }
+
+  rememberHandoff(agreementId: string, binding: string, handoffId: string): string {
+    this.db.prepare(
+      "INSERT INTO mcp_handoff_refs (agreement_id, binding, handoff_id) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+    ).run(agreementId, binding, handoffId);
+    const row = this.db.prepare(
+      "SELECT handoff_id FROM mcp_handoff_refs WHERE agreement_id = ? AND binding = ?",
+    ).get(agreementId, binding);
+    return String(row?.handoff_id);
+  }
+
   private migrate(): void {
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS mcp_agreement_receipt_bindings (
+        agreement_id TEXT PRIMARY KEY,
+        binding TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS mcp_handoff_refs (
+        agreement_id TEXT NOT NULL,
+        binding TEXT NOT NULL,
+        handoff_id TEXT NOT NULL,
+        PRIMARY KEY (agreement_id, binding)
+      );
       CREATE TABLE IF NOT EXISTS mcp_tasks (
         task_id            TEXT PRIMARY KEY,
         task_kind          TEXT NOT NULL,

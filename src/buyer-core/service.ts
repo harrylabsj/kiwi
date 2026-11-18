@@ -237,6 +237,14 @@ import type { ProtocolTaskContext } from "./protocol-recovery.js";
 export interface QuoteFetcher {
   requestQuotes(intent: Record<string, unknown>, merchants: MerchantRecord[], context?: ProtocolTaskContext): Promise<QuoteCandidateInput[]>;
   recoverQuotes?: (context: ProtocolTaskContext) => Promise<QuoteCandidateInput[]>;
+  /**
+   * 买家识别与交易回执 · K2：按本店授权查询上次已发报价（可选能力；
+   * 生产实现 A2AQuoteFetcher）。返回 unavailable 时调用方退回澄清。
+   */
+  queryQuoteHistory?: (
+    merchant: MerchantRecord,
+    input: { skus?: string[]; limit?: number; context?: ProtocolTaskContext },
+  ) => Promise<import("./a2a-quote-history.js").QuoteHistoryResult>;
 }
 
 /**
@@ -305,10 +313,21 @@ export interface Negotiator {
     candidate: Record<string, unknown>;
     summary?: string;
     context?: ProtocolTaskContext;
-  }): Promise<{ agreement: Record<string, unknown> }>;
+  }): Promise<{ agreement: Record<string, unknown>; receiptBinding?: string }>;
 }
 
 export interface KiwiBuyerServiceOptions {
+  /**
+   * 买家识别与交易回执 · K5/K6：向 Catalog 上报买方侧事实的投递通道。
+   * 协议成功提交（含有效 merchant_agreement）后上报“已接受并提交”；
+   * 实际生成 handoff_ref 后上报“已生成交接记录”。纯本地候选、待审批与
+   * 被拒路径不入队。
+   */
+  commerceReceipts?: {
+    dispatcher: import("../commerce/receipt/dispatcher.js").ReceiptDispatcher;
+    /** 本次磋商凭据的 thumbprint（与商家记录的已验签身份同口径）。 */
+    binding: string;
+  };
   store: TaskApprovalStore;
   principal: string;
   buyerAgentId: string;
@@ -497,6 +516,7 @@ export class KiwiBuyerService {
   private readonly quoteFetcher?: QuoteFetcher;
   private readonly negotiator?: Negotiator;
   private readonly followsClient?: BuyerFollowsClient;
+  private readonly commerceReceipts?: KiwiBuyerServiceOptions["commerceReceipts"];
   private readonly staleWake?: (merchant: MerchantRecord) => Promise<boolean>;
   private readonly staleWakeTimeoutMs: number;
   private readonly wakeAttemptAt = new Map<string, number>();
@@ -522,6 +542,7 @@ export class KiwiBuyerService {
     this.merchantIndex = options.merchantIndex;
     this.quoteFetcher = options.quoteFetcher;
     this.negotiator = options.negotiator;
+    this.commerceReceipts = options.commerceReceipts;
     this.followsClient = options.followsClient;
     this.staleWake = options.staleWake;
     this.staleWakeTimeoutMs = options.staleWakeTimeoutMs ?? 5000;
@@ -753,9 +774,78 @@ export class KiwiBuyerService {
     intent: Record<string, unknown>;
     idempotency_key?: string;
     merchant_ids?: string[];
-  }): Promise<{ task: Record<string, unknown>; created: boolean }> {
+    /**
+     * 买家识别与交易回执 · K3：“沿用上次规格”——正式 RFQ 前按本店授权查
+     * 上次已发报价；唯一匹配则以该 SKU + 本次数量走标准 RFQ。无历史、
+     * 多义或扩展不支持时不创建任务，返回结构化澄清。显式新规格优先
+     * （intent 已带 sku 时本参数被忽略）。
+     */
+    reuse_history?: boolean;
+  }): Promise<{ task: Record<string, unknown>; created: boolean; reused_history?: Record<string, unknown> }> {
+    // K3：历史解析发生在正式 RFQ 之前（A5）。显式新规格优先。
+    let effectiveIntent = input.intent;
+    let reusedHistory: Record<string, unknown> | undefined;
+    if (input.reuse_history === true && explicitIntentItemSku(input.intent) === undefined) {
+      const reuseMerchants = input.merchant_ids ?? [];
+      if (reuseMerchants.length !== 1) {
+        // K3：结构化澄清（仓库惯例：McpError 携带结构化 data，宿主据此向
+        // 买家澄清）。不创建任务、不猜商品。
+        throw new McpError("clarification_needed", "沿用上次规格需要恰好指定一个商家；请说明要沿用哪家店的报价。", {
+          reason: "history_merchant_required",
+        });
+      }
+      const merchantId = reuseMerchants[0] as string;
+      const history = await this.resolveQuoteHistory({ merchant_id: merchantId });
+      if (history.status !== "ok" || history.candidates.length === 0) {
+        throw new McpError(
+          "clarification_needed",
+          history.status === "unavailable"
+            ? "暂时无法读取本店历史报价（未授权或商家不支持）；请直接说明商品和数量重新询价。"
+            : "本店没有可引用的历史报价；请直接说明商品和数量重新询价。",
+          {
+            reason: history.status === "unavailable" ? "history_unavailable" : "history_empty",
+            merchant_id: merchantId,
+          },
+        );
+      }
+      if (history.candidates.length > 1) {
+        throw new McpError("clarification_needed", "上次有多款商品报价；请说明要沿用哪一款（可按 SKU 或商品名指明）。", {
+          reason: "history_ambiguous",
+          merchant_id: merchantId,
+          candidates: history.candidates.map((hit) => ({
+            sku: hit.sku,
+            quoted_at: hit.quoted_at,
+            ...(hit.valid_until !== undefined ? { valid_until: hit.valid_until } : {}),
+            price: hit.price,
+          })),
+        });
+      }
+      const hit = history.candidates[0]!;
+      const intentItems = Array.isArray(input.intent.items)
+        ? (input.intent.items as Array<Record<string, unknown>>)
+        : [];
+      effectiveIntent = {
+        ...input.intent,
+        items:
+          intentItems.length > 0
+            ? [{ ...intentItems[0], sku: hit.sku }, ...intentItems.slice(1)]
+            : intentItems,
+      };
+      reusedHistory = {
+        merchant_id: merchantId,
+        sku: hit.sku,
+        quoted_at: hit.quoted_at,
+        price: hit.price,
+        quantity: hit.quantity,
+        unit: hit.unit,
+        negotiation_id: hit.negotiation_id,
+        offer_id: hit.offer_id,
+        ...(hit.valid_until !== undefined ? { valid_until: hit.valid_until } : {}),
+        note: "历史价格仅供参考（含时间与有效期）；本次价格以正式报价为准。",
+      };
+    }
     // 契约校验（§5.2）：CommerceIntent 必须合法；无效即拒绝，不落库。
-    const intentErrors = validateCommerceIntent(input.intent);
+    const intentErrors = validateCommerceIntent(effectiveIntent);
     if (intentErrors.length > 0) {
       throw new McpError(
         "contract_violation",
@@ -806,7 +896,10 @@ export class KiwiBuyerService {
         expires_at: expiresAt,
         resumable: true,
         candidates: preCandidates,
-        intent: input.intent,
+        // 任务持久化**解析后**的意图（含 K3 历史解析出的显式 SKU）；恢复/
+        // 重试用同一意图，出站 SKU 确定性一致（A5）。历史价格参考只在本次
+        // 响应返回（persistent-task 冻结契约不允许附加顶层字段）。
+        intent: effectiveIntent,
       }),
     };
 
@@ -819,7 +912,8 @@ export class KiwiBuyerService {
       }
       if(this.quoteFetcher?.recoverQuotes!==undefined){
         const original=this.decodeTask(persisted).intent;
-        if(original!==undefined && contentDigest(original)!==contentDigest(input.intent))throw new McpError("idempotency_conflict","same task key has different intent");
+        // K3：重试沿用同一解析路径——同 key 重放按**本次解析后的意图**比对。
+        if(original!==undefined && contentDigest(original)!==contentDigest(effectiveIntent))throw new McpError("idempotency_conflict","same task key has different intent");
         if(persisted.status!=="in_progress"){
           const selected=[...new Set(this.store.listCandidates(persisted.task_id).map(c=>String(c.merchant_id)))].sort();
           const requested=[...new Set(input.merchant_ids??[])].sort();
@@ -830,7 +924,12 @@ export class KiwiBuyerService {
       if(this.quoteFetcher?.recoverQuotes !== undefined && ["in_progress","partial_success"].includes(persisted.status) && !this.store.hasAgreementForTask(persisted.task_id)) {
         const originalCandidates=this.store.listCandidates(persisted.task_id);
         const recovered=await this.quoteFetcher.recoverQuotes(this.protocolContext(persisted,input.merchant_ids??[]));
-        const explicitSku=explicitIntentItemSku(input.intent);
+        const originalIntent = this.decodeTask(persisted).intent;
+        const explicitSku=explicitIntentItemSku(
+          originalIntent !== undefined && typeof originalIntent === "object"
+            ? (originalIntent as Record<string, unknown>)
+            : input.intent,
+        );
         const results=recovered.map((result)=>rejectQuoteForOtherSku(result,explicitSku));
         if(results.length>0)return this.store.transaction(()=>{
           if(this.store.hasAgreementForTask(persisted.task_id) || contentDigest(this.store.listCandidates(persisted.task_id))!==contentDigest(originalCandidates))throw new McpError("idempotency_conflict","task candidates or accepted agreement changed during recovery");
@@ -882,11 +981,11 @@ export class KiwiBuyerService {
         // 写入/发送部分 RFQ。没有 receipt 时保守落为 non-retryable unknown。
         dispatchStarted = true;
         quotedResults = await this.quoteFetcher.requestQuotes(
-          input.intent,
+          effectiveIntent,
           merchantRecords,
           protocolContext,
         );
-        const explicitSku = explicitIntentItemSku(input.intent);
+        const explicitSku = explicitIntentItemSku(effectiveIntent);
         quotedResults = quotedResults.map((result) => rejectQuoteForOtherSku(result, explicitSku));
         dispatchOutcomeUnknown = quotedResults.some(
           (result) =>
@@ -972,13 +1071,65 @@ export class KiwiBuyerService {
     const decoded = this.decodeTask(updated);
     // 冻结契约强制：持久任务记录必须满足 persistent-task/1.0 schema（§6.2）。
     assertNorthboundContractValid("persistent-task", decoded, "requestQuotes result");
-    return { task: decoded, created: true };
+    return {
+      task: decoded,
+      created: true,
+      ...(reusedHistory !== undefined ? { reused_history: reusedHistory } : {}),
+    };
     });
   }
 
   private protocolContext(task:StoredTask,requestedMerchants?:string[]):ProtocolTaskContext {
     const intent=this.decodeTask(task).intent;
     return {taskId:task.task_id,createdAt:task.created_at,intentBindingDigest:contentDigest({task_id:task.task_id,created_at:task.created_at,intent:intent??null,requested_merchants:requestedMerchants??null,policy:this.policy,principal:this.principal,buyer:this.buyerAgentId})};
+  }
+
+  /**
+   * 买家识别与交易回执 · K2/K3：“沿用上次规格”前置查询——先解析目标商家，
+   * 再按本店授权查上次已发报价。唯一匹配时调用方把明确 SKU 和本次数量送入
+   * 标准 requestQuotes；无历史/多义/扩展不支持时由调用方澄清。
+   * 显式新规格优先：调用方带 skus 时按指定商品过滤。
+   */
+  async resolveQuoteHistory(input: {
+    merchant_id: string;
+    skus?: string[];
+    limit?: number;
+  }): Promise<
+    | {
+        status: "ok";
+        merchant_id: string;
+        candidates: import("./a2a-quote-history.js").QuoteHistoryCandidate[];
+      }
+    | { status: "unavailable"; merchant_id: string; reason: string }
+  > {
+    const merchantId = input.merchant_id;
+    if (this.quoteFetcher?.queryQuoteHistory === undefined) {
+      return { status: "unavailable", merchant_id: merchantId, reason: "history_query_unsupported" };
+    }
+    const merchant = await this.merchantIndex?.resolveById(merchantId).catch(() => undefined);
+    if (merchant === undefined) {
+      return { status: "unavailable", merchant_id: merchantId, reason: "merchant_not_found" };
+    }
+    // 即席协议上下文：委托声明按当前时间派生（查询本身每次新 message ID，
+    // 无跨请求幂等绑定；正式 RFQ 的委托仍按任务上下文恒定派生）。
+    const context = {
+      taskId: `hist-${uuidv7()}`,
+      createdAt: this.now(),
+      intentBindingDigest: contentDigest({
+        merchant_id: merchantId,
+        principal: this.principal,
+        buyer: this.buyerAgentId,
+      } as never),
+    };
+    const result = await this.quoteFetcher.queryQuoteHistory(merchant, {
+      ...(input.skus !== undefined ? { skus: input.skus } : {}),
+      ...(input.limit !== undefined ? { limit: input.limit } : {}),
+      context,
+    });
+    if (result.status !== "ok") {
+      return { status: "unavailable", merchant_id: merchantId, reason: result.reason };
+    }
+    return { status: "ok", merchant_id: merchantId, candidates: result.candidates };
   }
 
   // ---- Northbound：kiwi_get_task --------------------------------------------
@@ -1236,6 +1387,7 @@ export class KiwiBuyerService {
     }
     const existingAgreement = this.store.findAgreementByTerms(input.task_id, termsDigest);
     let merchantAgreement: Record<string, unknown> | undefined;
+    let receiptBinding: string | undefined;
     if (existingAgreement === undefined) {
       const provenance = (preCandidate.provenance as Record<string, unknown> | undefined) ?? {};
       const isA2A = typeof provenance.a2a_endpoint === "string" && provenance.a2a_endpoint !== "";
@@ -1287,6 +1439,7 @@ export class KiwiBuyerService {
           );
         }
         merchantAgreement = checkedAgreement as unknown as Record<string, unknown>;
+        receiptBinding = accepted.receiptBinding;
       }
     }
     // review P1-2（A316 校准）：短事务原子消费——事务内重读授权、写
@@ -1484,7 +1637,41 @@ export class KiwiBuyerService {
           });
         }
       }
-      return { task: this.decodeTask(updated), agreement, authorization };
+      const committed = { task: this.decodeTask(updated), agreement, authorization };
+      // K5：本地协议已提交且含有效 merchant_agreement → 上报“协议已接受
+      // 并提交”。纯本地候选（无 merchant_agreement）不入队；上报失败不
+      // 阻塞业务（outbox 退避重试，同 event_id 幂等补报）。
+      const receipts = this.commerceReceipts;
+      if (receipts !== undefined && merchantAgreement !== undefined && receiptBinding === receipts.binding) {
+        const merchantAgreementId = String(
+          (merchantAgreement as { agreement_id?: unknown }).agreement_id ?? "",
+        );
+        const provenance = candidate.provenance as {
+          negotiation_id?: string;
+          offer_id?: string;
+        } | undefined;
+        if (
+          merchantAgreementId !== "" &&
+          typeof provenance?.negotiation_id === "string" &&
+          typeof provenance.offer_id === "string"
+        ) {
+          const intent = {
+            event_id: `buyer-agreement:${agreementId}`,
+            event_type: "buyer_agreement_accepted" as const,
+            merchant_id: String(candidate.merchant_id),
+            negotiation_id: provenance.negotiation_id,
+            merchant_agreement_id: merchantAgreementId,
+            accepted_offer_id: provenance.offer_id,
+            terms_digest: termsDigest,
+            buyer_binding: receipts.binding,
+            occurred_at: now,
+          };
+          this.store.setAgreementReceiptBinding(agreementId, receiptBinding);
+          receipts.dispatcher.record(intent);
+          receipts.dispatcher.kick();
+        }
+      }
+      return committed;
     });  }
 
   // ---- Northbound：kiwi_get_agreement ---------------------------------------
@@ -1549,12 +1736,16 @@ export class KiwiBuyerService {
       throw new McpError("authorization_denied", "Handoff 未获五层授权", { authorization });
     }
     if (input.approval_id === undefined) {
-      const handoffRef = {
-        handoff_id: `handoff-${uuidv7()}`,
-        destination_type: destination.destination_type,
-        ...(destination.url !== null ? { url: destination.url } : {}),
-      };
-      return { handoff_ref: handoffRef, authorization };
+      return this.store.transaction(() => {
+        const handoffId = this.store.rememberHandoff(input.agreement_id, consumedBinding, `handoff-${uuidv7()}`);
+        const handoffRef = {
+          handoff_id: handoffId,
+          destination_type: destination.destination_type,
+          ...(destination.url !== null ? { url: destination.url } : {}),
+        };
+        this.enqueueHandoffReceipt(stored, handoffId);
+        return { handoff_ref: handoffRef, authorization };
+      });
     }
     // review P1-2（A316 校准）：短事务原子消费——事务内重读审批、生成 ref、
     // 消费；同绑定重放返回**库里记录的同一 ref**（非虚构）；失败 ROLLBACK
@@ -1583,6 +1774,8 @@ export class KiwiBuyerService {
       if (approval.status === "used") {
         const consumed = this.approvalConsumed(approval);
         if (consumed !== undefined && consumed.binding === consumedBinding) {
+          // K6：重放返回库中同一 ref——补报同一 event_id（Catalog 幂等吸收）。
+          this.enqueueHandoffReceipt(freshAgreement, consumed.ref);
           return {
             handoff_ref: {
               handoff_id: consumed.ref,
@@ -1610,8 +1803,66 @@ export class KiwiBuyerService {
           consumed: { ref: handoffRef.handoff_id, binding: consumedBinding, kind: "handoff" },
         }),
       });
+      // K6：交接审批消费、handoff_ref 实际生成 → 上报“已生成交接记录”。
+      this.enqueueHandoffReceipt(freshAgreement, handoffRef.handoff_id);
       return { handoff_ref: handoffRef, authorization };
     });
+  }
+
+  /**
+   * K6：交接事实上报（被拒绝的审批与未实际生成的交接不会走到这里）。
+   * 引用取自协议（磋商号 + 被接受报价 + 条款摘要）；event_id 绑定
+   * handoff_id（稳定、可重放）；上报失败不阻塞交接。
+   */
+  private enqueueHandoffReceipt(
+    storedAgreement: { payload: string },
+    handoffId: string,
+  ): void {
+    const receipts = this.commerceReceipts;
+    if (receipts === undefined) return;
+    try {
+      const payload = JSON.parse(storedAgreement.payload) as {
+        agreement_id?: unknown;
+        task_id?: unknown;
+        merchant_agreement?: { agreement_id?: unknown };
+        negotiation_id?: unknown;
+        terms_digest?: unknown;
+        accepted_candidate_id?: unknown;
+      };
+      if (typeof payload.agreement_id !== "string" ||
+          this.store.agreementReceiptBinding(payload.agreement_id) !== receipts.binding) return;
+      const merchantAgreementId = String(payload.merchant_agreement?.agreement_id ?? "");
+      const negotiationId = typeof payload.negotiation_id === "string" ? payload.negotiation_id : undefined;
+      if (merchantAgreementId === "" || negotiationId === undefined) return;
+      let offerId: string | undefined;
+      let merchantId: string | undefined;
+      if (typeof payload.task_id === "string") {
+        const candidate = this.store
+          .listCandidates(payload.task_id)
+          .find((c) => c.candidate_id === payload.accepted_candidate_id);
+        const provenance = candidate?.provenance as { offer_id?: unknown } | undefined;
+        if (typeof provenance?.offer_id === "string") offerId = provenance.offer_id;
+        if (typeof candidate?.merchant_id === "string") merchantId = candidate.merchant_id;
+      }
+      if (merchantId === undefined || offerId === undefined) return;
+      receipts.dispatcher.record({
+          event_id: `buyer-handoff:${handoffId}`,
+          event_type: "buyer_handoff_generated",
+          merchant_id: merchantId,
+          entry_type: "handoff_record",
+          quote_ref: {
+            negotiation_id: negotiationId,
+            // 设计要求报价引用含磋商号与报价号；缺报价号（历史窗口）宁可少报。
+            offer_id: offerId ?? "",
+            ...(typeof payload.terms_digest === "string" ? { terms_digest: payload.terms_digest } : {}),
+          },
+          handoff_ref: handoffId,
+          occurred_at: this.now(),
+        });
+      receipts.dispatcher.kick();
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+    }
   }
 
   // ---- 持久审批（宿主适配面；kiwi_approve / kiwi_reject 为 MCP 工具）----------

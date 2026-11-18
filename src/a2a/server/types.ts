@@ -170,6 +170,8 @@ export type NegotiationHandlerResult =
 export interface NegotiationHandler {
   readonly name: string;
   handle(ctx: InboundNegotiationContext): Promise<NegotiationHandlerResult>;
+  recoverAccept?(ctx: InboundNegotiationContext): Promise<NegotiationHandlerResult | undefined>;
+  recoverReceipts?(): void;
 }
 
 /**

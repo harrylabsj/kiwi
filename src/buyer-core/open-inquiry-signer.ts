@@ -6,12 +6,16 @@ import { A2A_SIGNING_KEY_FILE, generateA2aSigningIdentity, loadA2aSigningIdentit
 import { OpenInquirySessionSigner } from "../a2a/open-inquiry-session.js";
 
 export function loadOpenInquirySigner(dataDir: string, principal: string, buyerAgentId: string): OpenInquirySessionSigner {
+  return new OpenInquirySessionSigner(loadOpenInquiryIdentity(dataDir, principal, buyerAgentId).privateKeyPem);
+}
+
+export function loadOpenInquiryIdentity(dataDir: string, principal: string, buyerAgentId: string) {
   const scope = createHash("sha256").update(JSON.stringify([principal, buyerAgentId])).digest("hex");
   const dir = path.join(dataDir, "open-inquiry-sessions", scope);
   const file = path.join(dir, A2A_SIGNING_KEY_FILE);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   try {
-    return new OpenInquirySessionSigner(loadA2aSigningIdentityFromFile(file).privateKeyPem);
+    return loadA2aSigningIdentityFromFile(file);
   } catch (error) {
     if ((error as { code?: unknown }).code !== "ENOENT") throw error;
   }
@@ -26,7 +30,7 @@ export function loadOpenInquirySigner(dataDir: string, principal: string, buyerA
     } catch (error) {
       if ((error as { code?: unknown }).code !== "EEXIST") throw error;
     }
-    return new OpenInquirySessionSigner(loadA2aSigningIdentityFromFile(file).privateKeyPem);
+    return loadA2aSigningIdentityFromFile(file);
   } finally {
     try { unlinkSync(temp); } catch { /* Already removed or never created. */ }
   }

@@ -15,7 +15,31 @@ function normalize(tools) {
   return map;
 }
 export function checkToolContract(baseline, candidate) {
-  const a=normalize(baseline), b=normalize(candidate);
+  if (!Array.isArray(baseline) || !Array.isArray(candidate)) throw new Error('TOOL_SET_MISMATCH');
+  const normalizedCandidate = structuredClone(candidate);
+  const region = normalizedCandidate.find(tool => tool?.name === 'kiwi_search')?.inputSchema?.properties?.region;
+  const baselineRegion = baseline.find(tool => tool?.name === 'kiwi_search')?.inputSchema?.properties?.region;
+  if (region?.type === 'string' && region.deprecated === true &&
+      typeof region.description === 'string' && baselineRegion?.deprecated === undefined &&
+      baselineRegion?.description === undefined) {
+    // The old WorkBuddy connector still accepts the optional region string.
+    delete region.deprecated;
+    delete region.description;
+  }
+  const historyIsRequired = baseline.find(tool => tool.name === 'kiwi_request_quotes')?.inputSchema?.properties?.reuse_history !== undefined;
+  const properties = normalizedCandidate.find(tool => tool.name === 'kiwi_request_quotes')?.inputSchema?.properties;
+  const history = properties?.reuse_history;
+  if (history !== undefined && history?.type === 'boolean' &&
+      Object.keys(history).some(key => key !== 'type' && key !== 'description')) {
+    throw new Error('TOOL_SCHEMA_MISMATCH:kiwi_request_quotes');
+  }
+  if (!historyIsRequired && history?.type === 'boolean') {
+    delete properties.reuse_history;
+  } else if (historyIsRequired && properties?.reuse_history?.type === 'boolean') {
+    // Descriptions vary by client locale. All structural constraints are still compared.
+    delete properties.reuse_history.description;
+  }
+  const a=normalize(baseline), b=normalize(normalizedCandidate);
   for (const name of names) if (a.get(name)!==b.get(name)) throw new Error(`TOOL_SCHEMA_MISMATCH:${name}`);
   return true;
 }

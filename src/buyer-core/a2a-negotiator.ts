@@ -1,3 +1,4 @@
+import { thumbprintFromOpenInquiryIdentity } from "../commerce/receipt/receipts.js";
 import { McpError } from "./errors.js";
 /**
  * Copyright 2026 harrylabsj
@@ -305,13 +306,14 @@ export class A2ANegotiator implements Negotiator {
       );
     }
     if (access?.openInquiry && access.openInquiry.endpoint !== endpoint) throw new Error("open inquiry endpoint mismatch");
-    return buildA2AClient(endpoint, {
+    const signer = access?.openInquiry?.signer ?? this.signer;
+    return { signer, client: buildA2AClient(endpoint, {
       ...(access === null ? { bearerToken: this.bearerToken } : {}),
-      ...(access?.openInquiry ? { signer: access.openInquiry.signer } : this.signer ? { signer: this.signer } : {}),
+      ...(signer !== undefined ? { signer } : {}),
       ...(access !== null && !access.openInquiry ? { sendUrl: access.sendUrlFor(endpoint) } : {}),
       allowPrivateRanges: this.allowPrivateRanges, skipDnsCheck: this.skipDnsCheck, timeoutMs: this.timeoutMs,
       ...(access?.openInquiry ? { fetchImpl: access.openInquiry.fetchImpl } : this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}),
-    });
+    }) };
   }
 
   async negotiate(
@@ -358,7 +360,7 @@ export class A2ANegotiator implements Negotiator {
           Array.isArray(current.questions) && current.questions.length > 0
             ? current.questions
             : [{ field: "general", reason: current.summary }];
-        const client = await this.clientFor(endpoint);
+        const { client } = await this.clientFor(endpoint);
         if (!this.recovery || !context || context.taskId !== taskId) throw new ProtocolOperationUnknown();
         const result = await this.recovery.exchange({
           context,
@@ -463,7 +465,7 @@ export class A2ANegotiator implements Negotiator {
           return { ...current, summary: `${current.summary}（counter 被委托约束阻断：${gateVerdict}）` };
         }
       }
-      const client = await this.clientFor(endpoint);
+      const { client } = await this.clientFor(endpoint);
       if(!this.recovery || !context || context.taskId!==taskId)throw new ProtocolOperationUnknown();
       const result=await this.recovery.exchange({
         context,stage:"counter",round:current.round,merchantId:String(candidate.merchant_id??""),endpoint,negotiationId,
@@ -511,7 +513,7 @@ export class A2ANegotiator implements Negotiator {
     taskId: string;
     candidate: Record<string, unknown>;
     summary?: string;
-  }): Promise<{ agreement: Record<string, unknown> }> {
+  }): Promise<{ agreement: Record<string, unknown>; receiptBinding?: string }> {
     const candidate = input.candidate as CandidateLike;
     const provenance = candidate.provenance ?? {};
     const endpoint = typeof provenance.a2a_endpoint === "string" ? provenance.a2a_endpoint : "";
@@ -548,7 +550,7 @@ export class A2ANegotiator implements Negotiator {
       ...(input.summary !== undefined ? { summary: input.summary } : {}),
       now: this.now,
     });
-    const client = await this.clientFor(endpoint);
+    const { client, signer } = await this.clientFor(endpoint);
     let task;
     try {
       task = await client.sendMessage(envelopeToMessage(envelope));
@@ -584,7 +586,12 @@ export class A2ANegotiator implements Negotiator {
         { reconciliation_required: true, merchant_agreement: agreement },
       );
     }
-    return { agreement: checkedAgreement as unknown as Record<string, unknown> };
+    const binding = signer !== undefined && "keyid" in signer && typeof signer.keyid === "string"
+      ? thumbprintFromOpenInquiryIdentity(signer.keyid) : undefined;
+    return {
+      agreement: checkedAgreement as unknown as Record<string, unknown>,
+      ...(binding !== undefined ? { receiptBinding: binding } : {}),
+    };
   }
 
 }

@@ -220,6 +220,7 @@ export interface CatalogAccessSummary {
 }
 
 export interface MerchantManagementApiOptions {
+  receiveCustomerIdentity?: ReturnType<typeof import("../../a2a/server/customer-identity-gateway.js").createCustomerIdentityReceiver>;
   /** 本实例商家（服务端绑定；不来自请求）。 */
   merchantId: string;
   merchantName?: string;
@@ -546,6 +547,14 @@ export function createMerchantManagementApiHandler(
     const pathname = url.pathname;
     if (pathname !== API_PREFIX && !pathname.startsWith(`${API_PREFIX}/`)) {
       writeJson(res, 404, errorBody("not_found", "unknown management api path"));
+      return;
+    }
+    if (pathname === `${API_PREFIX}/internal/customer-identity` && method === "POST") {
+      const result = await options.receiveCustomerIdentity?.(
+        req.headers["x-kiwi-identity-channel-token"],
+        () => readJsonBody(req),
+      );
+      writeJson(res, result?.status ?? 404, result?.body ?? { ok: false });
       return;
     }
     if (pathname === WORKBENCH_API_PREFIX || pathname.startsWith(`${WORKBENCH_API_PREFIX}/`)) {
