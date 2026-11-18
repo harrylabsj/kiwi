@@ -33,6 +33,7 @@ import { DEFAULT_MERCHANT_MCP_PATH } from "../mcp/merchant-server.js";
 export const DEFAULT_MERCHANT_WORKBENCH_PORT = 9102;
 
 export interface StandaloneWorkbenchOptions {
+  recoveryVerifier?: import("../merchant-core/learning/service.js").LearningServiceOptions["recoveryVerifier"];
   profile: AgentProfile;
   dataDir: string;
   host: string;
@@ -183,6 +184,7 @@ export async function startStandaloneMerchantWorkbench(
       ? { tokenEnv: profile.merchant_mcp.token_env }
       : {}),
     adminDefaultNext: "/merchant/",
+    ...(options.recoveryVerifier !== undefined ? { recoveryVerifier: options.recoveryVerifier } : {}),
     adminPendingBackLink: { href: "/merchant/", label: "返回商家工作台" },
   });
   const admin = assembly.serverOptions.admin;

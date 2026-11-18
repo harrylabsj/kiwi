@@ -494,4 +494,107 @@ describe("候选评测（M2-4）", () => {
       expect((err as LearningError).reason).toBe("candidate_state_locked");
     }
   });
+  it("核对只接受绑定当前 dispatch 的可信结果并允许续跑", async () => {
+    const reviewer = createActorContext({ merchant_id: "m-1", actor_id: "reviewer", auth_strength: "verified", subject_binding: "organization", capabilities: ["learning:review"] });
+    await expect(evaluate(async () => { throw new Error("uncertain"); })).rejects.toMatchObject({ reason: "evaluation_attempt_uncertain" });
+    const query = { merchant_id: "m-1", actor: reviewer, evaluation_id: service.listEvaluations("m-1")[0]!.evaluation_id };
+    const binding = service.getPendingEvaluation(query).binding!;
+    expect(binding.dispatch_id).toBeTruthy();
+    const request = { ...query, evidence_ref: "receipt-1", expected_dispatch_id: binding.dispatch_id, command_id: "resolve-1" };
+    await expect(service.resolvePendingEvaluation(request)).rejects.toMatchObject({ reason: "evaluation_recovery_unavailable" });
+    const trusted = new LearningService({ repository, now: () => NOW, recoveryVerifier: async (actual) => ({ status: "completed", binding: actual, outcome: { passed: true, hard_gate_failures: 0 } }) });
+    expect(await trusted.resolvePendingEvaluation(request)).toEqual({ status: "completed" });
+    expect(await trusted.resolvePendingEvaluation(request)).toEqual({ status: "completed" });
+    await expect(trusted.resolvePendingEvaluation({ ...request, evidence_ref: "other" })).rejects.toMatchObject({ reason: "command_replay_conflict" });
+    expect((await evaluate(passRunner())).run_status).toBe("completed");
+  });
+
+  it("未执行证明只解锁本次 dispatch，旧证明不能解锁新的调用", async () => {
+    const reviewer = createActorContext({ merchant_id: "m-1", actor_id: "reviewer", auth_strength: "verified", subject_binding: "organization", capabilities: ["learning:review"] });
+    await expect(evaluate(async () => { throw new Error("uncertain"); })).rejects.toMatchObject({ reason: "evaluation_attempt_uncertain" });
+    const query = { merchant_id: "m-1", actor: reviewer, evaluation_id: service.listEvaluations("m-1")[0]!.evaluation_id };
+    const binding = service.getPendingEvaluation(query).binding!;
+    const trusted = new LearningService({ repository, now: () => NOW, recoveryVerifier: async () => ({ status: "not_executed", binding }) });
+    const request = { ...query, evidence_ref: "proof", expected_dispatch_id: binding.dispatch_id, command_id: "one" };
+    expect(await trusted.resolvePendingEvaluation(request)).toEqual({ status: "not_executed" });
+    await expect(evaluate(async () => { throw new Error("uncertain again"); })).rejects.toMatchObject({ reason: "evaluation_attempt_uncertain" });
+    const next = service.getPendingEvaluation(query).binding!;
+    expect(next.dispatch_id).not.toBe(binding.dispatch_id);
+    await expect(trusted.resolvePendingEvaluation({ ...request, command_id: "two" })).rejects.toMatchObject({ reason: "evaluation_attempt_changed" });
+    await expect(trusted.resolvePendingEvaluation({ ...request, command_id: "three", expected_dispatch_id: next.dispatch_id })).rejects.toMatchObject({ reason: "evaluation_evidence_mismatch" });
+    expect(service.getPendingEvaluation(query).binding).toEqual(next);
+  });
+
+  it("未知证据和旧版标记保持阻塞，权限不足不可查看", async () => {
+    const reviewer = createActorContext({ merchant_id: "m-1", actor_id: "reviewer", auth_strength: "verified", subject_binding: "organization", capabilities: ["learning:review"] });
+    await expect(evaluate(async () => { throw new Error("uncertain"); })).rejects.toMatchObject({ reason: "evaluation_attempt_uncertain" });
+    const query = { merchant_id: "m-1", actor: reviewer, evaluation_id: service.listEvaluations("m-1")[0]!.evaluation_id };
+    expect(() => service.getPendingEvaluation({ ...query, actor: actor() })).toThrowError(LearningError);
+    const binding = service.getPendingEvaluation(query).binding!;
+    const request = { ...query, evidence_ref: "proof", expected_dispatch_id: binding.dispatch_id, command_id: "unknown" };
+    const unknown = new LearningService({ repository, now: () => NOW, recoveryVerifier: async () => ({ status: "unknown" }) });
+    await expect(unknown.resolvePendingEvaluation(request)).rejects.toMatchObject({ reason: "evaluation_evidence_unknown" });
+    expect(unknown.getPendingEvaluation(query).binding).toEqual(binding);
+    db.prepare("UPDATE learning_evaluation_config SET pending_attempt = ?").run("target-0:baseline:1");
+    expect(unknown.getPendingEvaluation(query)).toEqual({ pending: "legacy_unverifiable" });
+    await expect(unknown.resolvePendingEvaluation(request)).rejects.toMatchObject({ reason: "evaluation_recovery_unavailable" });
+  });
+
+  it("核验期间候选变化时不写入成绩或清除标记", async () => {
+    const reviewer = createActorContext({ merchant_id: "m-1", actor_id: "reviewer", auth_strength: "verified", subject_binding: "organization", capabilities: ["learning:review"] });
+    await expect(evaluate(async () => { throw new Error("uncertain"); })).rejects.toMatchObject({ reason: "evaluation_attempt_uncertain" });
+    const query = { merchant_id: "m-1", actor: reviewer, evaluation_id: service.listEvaluations("m-1")[0]!.evaluation_id };
+    const binding = service.getPendingEvaluation(query).binding!;
+    const trusted = new LearningService({ repository, now: () => NOW, recoveryVerifier: async (current) => {
+      const candidate = service.getCandidate("m-1", candidateId)!;
+      repository.updateCandidate({ ...candidate, state: "STALE" });
+      return { status: "completed", binding: current, outcome: { passed: true, hard_gate_failures: 0 } };
+    } });
+    await expect(trusted.resolvePendingEvaluation({ ...query, evidence_ref: "receipt", expected_dispatch_id: binding.dispatch_id, command_id: "stale" })).rejects.toMatchObject({ reason: "evaluation_attempt_changed" });
+    expect(service.getPendingEvaluation(query).binding).toEqual(binding);
+    expect(service.getEvaluation("m-1", query.evaluation_id)!.runs_completed).toBe(0);
+  });
+
+  it("恢复执行权过期后旧核验不能提交；账本不可用时幂等重放也被拒绝", async () => {
+    const reviewer = createActorContext({ merchant_id: "m-1", actor_id: "reviewer", auth_strength: "verified", subject_binding: "organization", capabilities: ["learning:review"] });
+    await expect(evaluate(async () => { throw new Error("uncertain"); })).rejects.toMatchObject({ reason: "evaluation_attempt_uncertain" });
+    const query = { merchant_id: "m-1", actor: reviewer, evaluation_id: service.listEvaluations("m-1")[0]!.evaluation_id };
+    const binding = service.getPendingEvaluation(query).binding!;
+    const request = { ...query, evidence_ref: "receipt", expected_dispatch_id: binding.dispatch_id, command_id: "fence" };
+    let currentTime = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => currentTime);
+    try {
+      const expired = new LearningService({ repository, now: () => NOW, recoveryVerifier: async (current) => {
+        currentTime += 300_001;
+        return { status: "completed", binding: current, outcome: { passed: true, hard_gate_failures: 0 } };
+      } });
+      await expect(expired.resolvePendingEvaluation(request)).rejects.toMatchObject({ reason: "evaluation_claim_lost" });
+      expect(service.getPendingEvaluation(query).binding).toEqual(binding);
+      const trusted = new LearningService({ repository, now: () => NOW, recoveryVerifier: async (current) => ({ status: "completed", binding: current, outcome: { passed: true, hard_gate_failures: 0 } }) });
+      expect(await trusted.resolvePendingEvaluation(request)).toEqual({ status: "completed" });
+      const unavailable = new LearningService({ repository, now: () => NOW, available: false });
+      await expect(unavailable.resolvePendingEvaluation(request)).rejects.toMatchObject({ reason: "learning_schema_unavailable" });
+    } finally { clock.mockRestore(); }
+  });
+
+  it("释放租约时写权限失效，不覆盖核验错误或已提交结果", async () => {
+    const reviewer = createActorContext({ merchant_id: "m-1", actor_id: "reviewer", auth_strength: "verified", subject_binding: "organization", capabilities: ["learning:review"] });
+    await expect(evaluate(async () => { throw new Error("uncertain"); })).rejects.toMatchObject({ reason: "evaluation_attempt_uncertain" });
+    const query = { merchant_id: "m-1", actor: reviewer, evaluation_id: service.listEvaluations("m-1")[0]!.evaluation_id };
+    const binding = service.getPendingEvaluation(query).binding!;
+    const request = { ...query, evidence_ref: "receipt", expected_dispatch_id: binding.dispatch_id, command_id: "guard" };
+    let nowMs = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    try {
+      let calls = 0;
+      const uncertain = new LearningService({ repository, now: () => NOW, recoveryWriteGuard: (work) => { if (++calls === 2) throw new Error("lost guard"); return work(); }, recoveryVerifier: async () => ({ status: "unknown" }) });
+      await expect(uncertain.resolvePendingEvaluation(request)).rejects.toMatchObject({ reason: "evaluation_evidence_unknown" });
+      nowMs += 300_001;
+      calls = 0;
+      const trusted = new LearningService({ repository, now: () => NOW, recoveryWriteGuard: (work) => { if (++calls === 3) throw new Error("lost guard"); return work(); }, recoveryVerifier: async (current) => ({ status: "completed", binding: current, outcome: { passed: true, hard_gate_failures: 0 } }) });
+      expect(await trusted.resolvePendingEvaluation(request)).toEqual({ status: "completed" });
+      expect(await trusted.resolvePendingEvaluation(request)).toEqual({ status: "completed" });
+    } finally { clock.mockRestore(); }
+  });
+
 });

@@ -46,6 +46,8 @@ import type { ActorContext } from "../context-governance/actor-context.js";
 import {
   runCandidateEvaluation,
   validateEvaluationSuite,
+  validateOutcome,
+  type EvaluationAttemptOutcome,
   type EvaluationRunner,
   type EvaluationSuite,
 } from "./evaluation.js";
@@ -77,8 +79,31 @@ const MAX_EXCLUSION_CHARS = 200;
 const REVIEW_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PUBLISH_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+export interface EvaluationRecoveryBinding {
+  readonly merchant_id: string;
+  readonly candidate_id: string;
+  readonly candidate_revision: number;
+  readonly artifact_hash: string;
+  readonly suite_version: string;
+  readonly config_digest: string;
+  readonly scenario_id: string;
+  readonly kind: "target" | "adjacent" | "boundary";
+  readonly repetitions: number;
+  readonly variant: "baseline" | "candidate";
+  readonly attempt: number;
+  readonly dispatch_id: string;
+}
+
+/** not_executed 必须证明该 dispatch 已被不可逆取消或拒绝，今后不可能执行；未观察到或 404 不足以证明。 */
+export type EvaluationRecoveryVerification =
+  | { readonly status: "unknown" }
+  | { readonly status: "not_executed"; readonly binding: EvaluationRecoveryBinding }
+  | { readonly status: "completed"; readonly binding: EvaluationRecoveryBinding; readonly outcome: EvaluationAttemptOutcome };
+
 export interface LearningServiceOptions {
   repository: LearningRepository;
+  recoveryWriteGuard?: <T>(work: () => T) => T;
+  recoveryVerifier?: (binding: EvaluationRecoveryBinding, evidenceRef: string) => Promise<EvaluationRecoveryVerification>;
   now: () => string;
   /**
    * 学习账本是否就绪。装配方迁移失败时传 false：新功能保持关闭，查询与
@@ -283,6 +308,8 @@ function caseDigest(input: {
 
 export class LearningService {
   private readonly repository: LearningRepository;
+  private readonly recoveryWriteGuard: <T>(work: () => T) => T;
+  private readonly recoveryVerifier: LearningServiceOptions["recoveryVerifier"];
   private readonly now: () => string;
   private readonly experienceLearningGrant?: LearningServiceOptions["experienceLearningGrant"];
   private readonly sourceAvailable?: LearningServiceOptions["sourceAvailable"];
@@ -290,6 +317,8 @@ export class LearningService {
 
   constructor(options: LearningServiceOptions) {
     this.repository = options.repository;
+    this.recoveryVerifier = options.recoveryVerifier;
+    this.recoveryWriteGuard = options.recoveryWriteGuard ?? ((work) => work());
     this.now = options.now;
     this.experienceLearningGrant = options.experienceLearningGrant;
     this.sourceAvailable = options.sourceAvailable;
@@ -1069,6 +1098,83 @@ export class LearningService {
     } finally {
       clearInterval(heartbeat);
       this.repository.transaction(() => this.repository.releaseEvaluationClaim(keys, owner));
+    }
+  }
+
+  /** 受信应用入口：仅披露当前待核对标识，旧版缺少调用标识时不可自动恢复。 */
+  getPendingEvaluation(input: { merchant_id: string; actor: ActorContext; evaluation_id: string }): { pending: string | null; binding?: EvaluationRecoveryBinding } {
+    this.ensureAvailable();
+    requireActorCapability(input.merchant_id, input.actor, "learning:review");
+    const evaluation = this.repository.readEvaluation(input.merchant_id, requireOpaque(input.evaluation_id, "evaluation_id"));
+    if (evaluation === undefined) throw new LearningError("not_found", "evaluation_not_found", "评测不存在或不可见");
+    const key = contentDigest({ merchantId: input.merchant_id, candidateId: evaluation.candidate_id, artifact: evaluation.artifact_hash, suite: evaluation.suite_version });
+    const config = this.repository.readEvaluationConfig(key);
+    if (config === undefined || config.pending_attempt === null) return { pending: null };
+    let marker: { scenario_id: string; kind: "target" | "adjacent" | "boundary"; repetitions: number; variant: "baseline" | "candidate"; attempt: number; dispatch_id: string };
+    try { marker = JSON.parse(config.pending_attempt) as typeof marker; } catch { return { pending: "legacy_unverifiable" }; }
+    if (marker === null || typeof marker !== "object" || typeof marker.dispatch_id !== "string" || typeof marker.scenario_id !== "string" || !["target", "adjacent", "boundary"].includes(marker.kind) || marker.repetitions !== 3 || !["baseline", "candidate"].includes(marker.variant) || !Number.isSafeInteger(marker.attempt) || marker.attempt < 1 || marker.attempt > marker.repetitions) return { pending: "legacy_unverifiable" };
+    return { pending: "uncertain", binding: { merchant_id: input.merchant_id, candidate_id: evaluation.candidate_id, candidate_revision: evaluation.candidate_revision, artifact_hash: evaluation.artifact_hash, suite_version: evaluation.suite_version, config_digest: config.config_digest, scenario_id: marker.scenario_id, kind: marker.kind, repetitions: marker.repetitions, variant: marker.variant, attempt: marker.attempt, dispatch_id: marker.dispatch_id } };
+  }
+
+  /** 核验器由可信宿主注入；核验不调用模型，完成后由调用方显式续跑。
+   * 恢复仅保存判定必需的 passed、hard_gate_failures、improvement_delta；
+   * trace_ref 和 diagnostics 不写入，以免保存未经约束的证据原文。
+   */
+  async resolvePendingEvaluation(input: { merchant_id: string; actor: ActorContext; evaluation_id: string; expected_dispatch_id: string; evidence_ref: string; command_id: string }): Promise<{ status: "completed" | "not_executed" }> {
+    this.ensureAvailable();
+    requireOpaque(input.command_id, "command_id");
+    const evidenceRef = requireOpaque(input.evidence_ref, "evidence_ref", 512);
+    const expectedDispatchId = requireOpaque(input.expected_dispatch_id, "expected_dispatch_id");
+    const operation = "learning.resolvePendingEvaluation";
+    const digest = contentDigest({ evaluation_id: input.evaluation_id, expected_dispatch_id: expectedDispatchId, evidence_ref: evidenceRef });
+    requireActorCapability(input.merchant_id, input.actor, "learning:review");
+    const old = this.repository.readIdempotent(input.merchant_id, input.actor.actor_id, operation, input.command_id);
+    if (old !== undefined) {
+      if (old.requestDigest !== digest) throw new LearningError("idempotency_conflict", "command_replay_conflict", "同一 command_id 已用于不同请求");
+      return JSON.parse(old.result) as { status: "completed" | "not_executed" };
+    }
+    const pending = this.getPendingEvaluation(input);
+    if (pending.binding === undefined || this.recoveryVerifier === undefined) throw new LearningError("version_conflict", "evaluation_recovery_unavailable", "缺少可核验调用标识或可信证据来源");
+    const binding = pending.binding;
+    if (binding.dispatch_id !== expectedDispatchId) throw new LearningError("version_conflict", "evaluation_attempt_changed", "调用标识已变化");
+    const key = contentDigest({ merchantId: binding.merchant_id, candidateId: binding.candidate_id, artifact: binding.artifact_hash, suite: binding.suite_version });
+    const claimKey = `evaluation:${key}`;
+    const owner = randomUUID();
+    this.recoveryWriteGuard(() => this.repository.transaction(() => this.repository.claimEvaluation([claimKey], owner, digest, Date.now(), 300_000)));
+    try {
+      const verified = await this.recoveryVerifier(binding, evidenceRef);
+      if (verified.status !== "completed" && verified.status !== "not_executed") throw new LearningError("version_conflict", "evaluation_evidence_unknown", "证据不足，评测仍被阻塞");
+      if (contentDigest(verified.binding) !== contentDigest(binding)) throw new LearningError("version_conflict", "evaluation_evidence_mismatch", "证据与待核对调用不匹配");
+      const outcome = verified.status === "completed" ? validateOutcome(verified.outcome) : undefined;
+      return this.recoveryWriteGuard(() => this.repository.transaction(() => {
+        this.repository.assertEvaluationClaim([claimKey], owner, Date.now());
+        const replay = this.repository.readIdempotent(input.merchant_id, input.actor.actor_id, operation, input.command_id);
+        if (replay !== undefined) {
+          if (replay.requestDigest !== digest) throw new LearningError("idempotency_conflict", "command_replay_conflict", "同一 command_id 已用于不同请求");
+          return JSON.parse(replay.result) as { status: "completed" | "not_executed" };
+        }
+        const fresh = this.getPendingEvaluation(input);
+        if (fresh.binding === undefined || contentDigest(fresh.binding) !== contentDigest(binding)) throw new LearningError("version_conflict", "evaluation_attempt_changed", "待核对调用已变化");
+        const candidate = this.repository.readCandidate(binding.merchant_id, binding.candidate_id);
+        const evaluation = this.repository.findEvaluation(binding.merchant_id, binding.candidate_id, binding.artifact_hash, binding.suite_version);
+        if (candidate?.state !== "EVALUATING" || candidate.revision !== binding.candidate_revision || evaluation === undefined || evaluation.candidate_revision !== binding.candidate_revision || evaluation.state !== "EVALUATING" || evaluation.run_status === "completed") throw new LearningError("version_conflict", "evaluation_attempt_changed", "评测或候选已变化");
+        const previous = evaluation.results.scenarios[binding.scenario_id];
+        const attempts = [...(previous?.attempts ?? [])];
+        if (attempts.some((a) => a.variant === binding.variant && a.attempt === binding.attempt) || (binding.variant === "candidate" && !attempts.some((a) => a.variant === "baseline" && a.attempt === binding.attempt))) throw new LearningError("version_conflict", "evaluation_attempt_changed", "评测结果已变化");
+        if (outcome !== undefined) {
+          attempts.push({ variant: binding.variant, attempt: binding.attempt, passed: outcome.passed, hard_gate_failures: outcome.hard_gate_failures, ...(outcome.improvement_delta !== undefined ? { improvement_delta: outcome.improvement_delta } : {}) });
+          this.repository.updateEvaluation({ ...evaluation, runs_completed: evaluation.runs_completed + 1, results: { scenarios: { ...evaluation.results.scenarios, [binding.scenario_id]: { scenario_id: binding.scenario_id, kind: binding.kind, repetitions: binding.repetitions, attempts } } }, updated_at: this.now() });
+        }
+        this.repository.setEvaluationAttempt(key, null);
+        const result = { status: verified.status };
+        this.repository.appendEvent({ merchantId: binding.merchant_id, subjectKind: "evaluation", subjectId: evaluation.evaluation_id, event: "evaluation_attempt_reconciled", detail: { actor_id: input.actor.actor_id, status: verified.status, dispatch_id: binding.dispatch_id, evidence_digest: contentDigest({ evidenceRef }) }, createdAt: this.now() });
+        this.repository.saveIdempotent({ merchantId: binding.merchant_id, actorId: input.actor.actor_id, operation, commandId: input.command_id, requestDigest: digest, result, createdAt: this.now() });
+        return result;
+      }));
+    } finally {
+      // 写入权已丢失时不再触碰账本；租约过期后可由新写者接管。
+      // 清理失败不能覆盖已提交的结果或原本的核验错误。
+      try { this.recoveryWriteGuard(() => this.repository.transaction(() => this.repository.releaseEvaluationClaim([claimKey], owner))); } catch { /* lease expiry permits takeover */ }
     }
   }
 

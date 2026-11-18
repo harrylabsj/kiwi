@@ -30,6 +30,8 @@
  * - 模型/外部调用在事务之外；只有结果持久化与状态迁移在事务内。
  */
 
+import { randomUUID } from "node:crypto";
+
 import {
   compileReceptionSkillArtifact,
   RECEPTION_TOOL_CONTRACT_VERSION,
@@ -80,6 +82,7 @@ export interface EvaluationAttemptOutcome {
 
 export type EvaluationRunner = (input: {
   readonly scenario: EvaluationScenario;
+  readonly dispatch_id?: string;
   readonly variant: "baseline" | "candidate";
   readonly attempt: number;
   readonly candidate: LearningCandidate;
@@ -164,7 +167,7 @@ function emptyResults(): EvaluationResults {
   return { scenarios: {} };
 }
 
-function validateOutcome(value: EvaluationAttemptOutcome): EvaluationAttemptOutcome {
+export function validateOutcome(value: EvaluationAttemptOutcome): EvaluationAttemptOutcome {
   if (typeof value !== "object" || value === null || typeof value.passed !== "boolean") {
     throw new LearningError("validation", "runner_outcome_invalid", "评测 runner 返回了非法结果");
   }
@@ -534,14 +537,16 @@ export async function runCandidateEvaluation(
           });
         }
         let outcome: EvaluationAttemptOutcome;
+        const dispatchId = randomUUID();
         repository.transaction(() => {
           input.assertClaim?.();
-          input.setAttempt?.(`${scenario.scenario_id}:${variant}:${attempt}`);
+          input.setAttempt?.(JSON.stringify({ scenario_id: scenario.scenario_id, kind: scenario.kind, repetitions, variant, attempt, dispatch_id: dispatchId }));
         });
         try {
           outcome = validateOutcome(
             await runner({
               scenario,
+              dispatch_id: dispatchId,
               variant,
               attempt,
               candidate,

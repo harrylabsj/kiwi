@@ -315,6 +315,11 @@ export class LearningRepository {
     }
   }
 
+  readEvaluationConfig(key: string): { config_digest: string; pending_attempt: string | null } | undefined {
+    return this.db.prepare("SELECT config_digest, pending_attempt FROM learning_evaluation_config WHERE evaluation_key = ?")
+      .get(key) as { config_digest: string; pending_attempt: string | null } | undefined;
+  }
+
   setEvaluationAttempt(key: string, attempt: string | null): void {
     this.db.prepare("UPDATE learning_evaluation_config SET pending_attempt = ? WHERE evaluation_key = ?").run(attempt, key);
   }

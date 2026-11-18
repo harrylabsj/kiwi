@@ -1189,6 +1189,15 @@ export function createMerchantManagementApiHandler(
         writeJson(res, 200, { corrections: ops.listCorrections() }, { "x-request-id": requestId });
         return;
       }
+      const recoveryMatch = /^\/learning\/evaluations\/([^/]+)\/recovery$/.exec(rest);
+      if (recoveryMatch !== null) {
+        const auth = requireActor(req);
+        authorizeOrThrow(auth.ctx, "learning:review");
+        writeJson(res, 200, ops.getEvaluationRecovery(pathSegment(recoveryMatch[1] ?? ""), {
+          actor_id: auth.ctx.actorId, merchant_id: auth.ctx.merchantId, auth_method: auth.ctx.authMethod, permissions: [...auth.ctx.permissions],
+        }), { "x-request-id": requestId });
+        return;
+      }
       const correctionMatch = /^\/learning\/corrections\/([^/]+)$/.exec(rest);
       if (correctionMatch !== null) {
         const auth = requireActor(req);
@@ -1469,6 +1478,26 @@ export function createMerchantManagementApiHandler(
           )),
           { "x-request-id": requestId },
         );
+        return;
+      }
+      const recoveryMatch = /^\/learning\/evaluations\/([^/]+)\/recovery$/.exec(rest);
+      if (recoveryMatch !== null) {
+        const auth = requireActor(req);
+        assertWriteGuards(req, auth.sessionId);
+        authorizeOrThrow(auth.ctx, "learning:review");
+        const { body } = await readOpsBody();
+        let result: unknown;
+        try {
+          result = await ops.resolveEvaluationRecovery(pathSegment(recoveryMatch[1] ?? ""), body, {
+            actor_id: auth.ctx.actorId, merchant_id: auth.ctx.merchantId, auth_method: auth.ctx.authMethod, permissions: [...auth.ctx.permissions],
+          });
+        } catch (error) {
+          if (error instanceof GovernanceRuntimeError || error instanceof InstanceOwnershipError) {
+            throw new ManagementError("conflict", "governance ownership is not held by this process");
+          }
+          throw error;
+        }
+        writeJson(res, 200, result, { "x-request-id": requestId });
         return;
       }
       const promoteCorrectionMatch = /^\/learning\/corrections\/([^/]+)\/promote$/.exec(rest);

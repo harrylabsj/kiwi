@@ -115,6 +115,7 @@ export class MerchantAssemblyError extends Error {
 }
 
 export interface MerchantRuntimeAssemblyOptions {
+  recoveryVerifier?: import("../merchant-core/learning/service.js").LearningServiceOptions["recoveryVerifier"];
   profile: AgentProfile;
   /** 商家数据根目录（显式传入；本函数不推导路径）。 */
   dataDir: string;
@@ -655,7 +656,10 @@ export async function assembleMerchantRuntime(
   // 避免无栅栏写入（管理写者由部署决定：standalone workbench 或 cloud）。
   const merchantOperations = governanceRuntime?.active === true
     ? new MerchantOperationsSurface({
-        facade: openMerchantOperationsFacade({ db, merchantId: profile.owner_id, now }),
+        facade: openMerchantOperationsFacade({ db, merchantId: profile.owner_id, now,
+          recoveryWriteGuard: (work) => governanceRuntime.writeUnderOwnership(work),
+          ...(options.recoveryVerifier !== undefined ? { recoveryVerifier: options.recoveryVerifier } : {}),
+        }),
         now,
       })
     : undefined;

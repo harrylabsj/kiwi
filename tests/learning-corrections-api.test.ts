@@ -20,7 +20,7 @@ import type {
 } from "../src/merchant-core/learning/evaluation.js";
 
 import { parseGovernanceFeatureFlags } from "../src/merchant-core/context-governance/feature-flags.js";
-import { initializeGovernanceRuntime } from "../src/merchant-core/ownership/runtime.js";
+import { GovernanceRuntimeError, initializeGovernanceRuntime } from "../src/merchant-core/ownership/runtime.js";
 
 const MERCHANT = "merchant-learning";
 const ORIGIN = "https://merchant.example";
@@ -406,6 +406,68 @@ describe("商家纠正入口（Workbench v1）", () => {
     // 适配层先按会话 merchant 拦截（404）；服务层另有 actor_merchant_mismatch
     // 的 defense-in-depth（见 learning-corrections.test.ts）。
     expect(attempt.status).toBe(404);
+  });
+
+  it("要求审核权限与 CSRF，并仅接受可信核验结果", async () => {
+    const owner = await login("owner");
+    const operator = await login("operator");
+    const correction = await call("POST", "/merchant/api/v1/learning/corrections", { ...operator, body: { correction_text: "恢复路径测试" } });
+    const promoted = await call("POST", `/merchant/api/v1/learning/corrections/${String(correction.json.correction_id)}/promote`, { ...operator, body: { expected_revision: 1 } });
+    const candidate = await call("POST", "/merchant/api/v1/learning/candidates", { ...operator, body: {
+      case_ids: [promoted.json.case_id], skill_key: "recovery-test", trigger: "测试触发", proposed_steps: [{ action_ref: "get_commercial_facts" }], reason: "测试恢复",
+    } });
+    expect(candidate.status, JSON.stringify(candidate.json)).toBe(201);
+    const suite: EvaluationSuite = { suite_version: "recovery-suite", scenarios: [
+      ...Array.from({ length: 8 }, (_, index) => ({ scenario_id: `t-${index}`, kind: "target" as const, input: { index } })),
+      ...Array.from({ length: 6 }, (_, index) => ({ scenario_id: `a-${index}`, kind: "adjacent" as const, input: { index } })),
+      ...Array.from({ length: 6 }, (_, index) => ({ scenario_id: `b-${index}`, kind: "boundary" as const, input: { index } })),
+    ] };
+    await expect(facade.learning.evaluateCandidate({ merchant_id: MERCHANT, actor: createActorContext({ merchant_id: MERCHANT, actor_id: "operator", auth_strength: "verified", subject_binding: "organization", capabilities: ["learning:manage"] }), candidate_id: String(candidate.json.candidate_id), content_hash: String(candidate.json.compiled_artifact_hash), suite, runner: async () => { throw new Error("uncertain"); } })).rejects.toThrow();
+    const evaluationId = facade.learning.listEvaluations(MERCHANT).find((item) => item.candidate_id === candidate.json.candidate_id)!.evaluation_id;
+    const path = `/merchant/api/v1/learning/evaluations/${evaluationId}/recovery`;
+    expect((await call("GET", path)).status).toBe(401);
+    expect((await call("GET", path, operator)).status).toBe(403);
+    const pending = await call("GET", path, owner);
+    expect(pending.status).toBe(200);
+    const binding = pending.json.binding as { dispatch_id: string };
+    const body = { evidence_ref: "receipt-1", expected_dispatch_id: binding.dispatch_id, command_id: "recovery-1" };
+    expect((await call("POST", path, { cookie: owner.cookie, body })).status).toBe(403);
+    expect((await call("POST", path, { ...owner, body: { ...body, outcome: { passed: true } } })).status).toBe(422);
+    expect((await call("POST", path, { ...owner, body })).status).toBe(409);
+
+    let calls = 0;
+    let ownershipLost = false;
+    const trustedFacade = openMerchantOperationsFacade({ db, merchantId: MERCHANT, now: () => NOW,
+      recoveryWriteGuard: (work) => {
+        if (ownershipLost) throw new GovernanceRuntimeError("not_acquired", "ownership lost");
+        return runtime.writeUnderOwnership(work);
+      },
+      recoveryVerifier: async (actual) => { calls++; return { status: "completed", binding: actual, outcome: { passed: true, hard_gate_failures: 0 } }; },
+    });
+    const trustedServer = createServer(createMerchantManagementApiHandler({ merchantId: MERCHANT, generation: () => 1, runtimeVersion: "test", sessions,
+      allowedOrigins: [ORIGIN], listPending: () => [], mintCandidateConfirmation: () => "unused", executeDecision: async () => {}, drafts, operations, serviceState,
+      merchantOperations: new MerchantOperationsSurface({ facade: trustedFacade }), governance: { flags, write: (work) => runtime.writeUnderOwnership(work) }, readiness: async () => ({ ready: true, checks: {} }), now: () => new Date(NOW),
+    }));
+    await new Promise<void>((resolve) => trustedServer.listen(0, "127.0.0.1", resolve));
+    const address = trustedServer.address();
+    const trustedBase = `http://127.0.0.1:${typeof address === "object" && address !== null ? address.port : 0}`;
+    try {
+      const session = await fetch(`${trustedBase}/merchant/api/session`, { headers: { cookie: owner.cookie } });
+      const { csrf_token: csrf } = await session.json() as { csrf_token: string };
+      const post = async (payload: unknown) => fetch(trustedBase + path, { method: "POST", headers: { cookie: owner.cookie, "x-csrf-token": csrf, origin: ORIGIN, "content-type": "application/json" }, body: JSON.stringify(payload) });
+      expect((await post({ ...body, expected_dispatch_id: "wrong" })).status).toBe(409);
+      ownershipLost = true;
+      expect((await post(body)).status).toBe(409);
+      ownershipLost = false;
+      expect((await post(body)).status).toBe(200);
+      expect((await post(body)).status).toBe(200);
+      expect((await post({ ...body, evidence_ref: "other" })).status).toBe(409);
+      expect(calls).toBe(1);
+      expect((await call("GET", path, owner)).json.pending).toBeNull();
+    } finally {
+      trustedServer.closeAllConnections();
+      await new Promise<void>((resolve) => trustedServer.close(() => resolve()));
+    }
   });
 
   it("运行期失去治理所有权：学习写 409，读仍可用", async () => {
