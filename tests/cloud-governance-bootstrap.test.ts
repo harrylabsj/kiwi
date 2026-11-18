@@ -130,7 +130,7 @@ describe("bootstrap governance 接线（全新库 + 开关场景）", () => {
               "(SELECT COUNT(*) FROM operations_jobs_schema_migrations) AS jobs",
           )
           .get() as { learning: number; memory: number; jobs: number };
-        expect(ledgerCounts).toEqual({ learning: 2, memory: 3, jobs: 3 });
+        expect(ledgerCounts).toEqual({ learning: 3, memory: 3, jobs: 3 });
         // data_grants 存在且为空（M1 无授权写入路径）。
         expect(db.prepare("SELECT COUNT(*) AS n FROM data_grants").get()).toEqual({ n: 0 });
       } finally {

@@ -154,6 +154,8 @@ export interface PiReceptionRuntimeOptions {
   maxSteps?: number;
   maxToolAttempts?: number;
   timeoutMs?: number;
+  /** 评测要求模型调用完整结束；普通接待仍保留原有降级语义。 */
+  requireCompleteModelRun?: boolean;
   /** API key resolver for the real provider. */
   getApiKey?: () => string | undefined;
   systemPrompt?: string;
@@ -671,6 +673,7 @@ export function createPiReceptionRuntime(
       let steps = 0;
       let toolAttempts = 0;
       let timedOut = false;
+      let toolBudgetExhausted = false;
 
       const guard = async (
         context: BeforeToolCallContext,
@@ -685,6 +688,7 @@ export function createPiReceptionRuntime(
         }
         toolAttempts += 1;
         if (toolAttempts > (options.maxToolAttempts ?? 12)) {
+          toolBudgetExhausted = true;
           return { block: true, reason: "tool_budget_exhausted" };
         }
         const serialized = JSON.stringify(context.toolCall.arguments ?? {});
@@ -1425,6 +1429,7 @@ export function createPiReceptionRuntime(
       let activeLease: string | undefined;
       let lastSettledOutput = 0;
       let quotaRejected = false;
+      let modelFailed = false;
 
       agent.subscribe((event: AgentEvent) => {
         if (event.type === "turn_start") {
@@ -1441,6 +1446,7 @@ export function createPiReceptionRuntime(
           return undefined;
         }
         if (event.type === "message_end" && event.message.role === "assistant") {
+          if (event.message.stopReason === "error" || event.message.stopReason === "aborted") modelFailed = true;
           const usage = event.message.usage;
           metrics.usage.input += usage.input;
           metrics.usage.output += usage.output;
@@ -1480,6 +1486,7 @@ export function createPiReceptionRuntime(
         }));
         await agent.waitForIdle();
       } catch {
+        modelFailed = true;
         // 回退确定性路径；未结算的预算 lease 在 finally 按未知用量保留。
       } finally {
         clearTimeout(timer);
@@ -1491,6 +1498,9 @@ export function createPiReceptionRuntime(
 
       if (quotaRejected) metrics.quotaRejected = true;
       options.onMetrics?.(metrics);
+      if (options.requireCompleteModelRun === true && (timedOut || quotaRejected || modelFailed || toolBudgetExhausted)) {
+        throw new Error("evaluation_runtime_outcome_unknown");
+      }
       if (plan === undefined || timedOut || quotaRejected) return undefined;
       // 发布前最后一次版本/撤回检查；失败抛出 → 引擎丢弃模型计划并回退确定性。
       checkGuard("publish");

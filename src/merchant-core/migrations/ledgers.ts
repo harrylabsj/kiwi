@@ -600,10 +600,18 @@ CREATE TABLE learning_evaluation_config (
 );
 `;
 
+const LEARNING_V3 = `
+CREATE TABLE learning_evaluation_receipts (
+  evidence_ref TEXT PRIMARY KEY,
+  binding_json TEXT NOT NULL,
+  outcome_json TEXT NOT NULL
+);
+`;
+
 export const LEARNING_LEDGER: ModuleLedgerSpec = {
   module: "learning",
   ledgerTable: "learning_schema_migrations",
-  migrations: { 1: LEARNING_V1, 2: LEARNING_V2 },
+  migrations: { 1: LEARNING_V1, 2: LEARNING_V2, 3: LEARNING_V3 },
 };
 
 /**

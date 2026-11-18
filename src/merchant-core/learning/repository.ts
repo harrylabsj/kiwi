@@ -324,6 +324,21 @@ export class LearningRepository {
     this.db.prepare("UPDATE learning_evaluation_config SET pending_attempt = ? WHERE evaluation_key = ?").run(attempt, key);
   }
 
+  saveEvaluationReceipt(ref: string, binding: unknown, outcome: unknown): void {
+    this.db.prepare("INSERT INTO learning_evaluation_receipts (evidence_ref, binding_json, outcome_json) VALUES (?, ?, ?)")
+      .run(ref, JSON.stringify(binding), JSON.stringify(outcome));
+  }
+
+  readEvaluationReceipt(ref: string): { binding: unknown; outcome: unknown } | undefined {
+    const row = this.db.prepare("SELECT binding_json, outcome_json FROM learning_evaluation_receipts WHERE evidence_ref = ?")
+      .get(ref) as { binding_json: string; outcome_json: string } | undefined;
+    return row === undefined ? undefined : { binding: JSON.parse(row.binding_json), outcome: JSON.parse(row.outcome_json) };
+  }
+
+  deleteEvaluationReceipt(ref: string): void {
+    this.db.prepare("DELETE FROM learning_evaluation_receipts WHERE evidence_ref = ?").run(ref);
+  }
+
   releaseEvaluationClaim(keys: readonly string[], owner: string): void {
     for (const key of keys) {
       if (key.startsWith("command:")) this.db.prepare("UPDATE learning_evaluation_claims SET expires_at = 0 WHERE claim_key = ? AND owner = ?").run(key, owner);

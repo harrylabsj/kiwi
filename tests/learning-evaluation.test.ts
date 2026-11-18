@@ -4,6 +4,9 @@
  * interrupted 可恢复；候选评测期间变化 → STALE；冻结产物契约校验。
  */
 import { DatabaseSync } from "node:sqlite";
+import { fauxAssistantMessage, fauxToolCall, type Api, type Model } from "@earendil-works/pi-ai";
+import { createScriptedFakeStreamFn } from "../src/runtime/fake-model.js";
+import { createReceptionEvaluationRunner } from "../src/merchant-core/learning/real-evaluation-runner.js";
 import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { build } from "esbuild";
@@ -494,6 +497,35 @@ describe("候选评测（M2-4）", () => {
       expect((err as LearningError).reason).toBe("candidate_state_locked");
     }
   });
+  it("真实 runner 评分回执跨连接恢复，结果落账前故障不重复执行", async () => {
+    const reviewer = createActorContext({ merchant_id: "m-1", actor_id: "reviewer", auth_strength: "verified", subject_binding: "organization", capabilities: ["learning:review"] });
+    const model = { id: "fake-model", name: "fake-model", api: "openai-completions", provider: "fake", baseUrl: "", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 8192 } as Model<Api>;
+    const streamFn = createScriptedFakeStreamFn([fauxAssistantMessage([fauxToolCall("propose_reply", { blocks: [{ kind: "next_step", action: "send_rfq" }] })]), fauxAssistantMessage("完成")]).streamFn;
+    const runner = createReceptionEvaluationRunner({ merchantId: "m-1", streamFn, model, now: () => NOW });
+    const update = vi.spyOn(repository, "updateEvaluation").mockImplementationOnce(() => { throw new Error("injected primary write failure"); });
+    await expect(evaluate(runner)).rejects.toThrow("injected primary write failure");
+    update.mockRestore();
+    const query = { merchant_id: "m-1", actor: reviewer, evaluation_id: service.listEvaluations("m-1")[0]!.evaluation_id };
+    const db2 = new DatabaseSync(join(tempDir, "state.sqlite"));
+    try {
+      const resumed = new LearningService({ repository: new LearningRepository({ db: db2 }), now: () => NOW });
+      const pending = resumed.getPendingEvaluation(query);
+      expect(pending.evidence_ref).toBe(`local:${pending.binding!.dispatch_id}`);
+      const request = { ...query, expected_dispatch_id: pending.binding!.dispatch_id, evidence_ref: pending.evidence_ref!, command_id: "recover-local" };
+      const external = vi.fn(async (binding: typeof pending.binding & {}) => ({ status: "not_executed" as const, binding }));
+      const withExternal = new LearningService({ repository: new LearningRepository({ db: db2 }), now: () => NOW, recoveryVerifier: external });
+      await expect(withExternal.resolvePendingEvaluation({ ...request, evidence_ref: "external-proof" })).rejects.toMatchObject({ reason: "evaluation_evidence_mismatch" });
+      await expect(withExternal.resolvePendingEvaluation({ ...request, evidence_ref: "local:wrong" })).rejects.toMatchObject({ reason: "evaluation_evidence_mismatch" });
+      expect(external).not.toHaveBeenCalled();
+      expect(resumed.getPendingEvaluation(query).evidence_ref).toBe(request.evidence_ref);
+      expect((db2.prepare("SELECT COUNT(*) AS n FROM learning_evaluation_receipts").get() as { n: number }).n).toBe(1);
+      expect(await resumed.resolvePendingEvaluation(request)).toEqual({ status: "completed" });
+      expect(resumed.getEvaluation("m-1", query.evaluation_id)?.runs_completed).toBe(1);
+      expect((db2.prepare("SELECT COUNT(*) AS n FROM learning_evaluation_receipts").get() as { n: number }).n).toBe(0);
+    } finally { db2.close(); }
+    expect((await evaluate(passRunner())).run_status).toBe("completed");
+  });
+
   it("核对只接受绑定当前 dispatch 的可信结果并允许续跑", async () => {
     const reviewer = createActorContext({ merchant_id: "m-1", actor_id: "reviewer", auth_strength: "verified", subject_binding: "organization", capabilities: ["learning:review"] });
     await expect(evaluate(async () => { throw new Error("uncertain"); })).rejects.toMatchObject({ reason: "evaluation_attempt_uncertain" });
@@ -502,7 +534,10 @@ describe("候选评测（M2-4）", () => {
     expect(binding.dispatch_id).toBeTruthy();
     const request = { ...query, evidence_ref: "receipt-1", expected_dispatch_id: binding.dispatch_id, command_id: "resolve-1" };
     await expect(service.resolvePendingEvaluation(request)).rejects.toMatchObject({ reason: "evaluation_recovery_unavailable" });
-    const trusted = new LearningService({ repository, now: () => NOW, recoveryVerifier: async (actual) => ({ status: "completed", binding: actual, outcome: { passed: true, hard_gate_failures: 0 } }) });
+    const verifier = vi.fn(async (actual: typeof binding) => ({ status: "completed" as const, binding: actual, outcome: { passed: true, hard_gate_failures: 0 } }));
+    const trusted = new LearningService({ repository, now: () => NOW, recoveryVerifier: verifier });
+    await expect(trusted.resolvePendingEvaluation({ ...request, evidence_ref: "local:missing" })).rejects.toMatchObject({ reason: "evaluation_recovery_unavailable" });
+    expect(verifier).not.toHaveBeenCalled();
     expect(await trusted.resolvePendingEvaluation(request)).toEqual({ status: "completed" });
     expect(await trusted.resolvePendingEvaluation(request)).toEqual({ status: "completed" });
     await expect(trusted.resolvePendingEvaluation({ ...request, evidence_ref: "other" })).rejects.toMatchObject({ reason: "command_replay_conflict" });

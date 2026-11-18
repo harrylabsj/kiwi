@@ -125,6 +125,7 @@ describe("真实 provider runner 适配", () => {
           blocks: [{ kind: "next_step", action: "send_rfq" }],
         } as unknown as JsonObject),
       ]),
+      fauxAssistantMessage("完成"),
     ]).streamFn;
     // candidate：使用已注册问题。
     const candidateStream = createScriptedFakeStreamFn([
@@ -141,6 +142,7 @@ describe("真实 provider runner 适配", () => {
           ],
         } as unknown as JsonObject),
       ]),
+      fauxAssistantMessage("完成"),
     ]).streamFn;
     const runner = createReceptionEvaluationRunner({
       merchantId: "m-1",
@@ -173,6 +175,21 @@ describe("真实 provider runner 适配", () => {
     expect(baseline.diagnostics).toMatchObject({ question_ids: [] });
   });
 
+  it("模型正常结束但未提出计划时记录质量失败", async () => {
+    const { streamFn } = createScriptedFakeStreamFn([fauxAssistantMessage("无法提出计划")]);
+    const runner = createReceptionEvaluationRunner({ merchantId: "m-1", streamFn, model, now: () => NOW });
+    await expect(runner({ scenario: { scenario_id: "no-plan", kind: "target", input: { text: "请报价" } }, variant: "baseline", attempt: 1, candidate: candidateFixture() })).resolves.toEqual({ passed: false, hard_gate_failures: 0 });
+  });
+
+  it("已有计划后模型报错仍保持结果未知", async () => {
+    const { streamFn } = createScriptedFakeStreamFn([
+      fauxAssistantMessage([fauxToolCall("propose_reply", { blocks: [{ kind: "next_step", action: "send_rfq" }] })], { stopReason: "toolUse" }),
+      fauxAssistantMessage("", { stopReason: "error", errorMessage: "interrupted" }),
+    ]);
+    const runner = createReceptionEvaluationRunner({ merchantId: "m-1", streamFn, model, now: () => NOW });
+    await expect(runner({ scenario: { scenario_id: "interrupted", kind: "target", input: { text: "请报价" } }, variant: "baseline", attempt: 1, candidate: candidateFixture() })).rejects.toThrow("evaluation_runtime_outcome_unknown");
+  });
+
   it("硬门：禁止 block 出现 → 失败且 hard_gate_failures>0", async () => {
     const candidate = candidateFixture();
     const { streamFn } = createScriptedFakeStreamFn([
@@ -181,6 +198,7 @@ describe("真实 provider runner 适配", () => {
           blocks: [{ kind: "next_step", action: "send_rfq" }],
         } as unknown as JsonObject),
       ]),
+      fauxAssistantMessage("完成"),
     ]);
     const runner = createReceptionEvaluationRunner({
       merchantId: "m-1",

@@ -127,6 +127,7 @@ export function createReceptionEvaluationRunner(
       questionRegistry: questions,
       ...(options.productSource !== undefined ? { productSource: options.productSource } : {}),
       ...(options.policy !== undefined ? { policy: options.policy } : {}),
+      requireCompleteModelRun: true,
       maxSteps: 6,
       maxToolAttempts: 10,
       // 与生产 profile 的 turn_timeout_seconds=90 对齐；30s 会把真实模型
@@ -135,26 +136,21 @@ export function createReceptionEvaluationRunner(
     });
   }
 
-  return async ({ scenario, variant, attempt, candidate, baseline_passed }) => {
+  return async ({ scenario, variant, attempt, candidate, baseline_passed, dispatch_id }) => {
     const input = asInput(scenario);
     const criteria = asCriteria(scenario);
     const now = options.now();
     const registry = new InMemoryFactRegistry();
     const runtime = runtimeFor(variant, candidate);
-    let outcome: Awaited<ReturnType<ReceptionAgentRuntime["run"]>>;
-    try {
-      outcome = await runtime.run({
-        merchantId: options.merchantId,
-        identity: `eval:${scenario.scenario_id}:${variant}:${attempt}`,
-        contextId: `eval:${scenario.scenario_id}:${variant}:${attempt}`,
-        text: input.text,
-        ...(input.structuredSku !== undefined ? { structuredSku: input.structuredSku } : {}),
-        registry,
-        now,
-      });
-    } catch {
-      outcome = undefined;
-    }
+    const outcome = await runtime.run({
+      merchantId: options.merchantId,
+      identity: `eval:${scenario.scenario_id}:${variant}:${attempt}:${dispatch_id ?? "unbound"}`,
+      contextId: `eval:${scenario.scenario_id}:${variant}:${attempt}:${dispatch_id ?? "unbound"}`,
+      text: input.text,
+      ...(input.structuredSku !== undefined ? { structuredSku: input.structuredSku } : {}),
+      registry,
+      now,
+    });
     if (outcome === undefined) {
       if (variant === "baseline") baselineResults.set(`${scenario.scenario_id}:${attempt}`, false);
       return { passed: false, hard_gate_failures: 0 };

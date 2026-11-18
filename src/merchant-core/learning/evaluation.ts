@@ -100,6 +100,8 @@ export interface RunEvaluationInput {
   readonly requireImprovement?: boolean;
   readonly assertClaim?: () => void;
   readonly setAttempt?: (attempt: string | null) => void;
+  readonly saveReceipt?: (marker: { scenario_id: string; kind: ScenarioKind; repetitions: number; variant: "baseline" | "candidate"; attempt: number; dispatch_id: string }, outcome: EvaluationAttemptOutcome) => void;
+  readonly clearReceipt?: (dispatchId: string) => void;
 }
 
 const SUITE_VERSION_PATTERN = /^[a-z0-9][a-z0-9._-]{2,63}$/;
@@ -487,12 +489,14 @@ export async function runCandidateEvaluation(
   });
   if (evaluation.run_status === "completed") return evaluation;
 
+  let receiptToClear: string | undefined;
   const persist = (next: LearningEvaluation): LearningEvaluation => {
     const updated = { ...next, updated_at: now() };
     repository.transaction(() => {
       input.assertClaim?.();
       repository.updateEvaluation(updated);
       input.setAttempt?.(null);
+      if (receiptToClear !== undefined) input.clearReceipt?.(receiptToClear);
     });
     evaluation = updated;
     return updated;
@@ -580,6 +584,8 @@ export async function runCandidateEvaluation(
             ...(err instanceof Error ? {} : {}),
           });
         }
+        input.saveReceipt?.({ scenario_id: scenario.scenario_id, kind: scenario.kind, repetitions, variant, attempt, dispatch_id: dispatchId }, outcome);
+        receiptToClear = dispatchId;
         attempts.push({
           variant,
           attempt,
@@ -603,6 +609,7 @@ export async function runCandidateEvaluation(
           runs_completed: runsCompleted,
           results: { scenarios: results },
         });
+        receiptToClear = undefined;
         // 候选在评测期间被编辑/替换：旧产物结果不能算到新候选。
         const current = repository.readCandidate(merchantId, candidate.candidate_id);
         if (

@@ -1084,6 +1084,23 @@ export class LearningService {
         repository: this.repository, now: this.now, candidate, suite: input.suite, runner: input.runner,
         assertClaim,
         setAttempt: (attempt) => this.repository.setEvaluationAttempt(evaluationKey, attempt),
+        saveReceipt: (marker, outcome) => this.repository.transaction(() => {
+          assertClaim();
+          const config = this.repository.readEvaluationConfig(evaluationKey);
+          if (config?.config_digest !== configDigest || config.pending_attempt !== JSON.stringify(marker)) {
+            throw new LearningError("version_conflict", "evaluation_attempt_changed", "评测调用已变化");
+          }
+          const binding: EvaluationRecoveryBinding = {
+            merchant_id: merchantId, candidate_id: candidateId, candidate_revision: candidate.revision,
+            artifact_hash: candidate.compiled_artifact_hash, suite_version: input.suite.suite_version,
+            config_digest: configDigest, ...marker,
+          };
+          this.repository.saveEvaluationReceipt(`local:${marker.dispatch_id}`, binding, {
+            passed: outcome.passed, hard_gate_failures: outcome.hard_gate_failures,
+            ...(outcome.improvement_delta !== undefined ? { improvement_delta: outcome.improvement_delta } : {}),
+          });
+        }),
+        clearReceipt: (dispatchId) => this.repository.deleteEvaluationReceipt(`local:${dispatchId}`),
         ...(input.budget_cap !== undefined ? { budgetCap: input.budget_cap } : {}),
         ...(input.require_improvement !== undefined ? { requireImprovement: input.require_improvement } : {}),
       });
@@ -1102,7 +1119,7 @@ export class LearningService {
   }
 
   /** 受信应用入口：仅披露当前待核对标识，旧版缺少调用标识时不可自动恢复。 */
-  getPendingEvaluation(input: { merchant_id: string; actor: ActorContext; evaluation_id: string }): { pending: string | null; binding?: EvaluationRecoveryBinding } {
+  getPendingEvaluation(input: { merchant_id: string; actor: ActorContext; evaluation_id: string }): { pending: string | null; binding?: EvaluationRecoveryBinding; evidence_ref?: string } {
     this.ensureAvailable();
     requireActorCapability(input.merchant_id, input.actor, "learning:review");
     const evaluation = this.repository.readEvaluation(input.merchant_id, requireOpaque(input.evaluation_id, "evaluation_id"));
@@ -1113,7 +1130,10 @@ export class LearningService {
     let marker: { scenario_id: string; kind: "target" | "adjacent" | "boundary"; repetitions: number; variant: "baseline" | "candidate"; attempt: number; dispatch_id: string };
     try { marker = JSON.parse(config.pending_attempt) as typeof marker; } catch { return { pending: "legacy_unverifiable" }; }
     if (marker === null || typeof marker !== "object" || typeof marker.dispatch_id !== "string" || typeof marker.scenario_id !== "string" || !["target", "adjacent", "boundary"].includes(marker.kind) || marker.repetitions !== 3 || !["baseline", "candidate"].includes(marker.variant) || !Number.isSafeInteger(marker.attempt) || marker.attempt < 1 || marker.attempt > marker.repetitions) return { pending: "legacy_unverifiable" };
-    return { pending: "uncertain", binding: { merchant_id: input.merchant_id, candidate_id: evaluation.candidate_id, candidate_revision: evaluation.candidate_revision, artifact_hash: evaluation.artifact_hash, suite_version: evaluation.suite_version, config_digest: config.config_digest, scenario_id: marker.scenario_id, kind: marker.kind, repetitions: marker.repetitions, variant: marker.variant, attempt: marker.attempt, dispatch_id: marker.dispatch_id } };
+    const binding: EvaluationRecoveryBinding = { merchant_id: input.merchant_id, candidate_id: evaluation.candidate_id, candidate_revision: evaluation.candidate_revision, artifact_hash: evaluation.artifact_hash, suite_version: evaluation.suite_version, config_digest: config.config_digest, scenario_id: marker.scenario_id, kind: marker.kind, repetitions: marker.repetitions, variant: marker.variant, attempt: marker.attempt, dispatch_id: marker.dispatch_id };
+    const evidenceRef = `local:${binding.dispatch_id}`;
+    const receipt = this.repository.readEvaluationReceipt(evidenceRef);
+    return { pending: "uncertain", binding, ...(receipt !== undefined && contentDigest(receipt.binding) === contentDigest(binding) ? { evidence_ref: evidenceRef } : {}) };
   }
 
   /** 核验器由可信宿主注入；核验不调用模型，完成后由调用方显式续跑。
@@ -1134,7 +1154,7 @@ export class LearningService {
       return JSON.parse(old.result) as { status: "completed" | "not_executed" };
     }
     const pending = this.getPendingEvaluation(input);
-    if (pending.binding === undefined || this.recoveryVerifier === undefined) throw new LearningError("version_conflict", "evaluation_recovery_unavailable", "缺少可核验调用标识或可信证据来源");
+    if (pending.binding === undefined) throw new LearningError("version_conflict", "evaluation_recovery_unavailable", "缺少可核验调用标识或可信证据来源");
     const binding = pending.binding;
     if (binding.dispatch_id !== expectedDispatchId) throw new LearningError("version_conflict", "evaluation_attempt_changed", "调用标识已变化");
     const key = contentDigest({ merchantId: binding.merchant_id, candidateId: binding.candidate_id, artifact: binding.artifact_hash, suite: binding.suite_version });
@@ -1142,7 +1162,18 @@ export class LearningService {
     const owner = randomUUID();
     this.recoveryWriteGuard(() => this.repository.transaction(() => this.repository.claimEvaluation([claimKey], owner, digest, Date.now(), 300_000)));
     try {
-      const verified = await this.recoveryVerifier(binding, evidenceRef);
+      const localRef = `local:${binding.dispatch_id}`;
+      const receipt = this.repository.readEvaluationReceipt(localRef);
+      if (receipt !== undefined && evidenceRef !== localRef) {
+        throw new LearningError("version_conflict", "evaluation_evidence_mismatch", "已有本机完成回执，必须使用该回执");
+      }
+      if (receipt === undefined && evidenceRef.startsWith("local:")) {
+        throw new LearningError("version_conflict", "evaluation_recovery_unavailable", "本机回执不存在");
+      }
+      if (receipt === undefined && this.recoveryVerifier === undefined) throw new LearningError("version_conflict", "evaluation_recovery_unavailable", "缺少可信证据来源");
+      const verified: EvaluationRecoveryVerification = receipt !== undefined
+        ? { status: "completed", binding: receipt.binding as EvaluationRecoveryBinding, outcome: receipt.outcome as EvaluationAttemptOutcome }
+        : this.recoveryVerifier !== undefined ? await this.recoveryVerifier(binding, evidenceRef) : { status: "unknown" };
       if (verified.status !== "completed" && verified.status !== "not_executed") throw new LearningError("version_conflict", "evaluation_evidence_unknown", "证据不足，评测仍被阻塞");
       if (contentDigest(verified.binding) !== contentDigest(binding)) throw new LearningError("version_conflict", "evaluation_evidence_mismatch", "证据与待核对调用不匹配");
       const outcome = verified.status === "completed" ? validateOutcome(verified.outcome) : undefined;
@@ -1166,6 +1197,7 @@ export class LearningService {
           this.repository.updateEvaluation({ ...evaluation, runs_completed: evaluation.runs_completed + 1, results: { scenarios: { ...evaluation.results.scenarios, [binding.scenario_id]: { scenario_id: binding.scenario_id, kind: binding.kind, repetitions: binding.repetitions, attempts } } }, updated_at: this.now() });
         }
         this.repository.setEvaluationAttempt(key, null);
+        this.repository.deleteEvaluationReceipt(`local:${binding.dispatch_id}`);
         const result = { status: verified.status };
         this.repository.appendEvent({ merchantId: binding.merchant_id, subjectKind: "evaluation", subjectId: evaluation.evaluation_id, event: "evaluation_attempt_reconciled", detail: { actor_id: input.actor.actor_id, status: verified.status, dispatch_id: binding.dispatch_id, evidence_digest: contentDigest({ evidenceRef }) }, createdAt: this.now() });
         this.repository.saveIdempotent({ merchantId: binding.merchant_id, actorId: input.actor.actor_id, operation, commandId: input.command_id, requestDigest: digest, result, createdAt: this.now() });
