@@ -125,12 +125,16 @@ describe("buyer init (D4)", () => {
 describe("buyer search (D4, product-first)", () => {
   it("returns discovery projections with authority markers", async () => {
     const fetchImpl = (async (url: string) => {
-      if (String(url).includes("/v1/listings/search")) return listingSearchResponse();
+      if (String(url).includes("/v1/listings/search")) {
+        expect(new URL(url).searchParams.has("region")).toBe(false);
+        return listingSearchResponse();
+      }
       return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
     }) as typeof fetch;
 
     const hits = await buyerSearch({
       query: "21.5 寸工业触摸屏",
+      region: "中国",
       catalogUrl: "http://127.0.0.1:8600",
       fetchImpl,
     });

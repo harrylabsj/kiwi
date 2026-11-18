@@ -86,7 +86,14 @@ export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] 
         properties: {
           query: { type: "string", minLength: 1 },
           category: { type: "string" },
-          region: { type: "string" },
+          region: {
+            type: "string",
+            deprecated: true,
+            description: tr(
+              "Ignored. Kiwi Network search is global. Confirm delivery timing separately.",
+              "此参数已弃用。Kiwi Network 在全球范围内搜索，到货时间另行确认。",
+            ),
+          },
         },
       },
       async handle(args) {
@@ -94,7 +101,6 @@ export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] 
           const result = await service.search({
             query: String(args.query),
             category: args.category === undefined ? undefined : String(args.category),
-            region: args.region === undefined ? undefined : String(args.region),
           });
           // 旧字段 merchants/note 原样保留（已发布宿主在用）；
           // network_search 为增量字段：本次 Network 查询的结构化状态。

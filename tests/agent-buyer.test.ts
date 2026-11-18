@@ -1196,7 +1196,7 @@ describe("catalog-first search cycle (CD #28)", () => {
   it("searches the catalog first and shortlists listings as candidates", async () => {
     const { store, connector, now } = setup();
     const ready = createReadyTask(store, {
-      intent: { category: "electronics", query_text: "iphone" },
+      intent: { category: "electronics", query_text: "iphone", city: "杭州" },
       constraints: { max_total_price: 11000 },
     });
     let seenQuery: KiwiListingSearchQuery | undefined;
@@ -1214,6 +1214,8 @@ describe("catalog-first search cycle (CD #28)", () => {
     // 自由文本意图走 q 模糊匹配；不再把 intent.category 当精确 filter。
     expect(seenQuery?.q).toBe("iphone");
     expect(seenQuery?.category).toBeUndefined();
+    expect(seenQuery?.region).toBeUndefined();
+    expect(result.task.intent.city).toBe("杭州");
     const candidate = result.shortlist[0]?.candidate;
     expect(candidate?.connector_id).toBe("kiwi-catalog");
     expect(candidate?.external_product_id).toBe("lst_catalog_1");

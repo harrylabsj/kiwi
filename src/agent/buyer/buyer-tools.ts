@@ -1614,7 +1614,7 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
       properties: {
         need_description: { type: "string", description: "需求描述（q）" },
         category: { type: "string" },
-        region: { type: "string" },
+        region: { type: "string", description: "已弃用。Listing 搜索覆盖全球。" },
         listing_type: { type: "string", enum: ["product", "capability"] },
         min_moq: { type: "integer" },
         max_moq: { type: "integer" },
@@ -1632,7 +1632,6 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
         const results = await source.searchListings({
           ...(typeof p.need_description === "string" ? { q: p.need_description } : {}),
           ...(typeof p.category === "string" ? { category: p.category } : {}),
-          ...(typeof p.region === "string" ? { region: p.region } : {}),
           ...(p.listing_type === "product" || p.listing_type === "capability"
             ? { listing_type: p.listing_type }
             : {}),

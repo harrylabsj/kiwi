@@ -501,6 +501,34 @@ describe("KiwiBuyerService.search：汇总与兼容口径", () => {
     expect(result.network_search.notes.join(" ")).toContain("unreachable");
   });
 
+  it("旧版 WorkBuddy 传 region=中国 时仍能发现未填写地域的商品", async () => {
+    const query = "Women's Zipper Binder";
+    const catalog = stubCatalog({
+      agents: { body: EMPTY },
+      listings: { body: { results: [listingResult({ title: query })], next_cursor: null } },
+      publications: { body: EMPTY },
+    });
+    const fetchImpl: typeof fetch = (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/v1/listings/search") {
+        expect(url.searchParams.get("q")).toBe(query);
+        if (url.searchParams.has("region")) {
+          return Promise.resolve(Response.json(EMPTY));
+        }
+      }
+      return catalog(input, init);
+    };
+    const index = makeIndex(fetchImpl);
+    const tool = buildKiwiTools(makeService(index)).find((each) => each.name === "kiwi_search");
+    const result = await tool!.handle({ query, region: "中国" });
+    expect(result.isError).toBeUndefined();
+    expect(JSON.parse(result.content[0]!.text)).toMatchObject({
+      merchants: [{ products: [{ title: query }] }],
+      network_search: { status: "completed", result_state: "has_candidates" },
+    });
+    expect(await index.search(query, { region: "中国" })).toHaveLength(1);
+  });
+
   it("kiwi_search 透传 network_search，旧字段 merchants/note 保持不变", async () => {
     const fetchImpl = stubCatalog({
       agents: { body: EMPTY },

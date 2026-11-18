@@ -618,6 +618,7 @@ export class KiwiBuyerService {
   async search(input: {
     query: string;
     category?: string;
+    /** @deprecated Accepted for older hosts. Kiwi Network discovery is global. */
     region?: string;
   }): Promise<{
     merchants: MerchantRecord[];
@@ -638,7 +639,6 @@ export class KiwiBuyerService {
       if (index.searchWithDiagnostics !== undefined) {
         const { merchants, diagnostics } = await index.searchWithDiagnostics(input.query, {
           category: input.category,
-          region: input.region,
         });
         // 单侧降级/离线说明如实标注；不静默、不补全。
         return {
@@ -650,7 +650,6 @@ export class KiwiBuyerService {
       // 旧版/第三方索引：只有 merchants + 实例级 lastSearchNotes（可被并发覆盖）。
       const merchants = await index.search(input.query, {
         category: input.category,
-        region: input.region,
       });
       const notes = index.lastSearchNotes?.() ?? [];
       const diagnostics = legacySearchDiagnostics({

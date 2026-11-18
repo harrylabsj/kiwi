@@ -78,7 +78,7 @@ Usage:
   kiwi buyer init --agent-id <buyer 身份>  [D4] 生成 buyer profile（无需 shopping-cli；
                                           --output/--force；或 KIWI_BUYER_AGENT_ID）
   kiwi buyer search <需求描述>             [D4] Product-first 搜索（listing → Merchant
-                                          Agent；--catalog/--limit/--category/--region）
+                                          Agent；--catalog/--limit/--category）
   kiwi buyer tasks [--data-dir <dir>]      [D4] 查看 Buyer 任务（start 运行后）
   kiwi buyer supplier save <merchant-id>   [M1] 保存供应商（不轮询；经 --catalog 解析）
   kiwi buyer supplier watch <merchant-id> [--query <词>] [--region <区域>] [--interval <秒≥3600>] [--expires 90d]

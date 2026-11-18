@@ -1298,7 +1298,6 @@ async function cmdBuyerSearch(args: ParsedArgs): Promise<number> {
       catalogUrl: catalog,
       ...(limit !== undefined ? { limit } : {}),
       ...(args.category !== undefined ? { category: args.category } : {}),
-      ...(args.region !== undefined ? { region: args.region } : {}),
       ...(args.listingType === "product" || args.listingType === "capability"
         ? { listingType: args.listingType }
         : {}),
