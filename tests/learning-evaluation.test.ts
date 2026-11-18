@@ -4,7 +4,16 @@
  * interrupted 可恢复；候选评测期间变化 → STALE；冻结产物契约校验。
  */
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { fauxAssistantMessage, fauxToolCall, type Api, type Model } from "@earendil-works/pi-ai";
+import { createScriptedFakeStreamFn } from "../src/runtime/fake-model.js";
+import { createReceptionEvaluationRunner } from "../src/merchant-core/learning/real-evaluation-runner.js";
+import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { build } from "esbuild";
+import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { registerGovernanceLedgers } from "../src/merchant-core/migrations/ledgers.js";
 import { LearningRepository } from "../src/merchant-core/learning/repository.js";
@@ -15,6 +24,9 @@ import type {
 } from "../src/merchant-core/learning/evaluation.js";
 import { LearningError } from "../src/merchant-core/learning/types.js";
 import { createActorContext } from "../src/merchant-core/context-governance/actor-context.js";
+import { createTestDispatchGateway } from "../src/merchant-core/learning/test-dispatch-gateway.js";
+import { createRecoveryGatewayVerifier } from "../src/merchant-core/learning/recovery-gateway.js";
+import { contentDigest } from "../src/negotiation/jcs.js";
 
 const NOW = "2026-11-17T00:00:00.000Z";
 
@@ -91,13 +103,15 @@ function passRunner(options: {
 
 describe("候选评测（M2-4）", () => {
   let db: DatabaseSync;
+  let tempDir: string;
   let repository: LearningRepository;
   let service: LearningService;
   let candidateId: string;
   let contentHash: string;
 
   beforeEach(() => {
-    db = new DatabaseSync(":memory:");
+    tempDir = mkdtempSync(join(tmpdir(), "kiwi-evaluation-"));
+    db = new DatabaseSync(join(tempDir, "state.sqlite"));
     registerGovernanceLedgers(db);
     repository = new LearningRepository({ db });
     service = new LearningService({ repository, now: () => NOW });
@@ -127,7 +141,7 @@ describe("候选评测（M2-4）", () => {
     candidateId = candidate.candidate_id;
     contentHash = candidate.compiled_artifact_hash;
   });
-  afterEach(() => db.close());
+  afterEach(() => { db.close(); rmSync(tempDir, { recursive: true, force: true }); });
 
   async function evaluate(runner: EvaluationRunner, options: { budget?: number; requireImprovement?: boolean } = {}) {
     return service.evaluateCandidate({
@@ -194,6 +208,7 @@ describe("候选评测（M2-4）", () => {
     // 同一冻结产物/套件已完成的失败结果重放返回原报告，不重复回放。
     const replay = await evaluate(passRunner({ improvement: 0 }));
     expect(replay.evaluation_id).toBe(failed.evaluation_id);
+    expect(service.getCandidate("m-1", candidateId)?.state).toBe("EVALUATION_FAILED");
 
     // 换套件版本重新评测。
     const passed = await service.evaluateCandidate({
@@ -224,24 +239,166 @@ describe("候选评测（M2-4）", () => {
     expect(evaluation.report?.failure_reasons[0]).toContain("contract_mismatch");
   });
 
-  it("runner 中断保留 EVALUATING + failed；重试补齐缺失回放且不重复", async () => {
+  it("runner 中断后结果不确定，禁止自动重跑", async () => {
     let calls = 0;
     const flaky: EvaluationRunner = (input) => {
       calls += 1;
       if (calls === 5) throw new Error("provider timeout");
       return passRunner()(input);
     };
-    const interrupted = await evaluate(flaky);
-    expect(interrupted.state).toBe("EVALUATING");
-    expect(interrupted.run_status).toBe("failed");
-    expect(interrupted.runs_completed).toBeGreaterThan(0);
-    expect(interrupted.runs_completed).toBeLessThan(120);
+    await expect(evaluate(flaky)).rejects.toMatchObject({ reason: "evaluation_attempt_uncertain" });
+    await expect(evaluate(passRunner())).rejects.toMatchObject({ reason: "evaluation_attempt_uncertain" });
+    expect(calls).toBe(5);
+  });
 
-    const resumed = await evaluate(passRunner());
-    expect(resumed.evaluation_id).toBe(interrupted.evaluation_id);
-    expect(resumed.state).toBe("READY_FOR_REVIEW");
-    expect(resumed.run_status).toBe("completed");
-    expect(resumed.runs_completed).toBe(120);
+  it("持久化基线会传入恢复后的候选回放", async () => {
+    let calls = 0;
+    await expect(evaluate(() => {
+      calls++;
+      if (calls === 2) throw new Error("interrupted");
+      return { passed: true, hard_gate_failures: 0 };
+    })).rejects.toMatchObject({ reason: "evaluation_attempt_uncertain" });
+    // 模拟操作者已核对第二次调用未执行，清除不确定标记。
+    db.prepare("UPDATE learning_evaluation_config SET pending_attempt = NULL").run();
+    let observed: boolean | undefined;
+    const result = await evaluate((input) => {
+      if (input.scenario.scenario_id === "target-0" && input.variant === "candidate" && input.attempt === 1) observed = input.baseline_passed;
+      return { passed: true, hard_gate_failures: 0, improvement_delta: 0 };
+    }, { requireImprovement: true });
+    expect(observed).toBe(true);
+    expect(result.report?.improvement_delta_max).toBe(0);
+    expect(result.state).toBe("EVALUATION_FAILED");
+  });
+
+  it("不同连接并发相同评测只允许一个执行者", async () => {
+    const db2 = new DatabaseSync(join(tempDir, "state.sqlite"));
+    const service2 = new LearningService({ repository: new LearningRepository({ db: db2 }), now: () => NOW });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    let calls = 0;
+    const first = evaluate(async (input) => {
+      calls++;
+      if (calls === 1) { entered(); await gate; }
+      return passRunner()(input);
+    });
+    await started;
+    try {
+      await expect(service2.evaluateCandidate({ merchant_id: "m-1", actor: actor(), candidate_id: candidateId,
+        content_hash: contentHash, suite: suite(), runner: passRunner() }))
+        .rejects.toMatchObject({ reason: "evaluation_in_progress" });
+    } finally { release(); }
+    expect((await first).runs_completed).toBe(120);
+    expect(calls).toBe(120);
+    db2.close();
+  });
+
+  it("两个独立进程竞争同一评测时只派发一次", async () => {
+    const entry = join(tempDir, "worker.mjs");
+    const bundle = join(tempDir, "bundle.mjs");
+    const marker = join(tempDir, "entered");
+    const release = join(tempDir, "release");
+    writeFileSync(entry, `
+      import { DatabaseSync } from "node:sqlite";
+      import { existsSync, writeFileSync } from "node:fs";
+      import { LearningRepository } from ${JSON.stringify(resolve("src/merchant-core/learning/repository.ts"))};
+      import { LearningService } from ${JSON.stringify(resolve("src/merchant-core/learning/service.ts"))};
+      import { createActorContext } from ${JSON.stringify(resolve("src/merchant-core/context-governance/actor-context.ts"))};
+      const [file, candidate, hash, spec, entered, release, mode] = process.argv.slice(2);
+      const db = new DatabaseSync(file);
+      const service = new LearningService({ repository: new LearningRepository({ db }), now: () => ${JSON.stringify(NOW)} });
+      const actor = createActorContext({ merchant_id:"m-1", actor_id:"admin-1", auth_strength:"verified", subject_binding:"organization", capabilities:["learning:manage"] });
+      let count = 0;
+      try {
+        const result = await service.evaluateCandidate({ merchant_id:"m-1", actor, candidate_id:candidate, content_hash:hash, suite:JSON.parse(spec), runner:async () => {
+          count++;
+          if (mode === "hold" && count === 1) {
+            writeFileSync(entered,"1");
+            while (!existsSync(release)) await new Promise(r => setTimeout(r, 10));
+          }
+          return { passed:true, hard_gate_failures:0, improvement_delta:1 };
+        } }, { command_id:"shared-command" });
+        process.stdout.write(JSON.stringify({ count, status:result.run_status }));
+      } catch (e) { process.stdout.write(JSON.stringify({ count, reason:e.reason })); }
+      db.close();
+    `);
+    await build({ entryPoints: [entry], outfile: bundle, bundle: true, platform: "node", format: "esm", logLevel: "silent" });
+    const run = (mode: string) => {
+      const child = spawn(process.execPath, [bundle, join(tempDir, "state.sqlite"), candidateId, contentHash,
+        JSON.stringify(suite()), marker, release, mode], { stdio: ["ignore", "pipe", "pipe"] });
+      let output = ""; let error = "";
+      child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString(); });
+      child.stderr.on("data", (chunk: Buffer) => { error += chunk.toString(); });
+      return { child, done: new Promise<{ count: number; status?: string; reason?: string }>((res, rej) => {
+        child.on("error", rej); child.on("close", (code) => code === 0 ? res(JSON.parse(output)) : rej(new Error(error)));
+      }) };
+    };
+    const first = run("hold");
+    try {
+      const deadline = Date.now() + 10_000;
+      while (!existsSync(marker) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+      expect(existsSync(marker)).toBe(true);
+      const second = run("other");
+      const rejected = await second.done;
+      expect(rejected).toMatchObject({ count: 0, reason: "evaluation_in_progress" });
+      writeFileSync(release, "1");
+      expect(await first.done).toMatchObject({ count: 120, status: "completed" });
+    } finally { writeFileSync(release, "1"); if (first.child.exitCode === null) first.child.kill(); }
+  }, 20_000);
+
+  it("完成命令重放在候选审批后仍返回原结果，并拒绝内容变更", async () => {
+    const input = { merchant_id: "m-1", actor: actor(), candidate_id: candidateId, content_hash: contentHash,
+      suite: suite(), runner: passRunner() };
+    const done = await service.evaluateCandidate(input, { command_id: "replay" });
+    const candidate = service.getCandidate("m-1", candidateId)!;
+    repository.updateCandidate({ ...candidate, state: "APPROVED" });
+    expect(await service.evaluateCandidate(input, { command_id: "replay" })).toEqual(done);
+    const changed = { ...input, suite: { ...input.suite, scenarios: input.suite.scenarios.map((scenario, i) => i === 0 ? { ...scenario, input: "changed" } : scenario) } };
+    await expect(service.evaluateCandidate(changed, { command_id: "replay" })).rejects.toMatchObject({ reason: "command_replay_conflict" });
+  });
+
+  it("旧完成报告可查询，但缺少冻结配置的旧命令不可重放", async () => {
+    const input = { merchant_id: "m-1", actor: actor(), candidate_id: candidateId, content_hash: contentHash,
+      suite: suite(), runner: passRunner() };
+    const done = await service.evaluateCandidate(input, { command_id: "legacy" });
+    db.prepare("DELETE FROM learning_evaluation_config").run();
+    db.prepare("UPDATE learning_command_idempotency SET request_digest = 'legacy-digest'").run();
+    expect(service.getEvaluation("m-1", done.evaluation_id)).toEqual(done);
+    await expect(service.evaluateCandidate(input, { command_id: "legacy" })).rejects.toMatchObject({ reason: "command_replay_conflict" });
+    await expect(service.evaluateCandidate(input)).rejects.toMatchObject({ reason: "evaluation_legacy_unverified" });
+  });
+
+  it("相同产物跨候选 revision 不复用旧评测", async () => {
+    await evaluate(passRunner(), { budget: 10 });
+    const candidate = service.getCandidate("m-1", candidateId)!;
+    repository.updateCandidate({ ...candidate, revision: candidate.revision + 1 });
+    await expect(evaluate(passRunner())).rejects.toMatchObject({ reason: "evaluation_revision_mismatch" });
+  });
+
+  it("无效套件不占用命令和套件版本，有效请求仍可执行", async () => {
+    const input = { merchant_id: "m-1", actor: actor(), candidate_id: candidateId, content_hash: contentHash,
+      suite: suite(), runner: passRunner() };
+    const invalid = { ...input, suite: { ...input.suite, scenarios: [] } };
+    await expect(service.evaluateCandidate(invalid, { command_id: "corrected" })).rejects.toMatchObject({ reason: "suite_empty" });
+    expect((db.prepare("SELECT COUNT(*) AS n FROM learning_evaluation_config").get() as { n: number }).n).toBe(0);
+    expect((await service.evaluateCandidate(input, { command_id: "corrected" })).run_status).toBe("completed");
+  });
+
+  it("续跑拒绝同版本套件内容和改善要求变更", async () => {
+    await evaluate(passRunner(), { budget: 10 });
+    const altered = suite();
+    const changed = { ...altered, scenarios: altered.scenarios.map((item, i) => i === 0 ? { ...item, input: { changed: true } } : item) };
+    await expect(service.evaluateCandidate({ merchant_id: "m-1", actor: actor(), candidate_id: candidateId,
+      content_hash: contentHash, suite: changed, runner: passRunner() })).rejects.toMatchObject({ reason: "evaluation_config_mismatch" });
+    await expect(evaluate(passRunner(), { requireImprovement: false })).rejects.toMatchObject({ reason: "evaluation_config_mismatch" });
+  });
+
+  it("过期租约被接管后，旧持有者无法通过栅栏", () => {
+    repository.transaction(() => repository.claimEvaluation(["evaluation:test"], "first", "digest", 100, 10));
+    repository.transaction(() => repository.claimEvaluation(["evaluation:test"], "second", "digest", 111, 10));
+    expect(() => repository.assertEvaluationClaim(["evaluation:test"], "first", 112)).toThrowError(LearningError);
+    expect(() => repository.assertEvaluationClaim(["evaluation:test"], "second", 112)).not.toThrow();
   });
 
   it("预算不足：paused_budget，保留 EVALUATING，不发起回放", async () => {
@@ -279,6 +436,39 @@ describe("候选评测（M2-4）", () => {
     expect(service.getCandidate("m-1", candidateId)?.revision).toBe(candidate.revision + 1);
   });
 
+  it.each(["normal", "budget", "contract"])("%s 启动事务复核已拒绝状态", async (path) => {
+    const initial = service.getCandidate("m-1", candidateId)!;
+    if (path === "contract") repository.updateCandidate({ ...initial, tool_contract_digest: "sha256:stale" });
+    const candidate = service.getCandidate("m-1", candidateId)!;
+    const transaction = repository.transaction.bind(repository);
+    const spy = vi.spyOn(repository, "transaction").mockImplementation((work) => {
+      spy.mockRestore();
+      repository.updateCandidate({ ...candidate, state: "REJECTED" });
+      return transaction(work);
+    });
+    let calls = 0;
+    await expect(evaluate((input) => { calls++; return passRunner()(input); },
+      path === "budget" ? { budget: 1 } : {})).rejects.toMatchObject({ reason: "candidate_state_locked" });
+    expect(calls).toBe(0);
+    expect(service.getCandidate("m-1", candidateId)?.state).toBe("REJECTED");
+    expect(service.listEvaluations("m-1")).toHaveLength(0);
+  });
+
+  it("已拒绝候选不能原样重评", async () => {
+    const candidate = service.getCandidate("m-1", candidateId)!;
+    repository.updateCandidate({ ...candidate, state: "REJECTED" });
+    await expect(evaluate(passRunner())).rejects.toMatchObject({ reason: "candidate_state_locked" });
+  });
+
+  it("评测期间状态改变不会被结果覆盖", async () => {
+    const candidate = service.getCandidate("m-1", candidateId)!;
+    const result = await evaluate(passRunner({ onCall: (call) => {
+      if (call === 1) repository.updateCandidate({ ...candidate, state: "APPROVED" });
+    } }));
+    expect(result).toMatchObject({ state: "STALE", run_status: "interrupted" });
+    expect(service.getCandidate("m-1", candidateId)?.state).toBe("APPROVED");
+  });
+
   it("内容 hash 不符 / 已批准候选不可评测", async () => {
     try {
       await service.evaluateCandidate({
@@ -308,6 +498,248 @@ describe("候选评测（M2-4）", () => {
       expect.unreachable("APPROVED 候选不可评测");
     } catch (err) {
       expect((err as LearningError).reason).toBe("candidate_state_locked");
+    }
+  });
+  it("准备后派发前故障可安全取消，旧执行者被栅栏阻止且重试使用新标识", async () => {
+    const reviewer = createActorContext({ merchant_id: "m-1", actor_id: "reviewer", auth_strength: "verified", subject_binding: "organization", capabilities: ["learning:review"] });
+    const db2 = new DatabaseSync(join(tempDir, "state.sqlite"));
+    const repo2 = new LearningRepository({ db: db2 });
+    const other = new LearningService({ repository: repo2, now: () => NOW });
+    let oldOwner = "";
+    let oldKey = "";
+    let oldPrepared = "";
+    let oldDispatched = "";
+    let activeRef: string | undefined;
+    let calls = 0;
+    const transition = vi.spyOn(repository, "transitionEvaluationAttempt").mockImplementationOnce((key, prepared, dispatched) => {
+      oldKey = key; oldPrepared = prepared; oldDispatched = dispatched;
+      oldOwner = (db.prepare("SELECT owner FROM learning_evaluation_claims WHERE claim_key = ?").get(`evaluation:${key}`) as { owner: string }).owner;
+      const evaluationId = other.listEvaluations("m-1")[0]!.evaluation_id;
+      activeRef = other.getPendingEvaluation({ merchant_id: "m-1", actor: reviewer, evaluation_id: evaluationId }).evidence_ref;
+      throw new Error("injected_before_dispatch");
+    });
+    try {
+      await expect(evaluate(() => { calls++; return { passed: true, hard_gate_failures: 0 }; })).rejects.toThrow("injected_before_dispatch");
+      transition.mockRestore();
+      expect(calls).toBe(0);
+      expect(activeRef).toBeUndefined();
+      const query = { merchant_id: "m-1", actor: reviewer, evaluation_id: other.listEvaluations("m-1")[0]!.evaluation_id };
+      const pending = other.getPendingEvaluation(query);
+      expect(pending.evidence_ref).toBe(`local-prepared:${pending.binding!.dispatch_id}`);
+      const request = { ...query, expected_dispatch_id: pending.binding!.dispatch_id, evidence_ref: pending.evidence_ref!, command_id: "cancel-prepared" };
+      repo2.transaction(() => repo2.claimEvaluation([`evaluation:${oldKey}`], "still-active", "test", Date.now(), 60_000));
+      expect(other.getPendingEvaluation(query).evidence_ref).toBeUndefined();
+      await expect(other.resolvePendingEvaluation(request)).rejects.toMatchObject({ reason: "evaluation_in_progress" });
+      db2.prepare("UPDATE learning_evaluation_claims SET expires_at = 0 WHERE claim_key = ?").run(`evaluation:${oldKey}`);
+      expect(other.getPendingEvaluation(query).evidence_ref).toBe(request.evidence_ref);
+      expect(await other.resolvePendingEvaluation(request)).toEqual({ status: "not_executed" });
+      expect(await other.resolvePendingEvaluation(request)).toEqual({ status: "not_executed" });
+      expect(other.getPendingEvaluation(query).pending).toBeNull();
+      expect(() => repository.transaction(() => {
+        repository.assertEvaluationClaim([`evaluation:${oldKey}`], oldOwner, Date.now());
+        repository.transitionEvaluationAttempt(oldKey, oldPrepared, oldDispatched);
+      })).toThrowError(LearningError);
+      expect(() => repo2.transaction(() => repo2.transitionEvaluationAttempt(oldKey, oldPrepared, oldDispatched))).toThrowError(LearningError);
+      expect(calls).toBe(0);
+      let newDispatch = "";
+      await expect(evaluate(({ dispatch_id }) => { calls++; newDispatch = dispatch_id!; throw new Error("stop_after_dispatch"); })).rejects.toMatchObject({ reason: "evaluation_attempt_uncertain" });
+      expect(calls).toBe(1);
+      expect(newDispatch).not.toBe(pending.binding!.dispatch_id);
+      const after = other.getPendingEvaluation(query);
+      expect(after.evidence_ref).toBeUndefined();
+      await expect(other.resolvePendingEvaluation({ ...request, expected_dispatch_id: newDispatch, evidence_ref: `local-prepared:${newDispatch}`, command_id: "reject-dispatched" })).rejects.toMatchObject({ reason: "evaluation_recovery_unavailable" });
+      const current = repo2.readEvaluationConfig(oldKey)!;
+      const legacy = JSON.parse(current.pending_attempt!) as { phase?: string };
+      delete legacy.phase;
+      db2.prepare("UPDATE learning_evaluation_config SET pending_attempt = ? WHERE evaluation_key = ?").run(JSON.stringify(legacy), oldKey);
+      expect(other.getPendingEvaluation(query).evidence_ref).toBeUndefined();
+      await expect(other.resolvePendingEvaluation({ ...request, expected_dispatch_id: newDispatch, evidence_ref: `local-prepared:${newDispatch}`, command_id: "reject-legacy" })).rejects.toMatchObject({ reason: "evaluation_recovery_unavailable" });
+      const events = db2.prepare("SELECT detail_json FROM learning_events WHERE event = ?").all("evaluation_attempt_reconciled") as Array<{ detail_json: string }>;
+      expect(events).toHaveLength(1);
+      expect(JSON.parse(events[0]!.detail_json)).toMatchObject({ status: "not_executed", dispatch_id: pending.binding!.dispatch_id });
+    } finally { transition.mockRestore(); db2.close(); }
+  });
+
+  it("真实 runner 评分回执跨连接恢复，结果落账前故障不重复执行", async () => {
+    const reviewer = createActorContext({ merchant_id: "m-1", actor_id: "reviewer", auth_strength: "verified", subject_binding: "organization", capabilities: ["learning:review"] });
+    const model = { id: "fake-model", name: "fake-model", api: "openai-completions", provider: "fake", baseUrl: "", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 8192 } as Model<Api>;
+    const streamFn = createScriptedFakeStreamFn([fauxAssistantMessage([fauxToolCall("propose_reply", { blocks: [{ kind: "next_step", action: "send_rfq" }] })]), fauxAssistantMessage("完成")]).streamFn;
+    const runner = createReceptionEvaluationRunner({ merchantId: "m-1", streamFn, model, now: () => NOW });
+    const update = vi.spyOn(repository, "updateEvaluation").mockImplementationOnce(() => { throw new Error("injected primary write failure"); });
+    await expect(evaluate(runner)).rejects.toThrow("injected primary write failure");
+    update.mockRestore();
+    const query = { merchant_id: "m-1", actor: reviewer, evaluation_id: service.listEvaluations("m-1")[0]!.evaluation_id };
+    const db2 = new DatabaseSync(join(tempDir, "state.sqlite"));
+    try {
+      const resumed = new LearningService({ repository: new LearningRepository({ db: db2 }), now: () => NOW });
+      const pending = resumed.getPendingEvaluation(query);
+      expect(pending.evidence_ref).toBe(`local:${pending.binding!.dispatch_id}`);
+      const request = { ...query, expected_dispatch_id: pending.binding!.dispatch_id, evidence_ref: pending.evidence_ref!, command_id: "recover-local" };
+      const external = vi.fn(async (binding: typeof pending.binding & {}) => ({ status: "not_executed" as const, binding }));
+      const withExternal = new LearningService({ repository: new LearningRepository({ db: db2 }), now: () => NOW, recoveryVerifier: external });
+      await expect(withExternal.resolvePendingEvaluation({ ...request, evidence_ref: "external-proof" })).rejects.toMatchObject({ reason: "evaluation_evidence_mismatch" });
+      await expect(withExternal.resolvePendingEvaluation({ ...request, evidence_ref: "local:wrong" })).rejects.toMatchObject({ reason: "evaluation_evidence_mismatch" });
+      expect(external).not.toHaveBeenCalled();
+      expect(resumed.getPendingEvaluation(query).evidence_ref).toBe(request.evidence_ref);
+      expect((db2.prepare("SELECT COUNT(*) AS n FROM learning_evaluation_receipts").get() as { n: number }).n).toBe(1);
+      expect(await resumed.resolvePendingEvaluation(request)).toEqual({ status: "completed" });
+      expect(resumed.getEvaluation("m-1", query.evaluation_id)?.runs_completed).toBe(1);
+      expect((db2.prepare("SELECT COUNT(*) AS n FROM learning_evaluation_receipts").get() as { n: number }).n).toBe(0);
+    } finally { db2.close(); }
+    expect((await evaluate(passRunner())).run_status).toBe("completed");
+  });
+
+  it("核对只接受绑定当前 dispatch 的可信结果并允许续跑", async () => {
+    const reviewer = createActorContext({ merchant_id: "m-1", actor_id: "reviewer", auth_strength: "verified", subject_binding: "organization", capabilities: ["learning:review"] });
+    await expect(evaluate(async () => { throw new Error("uncertain"); })).rejects.toMatchObject({ reason: "evaluation_attempt_uncertain" });
+    const query = { merchant_id: "m-1", actor: reviewer, evaluation_id: service.listEvaluations("m-1")[0]!.evaluation_id };
+    const binding = service.getPendingEvaluation(query).binding!;
+    expect(binding.dispatch_id).toBeTruthy();
+    const request = { ...query, evidence_ref: "receipt-1", expected_dispatch_id: binding.dispatch_id, command_id: "resolve-1" };
+    await expect(service.resolvePendingEvaluation(request)).rejects.toMatchObject({ reason: "evaluation_recovery_unavailable" });
+    const verifier = vi.fn(async (actual: typeof binding) => ({ status: "completed" as const, binding: actual, outcome: { passed: true, hard_gate_failures: 0 } }));
+    const trusted = new LearningService({ repository, now: () => NOW, recoveryVerifier: verifier });
+    await expect(trusted.resolvePendingEvaluation({ ...request, evidence_ref: "local:missing" })).rejects.toMatchObject({ reason: "evaluation_recovery_unavailable" });
+    expect(verifier).not.toHaveBeenCalled();
+    expect(await trusted.resolvePendingEvaluation(request)).toEqual({ status: "completed" });
+    expect(await trusted.resolvePendingEvaluation(request)).toEqual({ status: "completed" });
+    await expect(trusted.resolvePendingEvaluation({ ...request, evidence_ref: "other" })).rejects.toMatchObject({ reason: "command_replay_conflict" });
+    expect((await evaluate(passRunner())).run_status).toBe("completed");
+  });
+
+  it("未执行证明只解锁本次 dispatch，旧证明不能解锁新的调用", async () => {
+    const reviewer = createActorContext({ merchant_id: "m-1", actor_id: "reviewer", auth_strength: "verified", subject_binding: "organization", capabilities: ["learning:review"] });
+    await expect(evaluate(async () => { throw new Error("uncertain"); })).rejects.toMatchObject({ reason: "evaluation_attempt_uncertain" });
+    const query = { merchant_id: "m-1", actor: reviewer, evaluation_id: service.listEvaluations("m-1")[0]!.evaluation_id };
+    const binding = service.getPendingEvaluation(query).binding!;
+    const trusted = new LearningService({ repository, now: () => NOW, recoveryVerifier: async () => ({ status: "not_executed", binding }) });
+    const request = { ...query, evidence_ref: "proof", expected_dispatch_id: binding.dispatch_id, command_id: "one" };
+    expect(await trusted.resolvePendingEvaluation(request)).toEqual({ status: "not_executed" });
+    await expect(evaluate(async () => { throw new Error("uncertain again"); })).rejects.toMatchObject({ reason: "evaluation_attempt_uncertain" });
+    const next = service.getPendingEvaluation(query).binding!;
+    expect(next.dispatch_id).not.toBe(binding.dispatch_id);
+    await expect(trusted.resolvePendingEvaluation({ ...request, command_id: "two" })).rejects.toMatchObject({ reason: "evaluation_attempt_changed" });
+    await expect(trusted.resolvePendingEvaluation({ ...request, command_id: "three", expected_dispatch_id: next.dispatch_id })).rejects.toMatchObject({ reason: "evaluation_evidence_mismatch" });
+    expect(service.getPendingEvaluation(query).binding).toEqual(next);
+  });
+
+  it("未知证据和旧版标记保持阻塞，权限不足不可查看", async () => {
+    const reviewer = createActorContext({ merchant_id: "m-1", actor_id: "reviewer", auth_strength: "verified", subject_binding: "organization", capabilities: ["learning:review"] });
+    await expect(evaluate(async () => { throw new Error("uncertain"); })).rejects.toMatchObject({ reason: "evaluation_attempt_uncertain" });
+    const query = { merchant_id: "m-1", actor: reviewer, evaluation_id: service.listEvaluations("m-1")[0]!.evaluation_id };
+    expect(() => service.getPendingEvaluation({ ...query, actor: actor() })).toThrowError(LearningError);
+    const binding = service.getPendingEvaluation(query).binding!;
+    const request = { ...query, evidence_ref: "proof", expected_dispatch_id: binding.dispatch_id, command_id: "unknown" };
+    const unknown = new LearningService({ repository, now: () => NOW, recoveryVerifier: async () => ({ status: "unknown" }) });
+    await expect(unknown.resolvePendingEvaluation(request)).rejects.toMatchObject({ reason: "evaluation_evidence_unknown" });
+    expect(unknown.getPendingEvaluation(query).binding).toEqual(binding);
+    db.prepare("UPDATE learning_evaluation_config SET pending_attempt = ?").run("target-0:baseline:1");
+    expect(unknown.getPendingEvaluation(query)).toEqual({ pending: "legacy_unverifiable" });
+    await expect(unknown.resolvePendingEvaluation(request)).rejects.toMatchObject({ reason: "evaluation_recovery_unavailable" });
+  });
+
+  it("核验期间候选变化时不写入成绩或清除标记", async () => {
+    const reviewer = createActorContext({ merchant_id: "m-1", actor_id: "reviewer", auth_strength: "verified", subject_binding: "organization", capabilities: ["learning:review"] });
+    await expect(evaluate(async () => { throw new Error("uncertain"); })).rejects.toMatchObject({ reason: "evaluation_attempt_uncertain" });
+    const query = { merchant_id: "m-1", actor: reviewer, evaluation_id: service.listEvaluations("m-1")[0]!.evaluation_id };
+    const binding = service.getPendingEvaluation(query).binding!;
+    const trusted = new LearningService({ repository, now: () => NOW, recoveryVerifier: async (current) => {
+      const candidate = service.getCandidate("m-1", candidateId)!;
+      repository.updateCandidate({ ...candidate, state: "STALE" });
+      return { status: "completed", binding: current, outcome: { passed: true, hard_gate_failures: 0 } };
+    } });
+    await expect(trusted.resolvePendingEvaluation({ ...query, evidence_ref: "receipt", expected_dispatch_id: binding.dispatch_id, command_id: "stale" })).rejects.toMatchObject({ reason: "evaluation_attempt_changed" });
+    expect(service.getPendingEvaluation(query).binding).toEqual(binding);
+    expect(service.getEvaluation("m-1", query.evaluation_id)!.runs_completed).toBe(0);
+  });
+
+  it("恢复执行权过期后旧核验不能提交；账本不可用时幂等重放也被拒绝", async () => {
+    const reviewer = createActorContext({ merchant_id: "m-1", actor_id: "reviewer", auth_strength: "verified", subject_binding: "organization", capabilities: ["learning:review"] });
+    await expect(evaluate(async () => { throw new Error("uncertain"); })).rejects.toMatchObject({ reason: "evaluation_attempt_uncertain" });
+    const query = { merchant_id: "m-1", actor: reviewer, evaluation_id: service.listEvaluations("m-1")[0]!.evaluation_id };
+    const binding = service.getPendingEvaluation(query).binding!;
+    const request = { ...query, evidence_ref: "receipt", expected_dispatch_id: binding.dispatch_id, command_id: "fence" };
+    let currentTime = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => currentTime);
+    try {
+      const expired = new LearningService({ repository, now: () => NOW, recoveryVerifier: async (current) => {
+        currentTime += 300_001;
+        return { status: "completed", binding: current, outcome: { passed: true, hard_gate_failures: 0 } };
+      } });
+      await expect(expired.resolvePendingEvaluation(request)).rejects.toMatchObject({ reason: "evaluation_claim_lost" });
+      expect(service.getPendingEvaluation(query).binding).toEqual(binding);
+      const trusted = new LearningService({ repository, now: () => NOW, recoveryVerifier: async (current) => ({ status: "completed", binding: current, outcome: { passed: true, hard_gate_failures: 0 } }) });
+      expect(await trusted.resolvePendingEvaluation(request)).toEqual({ status: "completed" });
+      const unavailable = new LearningService({ repository, now: () => NOW, available: false });
+      await expect(unavailable.resolvePendingEvaluation(request)).rejects.toMatchObject({ reason: "learning_schema_unavailable" });
+    } finally { clock.mockRestore(); }
+  });
+
+  it("释放租约时写权限失效，不覆盖核验错误或已提交结果", async () => {
+    const reviewer = createActorContext({ merchant_id: "m-1", actor_id: "reviewer", auth_strength: "verified", subject_binding: "organization", capabilities: ["learning:review"] });
+    await expect(evaluate(async () => { throw new Error("uncertain"); })).rejects.toMatchObject({ reason: "evaluation_attempt_uncertain" });
+    const query = { merchant_id: "m-1", actor: reviewer, evaluation_id: service.listEvaluations("m-1")[0]!.evaluation_id };
+    const binding = service.getPendingEvaluation(query).binding!;
+    const request = { ...query, evidence_ref: "receipt", expected_dispatch_id: binding.dispatch_id, command_id: "guard" };
+    let nowMs = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    try {
+      let calls = 0;
+      const uncertain = new LearningService({ repository, now: () => NOW, recoveryWriteGuard: (work) => { if (++calls === 2) throw new Error("lost guard"); return work(); }, recoveryVerifier: async () => ({ status: "unknown" }) });
+      await expect(uncertain.resolvePendingEvaluation(request)).rejects.toMatchObject({ reason: "evaluation_evidence_unknown" });
+      nowMs += 300_001;
+      calls = 0;
+      const trusted = new LearningService({ repository, now: () => NOW, recoveryWriteGuard: (work) => { if (++calls === 3) throw new Error("lost guard"); return work(); }, recoveryVerifier: async (current) => ({ status: "completed", binding: current, outcome: { passed: true, hard_gate_failures: 0 } }) });
+      expect(await trusted.resolvePendingEvaluation(request)).toEqual({ status: "completed" });
+      expect(await trusted.resolvePendingEvaluation(request)).toEqual({ status: "completed" });
+    } finally { clock.mockRestore(); }
+  });
+
+
+  it("测试终态网关：HTTP completed 恢复已派发未知评测", async () => {
+    const gateway = createTestDispatchGateway();
+    const port = await gateway.listen(0);
+    const base = `http://127.0.0.1:${port}`;
+    try {
+      await expect(evaluate(async () => { throw new Error("uncertain"); })).rejects.toMatchObject({
+        reason: "evaluation_attempt_uncertain",
+      });
+      const reviewer = createActorContext({
+        merchant_id: "m-1",
+        actor_id: "reviewer",
+        auth_strength: "verified",
+        subject_binding: "organization",
+        capabilities: ["learning:review"],
+      });
+      const query = { merchant_id: "m-1", actor: reviewer, evaluation_id: service.listEvaluations("m-1")[0]!.evaluation_id };
+      const pending = service.getPendingEvaluation(query);
+      expect(pending.binding).toBeDefined();
+      const binding = pending.binding!;
+      const marked = await fetch(`${base}/dispatch/${binding.dispatch_id}/complete`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          binding_digest: contentDigest(binding),
+          outcome: { passed: true, hard_gate_failures: 0 },
+        }),
+      });
+      expect(marked.status).toBe(200);
+      const trusted = new LearningService({
+        repository,
+        now: () => NOW,
+        recoveryVerifier: createRecoveryGatewayVerifier({ base_url: base }),
+      });
+      const request = {
+        ...query,
+        expected_dispatch_id: binding.dispatch_id,
+        evidence_ref: "gateway:test",
+        command_id: "gateway-recover-1",
+      };
+      expect(await trusted.resolvePendingEvaluation(request)).toEqual({ status: "completed" });
+      expect(trusted.getPendingEvaluation(query).pending).toBeNull();
+      expect(trusted.getEvaluation("m-1", query.evaluation_id)?.runs_completed).toBe(1);
+    } finally {
+      await gateway.close();
     }
   });
 });

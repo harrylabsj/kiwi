@@ -12,6 +12,7 @@
  */
 
 import { createCustomerIdentityReceiver } from "../a2a/server/customer-identity-gateway.js";
+import { startMemoryProposalServer } from "../merchant-core/customer-memory/private-transport.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import type { AgentProfile } from "../config/profile.js";
@@ -22,19 +23,26 @@ import { MerchantImportDraftStore } from "../http/merchant-management/draft-stor
 import { MerchantManagementOperationStore } from "../http/merchant-management/operation-store.js";
 import { renderMerchantManagementPage } from "../http/merchant-management/page.js";
 import { MutableServiceState } from "../http/merchant-management/service-state.js";
-import { openMerchantOperationsFacade } from "../merchant-core/ops/facade.js";
-import { MerchantOperationsSurface } from "../merchant-core/ops/surface.js";
 import { createTrustedWorkbenchPageHandler } from "../http/merchant-management/trusted-page.js";
 import { WorkbenchConfirmationStore } from "../http/merchant-management/webauthn-confirmation.js";
 import { ManagementError, type MerchantProductPage, type PageQuery } from "../merchant/application/service.js";
 import { createMerchantHttpHandler } from "../mcp/merchant-server.js";
 import { assembleMerchantRuntime } from "../mcp/merchant-runtime-assembly.js";
+import { createOperationAdviceRunner } from "../merchant-core/operations-jobs/advice-runner.js";
+import { OperationsScheduler } from "../merchant-core/operations-jobs/scheduler.js";
+import { OperationsProjection } from "../merchant-core/operations-jobs/projection.js";
+import { DeliveryConsentRepository } from "../merchant-core/customer-delivery/consent-repository.js";
+import { CustomerDeliveryRepository } from "../merchant-core/customer-delivery/repository.js";
+import { DeliveryDispatcherLoop } from "../merchant-core/customer-delivery/dispatcher-loop.js";
+import { createSmtpChannelAdapter } from "../merchant-core/customer-delivery/smtp-adapter.js";
+import { buildModel, realStreamFn } from "../runtime/model.js";
 import { PRODUCT_VERSION } from "../product-cli.js";
 import { DEFAULT_MERCHANT_MCP_PATH } from "../mcp/merchant-server.js";
 
 export const DEFAULT_MERCHANT_WORKBENCH_PORT = 9102;
 
 export interface StandaloneWorkbenchOptions {
+  recoveryVerifier?: import("../merchant-core/learning/service.js").LearningServiceOptions["recoveryVerifier"];
   profile: AgentProfile;
   dataDir: string;
   host: string;
@@ -185,6 +193,7 @@ export async function startStandaloneMerchantWorkbench(
       ? { tokenEnv: profile.merchant_mcp.token_env }
       : {}),
     adminDefaultNext: "/merchant/",
+    ...(options.recoveryVerifier !== undefined ? { recoveryVerifier: options.recoveryVerifier } : {}),
     adminPendingBackLink: { href: "/merchant/", label: "返回商家工作台" },
   });
   const admin = assembly.serverOptions.admin;
@@ -194,23 +203,80 @@ export async function startStandaloneMerchantWorkbench(
   }
 
   const db = new DatabaseSync(`${dataDir}/state.sqlite`);
+  const deliveryConsent = new DeliveryConsentRepository({ db, now: () => new Date().toISOString() });
   const serviceState = MutableServiceState.fromDeclared(process.env.KIWI_WORKBENCH_SERVICE_STATE);
   serviceState.attachPersistence(db, profile.owner_id);
   const now = () => new Date().toISOString();
   const drafts = new MerchantImportDraftStore({ db, now });
-  // TOP1-3 管理路由：学习/记忆/经营任务统一经运营门面；只有 workbench
-  // 持有治理所有权时，公共 `/merchant/api/v1/learning/*`、`/automation/*`
-  // 才挂载，避免与 a2a/cloud 写者无栅栏并发。
-  const merchantOperations = assembly.governanceActive
-    ? new MerchantOperationsSurface({
-        facade: openMerchantOperationsFacade({
-          db,
-          merchantId: profile.owner_id,
-          now,
-        }),
+  // 治理业务与所有权事务须使用装配持有的同一个 SQLite 连接。
+  const { merchantOperations, governance, operationsJobs } = assembly;
+  // 经营任务调度：仅所有权持有进程、显式开关且真实模型时启动。缺投影数据
+  // 时调度器只产生 data_incomplete 待办（不伪造 no_change）。
+  let operationsScheduler: OperationsScheduler | undefined;
+  if (
+    governance !== undefined &&
+    operationsJobs !== undefined &&
+    process.env.KIWI_OPERATIONS_SCHEDULER === "1" &&
+    profile.model?.provider !== undefined &&
+    profile.model.provider !== "fake"
+  ) {
+    const runner = createOperationAdviceRunner({
+      streamFn: realStreamFn(),
+      model: buildModel(profile),
+      ...(profile.model.api_key_env !== undefined
+        ? { getApiKey: () => process.env[profile.model.api_key_env as string] }
+        : {}),
+      now,
+    });
+    const projection = new OperationsProjection({ db, now });
+    operationsScheduler = new OperationsScheduler({
+      service: operationsJobs,
+      merchant_id: profile.owner_id,
+      prefilter: (rule) => projection.prefilter(rule),
+      assertOwner: () => governance.write(() => undefined),
+      write: governance.write,
+      runner,
+      now,
+      log: (line: string) => process.stderr.write(line),
+    });
+    operationsScheduler.start();
+  }
+  // P1 邮件投递循环：仅在显式开关且 SMTP/收件人配置齐全时启动。
+  let deliveryDispatcher: DeliveryDispatcherLoop | undefined;
+  const deliveryFlagEnabled =
+    governance !== undefined &&
+    (governance.flags as unknown as { customer_delivery_enabled: boolean })
+      .customer_delivery_enabled === true;
+  if (deliveryFlagEnabled && process.env.KIWI_DELIVERY_DISPATCHER === "1") {
+    const smtp = {
+      host: String(process.env.KIWI_DELIVERY_EMAIL_SMTP_HOST ?? "").trim(),
+      port: Number(process.env.KIWI_DELIVERY_EMAIL_SMTP_PORT ?? "587"),
+      user: String(process.env.KIWI_DELIVERY_EMAIL_SMTP_USER ?? "").trim(),
+      password: String(process.env.KIWI_DELIVERY_EMAIL_SMTP_PASSWORD ?? ""),
+      from: String(process.env.KIWI_DELIVERY_EMAIL_FROM ?? "").trim(),
+      to: String(process.env.KIWI_DELIVERY_EMAIL_TO ?? "").trim(),
+    };
+    if (smtp.host !== "" && smtp.user !== "" && smtp.password !== "" && smtp.from !== "" && smtp.to !== "") {
+      const emailAdapter = createSmtpChannelAdapter({
+        host: smtp.host,
+        port: smtp.port,
+        user: smtp.user,
+        password: smtp.password,
+        from: smtp.from,
+        to: smtp.to,
+      });
+      const deliveryRepository = new CustomerDeliveryRepository({ db, now });
+      deliveryDispatcher = new DeliveryDispatcherLoop({
+        store: deliveryRepository,
+        merchant_id: profile.owner_id,
+        adapterFor: (delivery) => (delivery.channel === "email" ? emailAdapter : undefined),
         now,
-      })
-    : undefined;
+        assertOwner: () => governance.write(() => undefined),
+        log: (line) => process.stderr.write(line),
+      });
+      deliveryDispatcher.start();
+    }
+  }
   const operations = new MerchantManagementOperationStore({ db });
   const workbenchConfirmations = new WorkbenchConfirmationStore({ db });
   const productReader = buildProductReader(profile);
@@ -229,6 +295,11 @@ export async function startStandaloneMerchantWorkbench(
     }
     return { ready: Object.values(checks).every((check) => check.ok), checks };
   };
+  const writeOrigins = allowedOrigins(
+    host,
+    port,
+    options.publicOrigin ?? profile.merchant_mcp?.public_url,
+  );
   const api = createMerchantManagementApiHandler({
     receiveCustomerIdentity: createCustomerIdentityReceiver({
       db, now, merchantId: profile.owner_id, assertOwner: assembly.assertGovernanceOwner,
@@ -238,7 +309,7 @@ export async function startStandaloneMerchantWorkbench(
     generation: () => 1,
     runtimeVersion: PRODUCT_VERSION,
     sessions: admin.sessions,
-    allowedOrigins: allowedOrigins(host, port, options.publicOrigin ?? profile.merchant_mcp?.public_url),
+    allowedOrigins: writeOrigins,
     listPending: () => admin.surface.listPending(),
     mintCandidateConfirmation: (input) => admin.store.createConfirmation(input),
     executeDecision: async (input) => {
@@ -258,9 +329,8 @@ export async function startStandaloneMerchantWorkbench(
     readiness,
     workbenchConfirmations,
     ...(merchantOperations !== undefined ? { merchantOperations } : {}),
-    ...(assembly.assertGovernanceOwner !== undefined
-      ? { assertGovernanceOwner: assembly.assertGovernanceOwner }
-      : {}),
+    deliveryConsent,
+    ...(governance !== undefined ? { governance } : {}),
   });
   const adminHandle = createMerchantHttpHandler(assembly.serverOptions);
   const trustedPage = createTrustedWorkbenchPageHandler();
@@ -283,16 +353,36 @@ export async function startStandaloneMerchantWorkbench(
     server.listen(port, host, () => {
       const address = server.address();
       const actualPort = typeof address === "object" && address !== null ? address.port : port;
+      if (["0.0.0.0", "::", "127.0.0.1", "::1", "localhost"].includes(host)) {
+        writeOrigins.push(`http://127.0.0.1:${actualPort}`, `http://localhost:${actualPort}`);
+      }
       resolve({
         url: `http://${host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host}:${actualPort}/merchant/`,
         close: (cb) => server.close(cb),
       });
     });
   });
+  let memoryServer: Awaited<ReturnType<typeof startMemoryProposalServer>> | undefined;
+  try {
+    const socketPath = process.env.KIWI_MEMORY_SOCKET_PATH;
+    if (socketPath) {
+      if (!assembly.proposeReceptionMemory) throw new Error("memory writer unavailable");
+      memoryServer = await startMemoryProposalServer(socketPath, assembly.proposeReceptionMemory);
+    }
+  } catch (error) {
+    await new Promise<void>((resolve) => listening.close(resolve));
+    await adminHandle.close().catch(() => undefined);
+    await assembly.close().catch(() => undefined);
+    db.close();
+    throw error;
+  }
   let closed = false;
   const close = async (): Promise<void> => {
     if (closed) return;
     closed = true;
+    operationsScheduler?.stop();
+    deliveryDispatcher?.stop();
+    if (memoryServer) await new Promise<void>((resolve) => memoryServer!.close(() => resolve()));
     await new Promise<void>((resolve) => listening.close(resolve));
     await adminHandle.close().catch(() => undefined);
     await assembly.close().catch(() => undefined);

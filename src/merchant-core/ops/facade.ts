@@ -27,7 +27,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { migrateMerchantOpsSchema } from "./schema.js";
 import { registerGovernanceLedgers } from "../migrations/ledgers.js";
 import { LearningRepository } from "../learning/repository.js";
-import { LearningService } from "../learning/service.js";
+import { LearningService, type LearningServiceOptions } from "../learning/service.js";
 import { DataUseGrantStore } from "../context-governance/data-use-grant.js";
 import { BackgroundBudgetStore } from "../budget/background-budget.js";
 import { OperationsJobsService } from "../operations-jobs/service.js";
@@ -81,6 +81,8 @@ export interface MerchantOperationsFacadeOptions {
   db: DatabaseSync;
   merchantId: string;
   now?: () => string;
+  recoveryVerifier?: LearningServiceOptions["recoveryVerifier"];
+  recoveryWriteGuard?: LearningServiceOptions["recoveryWriteGuard"];
 }
 
 export class MerchantOperationsFacade {
@@ -138,6 +140,8 @@ export class MerchantOperationsFacade {
     const grants = new DataUseGrantStore({ db: options.db, now });
     this.learning = new LearningService({
       repository: new LearningRepository({ db: options.db }),
+      ...(options.recoveryVerifier !== undefined ? { recoveryVerifier: options.recoveryVerifier } : {}),
+      ...(options.recoveryWriteGuard !== undefined ? { recoveryWriteGuard: options.recoveryWriteGuard } : {}),
       now,
       available: learningAvailable,
       // A01：客户案例蒸馏只认 experience_learning；记忆授权不能替代。

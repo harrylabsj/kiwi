@@ -26,9 +26,11 @@ import type { HistorySearchResult, MemoryNamespace, MemorySourceKind } from "../
 
 export interface CustomerRecallContext {
   readonly merchant_id: string;
+  readonly actor_id?: string;
   readonly subject_id: string;
   readonly binding_epoch: number;
   readonly resource_scope_id: string;
+  readonly memory_scope_id?: string;
   /** grant_id → 当前 epoch。 */
   readonly grant_versions: Readonly<Record<string, number>>;
   readonly memory_set_version: number;
@@ -47,6 +49,7 @@ export interface CustomerMemoryRecallItem {
 }
 
 export interface CustomerMemoryToolProvider {
+  canPropose?(context: CustomerRecallContext): boolean;
   contextFor(merchantId: string, actorId: string): CustomerRecallContext | undefined;
   currentBindingEpoch(merchantId: string, actorId: string): number | undefined;
   currentGrantEpoch(merchantId: string, grantId: string): number | undefined;
@@ -67,5 +70,5 @@ export interface CustomerMemoryToolProvider {
       source_kind: MemorySourceKind;
       confidence?: number;
     },
-  ): { memory_id: string; state: string };
+  ): { memory_id: string; state: string } | Promise<{ memory_id: string; state: string }>;
 }

@@ -290,7 +290,7 @@ describe("Pi compare_products → recommend_option publisher claims", () => {
       quantity: 10,
       unit: "piece",
       buyerText: "我要10件",
-      expectedStockAvailable: null,
+      expectedStockAvailable: false,
       reason: "in_stock",
     });
     expect(result.rejected[0]?.reason).toBe("unverified_claim");

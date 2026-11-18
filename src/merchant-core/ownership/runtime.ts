@@ -170,7 +170,10 @@ export class GovernanceRuntime {
     this.heartbeatMs = heartbeatMs;
     this.onEvent = options.onEvent;
     this.featureEnabled =
-      options.flags.learning_enabled || options.flags.memory_enabled || options.flags.jobs_enabled;
+      options.flags.learning_enabled ||
+      options.flags.memory_enabled ||
+      options.flags.jobs_enabled ||
+      options.flags.customer_delivery_enabled;
     this.ownership = this.featureEnabled
       ? new InstanceOwnershipService({ db: this.db, now: this.now, leaseMs })
       : undefined;

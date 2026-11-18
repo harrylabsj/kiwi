@@ -75,8 +75,8 @@ export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] 
       name: "kiwi_search",
       description:
         tr(
-          "Discover candidate suppliers and search products across merchants on demand. Read-only. Covers the Kiwi Network (in-network merchants) only: internet e-commerce listings are out of scope and must be retrieved with the host's own web tools; never present this result as external platform data. Internals: merchant routing + UCP Catalog orchestration + trust/freshness. The returned network_search reports the true state of this Network query (status: completed/partial/timeout/error/not_searched; result_state: has_candidates/no_match/undetermined) - only completed + no_match may be phrased as 'no match this time'; timeouts, failures, partial completion, or not-searched must never be reported as 'no suppliers available'. Merchants with inquiry_available=true support live quote requests (proceed to kiwi_request_quotes); merchants with inquiry_available=false and source_kind=merchant_declared only have their v0 public profile (browsable: product names, updated-at, storefront link) and cannot be queried for quotes. products is a projection of the merchant's existing profile (basis=merchant_listed; price.kind=merchant_listed_price means the merchant's listed price, absent means to_be_quoted) - never present it as a confirmed quote, stock, or lead-time commitment.",
-          "发现候选供应商，并按需跨商家搜索商品。只读。只覆盖 Kiwi Network（Kiwi 网络内商家）：互联网电商商品不在本工具范围内，须由宿主自身的检索/取页工具完成，不得用本结果冒充外部平台信息。内部语义：Merchant routing + UCP Catalog orchestration + trust/freshness。返回 network_search 说明本次 Network 查询的真实状态（status: completed/partial/timeout/error/not_searched；result_state: has_candidates/no_match/undetermined）——只有 completed + no_match 才能说「本次没有匹配」；超时、失败、部分完成、未搜索都不得表述为「没有供应商」。结果中 inquiry_available=true 的商家可实时询价（可进入 kiwi_request_quotes）；inquiry_available=false 且 source_kind=merchant_declared 的商家仅有第 0 版公开资料（资料可查，含命中商品名/更新时间/店铺入口），不可发起询价。products 是商家既有资料投影（basis=merchant_listed；price.kind=merchant_listed_price 为商家资料价，无价则 to_be_quoted），未经本次询价确认，不得当作报价、库存或交期承诺。",
+          "Discover candidate suppliers and search products across merchants on demand. Read-only. Search is global within the Kiwi Network, the legacy region parameter is ignored, and delivery timing is confirmed separately. Covers the Kiwi Network (in-network merchants) only: internet e-commerce listings are out of scope and must be retrieved with the host's own web tools; never present this result as external platform data. Internals: merchant routing + UCP Catalog orchestration + trust/freshness. The returned network_search reports the true state of this Network query (status: completed/partial/timeout/error/not_searched; result_state: has_candidates/no_match/undetermined) - only completed + no_match may be phrased as 'no match this time'; timeouts, failures, partial completion, or not-searched must never be reported as 'no suppliers available'. Merchants with inquiry_available=true support live quote requests (proceed to kiwi_request_quotes); merchants with inquiry_available=false and source_kind=merchant_declared only have their v0 public profile (browsable: product names, updated-at, storefront link) and cannot be queried for quotes. products is a projection of the merchant's existing profile (basis=merchant_listed; price.kind=merchant_listed_price means the merchant's listed price, absent means to_be_quoted) - never present it as a confirmed quote, stock, or lead-time commitment.",
+          "发现候选供应商，并按需跨商家搜索商品。只读。在 Kiwi Network 内全球搜索，旧版 region 参数不参与筛选，到货时间另行确认。只覆盖 Kiwi Network（Kiwi 网络内商家）：互联网电商商品不在本工具范围内，须由宿主自身的检索/取页工具完成，不得用本结果冒充外部平台信息。内部语义：Merchant routing + UCP Catalog orchestration + trust/freshness。返回 network_search 说明本次 Network 查询的真实状态（status: completed/partial/timeout/error/not_searched；result_state: has_candidates/no_match/undetermined）——只有 completed + no_match 才能说「本次没有匹配」；超时、失败、部分完成、未搜索都不得表述为「没有供应商」。结果中 inquiry_available=true 的商家可实时询价（可进入 kiwi_request_quotes）；inquiry_available=false 且 source_kind=merchant_declared 的商家仅有第 0 版公开资料（资料可查，含命中商品名/更新时间/店铺入口），不可发起询价。products 是商家既有资料投影（basis=merchant_listed；price.kind=merchant_listed_price 为商家资料价，无价则 to_be_quoted），未经本次询价确认，不得当作报价、库存或交期承诺。",
         ),
       inputSchema: {
         $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -86,14 +86,7 @@ export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] 
         properties: {
           query: { type: "string", minLength: 1 },
           category: { type: "string" },
-          region: {
-            type: "string",
-            deprecated: true,
-            description: tr(
-              "Ignored. Kiwi Network search is global. Confirm delivery timing separately.",
-              "此参数已弃用。Kiwi Network 在全球范围内搜索，到货时间另行确认。",
-            ),
-          },
+          region: { type: "string" },
         },
       },
       async handle(args) {

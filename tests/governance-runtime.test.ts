@@ -222,12 +222,11 @@ describe("governance 运行时接线（M1 收尾）", () => {
     expect(heartbeats.n).toBe(1);
   });
 
-  it("6) customer_delivery_enabled=true：配置层启动失败（映射 GOVERNANCE_FLAGS_INVALID）", () => {
-    expect(() =>
-      loadGovernanceFeatureFlagsFromEnv({ KIWI_GOVERNANCE_CUSTOMER_DELIVERY_ENABLED: "true" }),
-    ).toThrowError(/P0 固定关闭/);
-    // bootstrap 把解析失败包装为 CloudStartupError（code=GOVERNANCE_FLAGS_INVALID），
-    // 不进入 initializeGovernanceRuntime——运行时只接受已解析的 flags。
+  it("6) customer_delivery_enabled=true：P1 显式授权后解析成功", () => {
+    expect(
+      loadGovernanceFeatureFlagsFromEnv({ KIWI_GOVERNANCE_CUSTOMER_DELIVERY_ENABLED: "true" })
+        .customer_delivery_enabled,
+    ).toBe(true);
   });
 
   it("新库首启（bootstrap 真实顺序）：运行时先迁移 ops schema，acquire 成功", () => {
@@ -277,7 +276,7 @@ describe("governance 运行时接线（M1 收尾）", () => {
         legacy
           .prepare("SELECT version FROM merchant_ops_schema_migrations ORDER BY version")
           .all(),
-      ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
+      ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }]);
       // 随后 facade 打开（完整迁移）幂等，不干扰已持有的所有权。
       migrateMerchantOpsSchema(legacy);
       expect(runtime.assertOwner({ expected_fencing: 1 }).fencing).toBe(1);

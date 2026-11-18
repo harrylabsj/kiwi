@@ -319,6 +319,9 @@ export class OperationsJobsService {
   private readonly budgetStore?: BackgroundBudgetStore;
 
   constructor(options: OperationsJobsServiceOptions) {
+    if (options.budgetStore !== undefined && !options.budgetStore.usesDatabase(options.db)) {
+      throw new OperationsJobsError("validation", "budget_database_mismatch", "预算与任务必须使用同一数据库连接");
+    }
     this.db = options.db;
     this.now = options.now;
     this.budgetStore = options.budgetStore;
@@ -632,6 +635,11 @@ export class OperationsJobsService {
               WHERE merchant_id = ? AND rule_id = ?`,
           )
           .run(stamp, merchantId, ruleId);
+        const cancelled = this.db.prepare(
+          `SELECT * FROM followup_tasks WHERE merchant_id = ? AND rule_id = ?
+             AND status IN ('PENDING','READY')`,
+        ).all(merchantId, ruleId) as unknown as TaskRow[];
+        for (const task of cancelled) this.closeReservation(task);
         this.db
           .prepare(
             `UPDATE followup_tasks SET status = 'CANCELLED', cancel_epoch = cancel_epoch + 1,
@@ -795,23 +803,69 @@ export class OperationsJobsService {
     }
     return inImmediateTransaction(this.db, () => {
       const stamp = input.now ?? nowUtc(this.now);
-      // 退避后的 PENDING 到期即提升为 READY（next_due_at/due_at 是唯一依据）。
+      this.sweepRuleTasks(merchantId, stamp);
+      // 规则任务必须持有有效预留；普通 follow-up 保持原有行为。
+      // 退避后的 PENDING 到期即提升为 READY。
+      const reservationGate = this.budgetStore === undefined
+        ? "operation_ref IS NOT NULL"
+        : `EXISTS (SELECT 1 FROM background_budget_reservations b
+            WHERE b.merchant_id = followup_tasks.merchant_id
+              AND b.run_id = followup_tasks.operation_ref AND b.state = 'RESERVED')`;
       this.db
         .prepare(
           `UPDATE followup_tasks SET status = 'READY', updated_at = ?
             WHERE merchant_id = ? AND status = 'PENDING'
-              AND due_at IS NOT NULL AND due_at <= ?`,
+              AND due_at IS NOT NULL AND due_at <= ?
+              AND (rule_id IS NULL OR ${reservationGate})`,
         )
         .run(stamp, merchantId, stamp);
-      const task = this.db
+      let admittedWaiting = false;
+      let task = this.db
         .prepare(
           `SELECT * FROM followup_tasks
             WHERE merchant_id = ? AND status = 'READY'
               AND (due_at IS NULL OR due_at <= ?)
               AND (deadline_at IS NULL OR deadline_at > ?)
+              AND (rule_id IS NULL OR ${reservationGate})
             ORDER BY due_at ASC, created_at ASC LIMIT 1`,
         )
         .get(merchantId, stamp, stamp) as unknown as TaskRow | undefined;
+      if (task === undefined && this.budgetStore !== undefined) {
+        // 仅在没有可领取任务时尝试补额；已有预留不被等待任务抢占。
+        const waiting = this.db.prepare(`SELECT t.*, r.template FROM followup_tasks t
+          JOIN automation_rules r ON r.merchant_id = t.merchant_id AND r.rule_id = t.rule_id
+          WHERE t.merchant_id = ? AND t.status = 'PENDING' AND t.operation_ref IS NULL
+            AND t.due_at IS NOT NULL AND t.due_at <= ?
+            AND (t.deadline_at IS NULL OR t.deadline_at > ?)
+            AND t.stop_requested = 0 AND r.state = 'ACTIVE' AND r.version = t.rule_version
+            AND r.effective_at <= ? AND r.expires_at > ?`)
+          .all(merchantId, stamp, stamp, stamp, stamp) as unknown as Array<TaskRow & {
+            template: string; action_type: RuleActionType; created_at: string;
+          }>;
+        waiting.sort((a, b) =>
+          (ACTION_PRIORITY[a.action_type] ?? 9) - (ACTION_PRIORITY[b.action_type] ?? 9) ||
+          String(a.due_at).localeCompare(String(b.due_at)) ||
+          a.created_at.localeCompare(b.created_at) || a.task_id.localeCompare(b.task_id));
+        const candidate = waiting[0];
+        if (candidate !== undefined) {
+          const runId = `run_${randomUUID()}`;
+          try {
+            this.budgetStore.reserveRun({ merchant_id: merchantId, run_id: runId,
+              day_key: stamp.slice(0, 10), template: candidate.template });
+            const admitted = this.db.prepare(`UPDATE followup_tasks
+              SET operation_ref = ?, status = 'READY', updated_at = ?
+              WHERE merchant_id = ? AND task_id = ? AND status = 'PENDING' AND operation_ref IS NULL`)
+              .run(runId, stamp, merchantId, candidate.task_id);
+            if (Number(admitted.changes) !== 1) throw new Error("budget admission task changed");
+            task = this.db.prepare("SELECT * FROM followup_tasks WHERE merchant_id = ? AND task_id = ?")
+              .get(merchantId, candidate.task_id) as unknown as TaskRow;
+            admittedWaiting = true;
+          } catch (err) {
+            if (!(err instanceof BackgroundBudgetError &&
+              (err.code === "budget_exhausted" || err.code === "concurrency_limit"))) throw err;
+          }
+        }
+      }
       if (task === undefined) return undefined;
       const expires = new Date(Date.parse(stamp) + leaseMs).toISOString();
       const updated = this.db
@@ -822,7 +876,10 @@ export class OperationsJobsService {
             WHERE merchant_id = ? AND task_id = ? AND status = 'READY'`,
         )
         .run(workerId, expires, stamp, merchantId, task.task_id);
-      if (Number(updated.changes) !== 1) return undefined;
+      if (Number(updated.changes) !== 1) {
+        if (admittedWaiting) throw new Error("budget admission claim failed");
+        return undefined;
+      }
       const fresh = this.db
         .prepare("SELECT * FROM followup_tasks WHERE merchant_id = ? AND task_id = ?")
         .get(merchantId, task.task_id) as unknown as TaskRow;
@@ -1084,6 +1141,100 @@ export class OperationsJobsService {
     }));
   }
 
+  /** 未启动才归还；已经领取或结果不明则按预留额保守结算。 */
+  private closeReservation(task: TaskRow): void {
+    if (this.budgetStore === undefined || task.rule_id === null || task.operation_ref === null) return;
+    const run = this.budgetStore.getRun(task.merchant_id, task.operation_ref);
+    if (run === undefined || run.state !== "RESERVED") return;
+    if (task.attempts === 0 && task.external_call_started === 0 && task.status !== "UNKNOWN" && task.status !== "SUCCEEDED") {
+      this.budgetStore.releaseRun({ merchant_id: task.merchant_id, run_id: task.operation_ref });
+    } else {
+      this.budgetStore.settleRun({ merchant_id: task.merchant_id, run_id: task.operation_ref,
+        input_tokens: 0, output_tokens: 0, usage_state: "unknown" });
+    }
+  }
+
+  /**
+   * 执行器明确失败（模型错误/超时/证据无效）：只允许当前 worker/fencing 在
+   * 租约内把 RUNNING 任务置为 FAILED；之后由 retryTask 持久化退避。外部调用
+   * 结果不明时不得调用本方法（应保留 UNKNOWN 供核对）。
+   */
+  failClaimedTask(input: {
+    merchant_id: string;
+    task_id: string;
+    worker_id: string;
+    fencing: number;
+    error_code: string;
+    now?: string;
+  }): void {
+    const merchantId = text(input.merchant_id, "merchant_id");
+    const taskId = text(input.task_id, "task_id");
+    const workerId = text(input.worker_id, "worker_id");
+    const errorCode = text(input.error_code, "error_code", 128);
+    const stamp = input.now ?? nowUtc(this.now);
+    inImmediateTransaction(this.db, () => {
+      const task = this.db
+        .prepare("SELECT * FROM followup_tasks WHERE merchant_id = ? AND task_id = ?")
+        .get(merchantId, taskId) as unknown as TaskRow | undefined;
+      if (
+        task === undefined ||
+        task.status !== "RUNNING" ||
+        task.lease_owner !== workerId ||
+        task.fencing_token !== input.fencing
+      ) {
+        throw new OperationsJobsError(
+          "invalid_transition",
+          "fail_guard_failed",
+          "任务状态、执行者或 fencing 已变化",
+        );
+      }
+      this.db
+        .prepare(
+          `UPDATE followup_tasks SET status = 'FAILED', last_error = ?,
+             lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
+           WHERE merchant_id = ? AND task_id = ? AND status = 'RUNNING'`,
+        )
+        .run(errorCode, stamp, merchantId, taskId);
+      this.db
+        .prepare(
+          `UPDATE followup_attempts SET status = 'FAILED', ended_at = ?, error_code = ?
+            WHERE merchant_id = ? AND task_id = ? AND attempt_no = ?`,
+        )
+        .run(stamp, errorCode, merchantId, taskId, task.attempts);
+    });
+  }
+
+  /** 仅处理规则任务；过期 worker 不可继续提交，未知消耗不重试。 */
+  private sweepRuleTasks(merchantId: string, stamp: string): void {
+    const terminalReservations = this.budgetStore === undefined ? "0" : `EXISTS (
+      SELECT 1 FROM background_budget_reservations b
+       WHERE b.merchant_id = followup_tasks.merchant_id AND b.run_id = followup_tasks.operation_ref
+         AND b.state = 'RESERVED')`;
+    const tasks = this.db.prepare(`SELECT * FROM followup_tasks
+      WHERE merchant_id = ? AND rule_id IS NOT NULL AND (
+        (status = 'RUNNING' AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?) OR
+        (status IN ('PENDING','READY') AND deadline_at IS NOT NULL AND deadline_at <= ?) OR
+        (status = 'FAILED' AND deadline_at IS NOT NULL AND deadline_at <= ? AND ${terminalReservations}) OR
+        (status = 'FAILED' AND attempts >= max_attempts AND ${terminalReservations}) OR
+        (status IN ('UNKNOWN','CANCELLED','SUCCEEDED') AND ${terminalReservations}))`)
+      .all(merchantId, stamp, stamp, stamp) as unknown as TaskRow[];
+    for (const task of tasks) {
+      this.closeReservation(task);
+      if (task.status === "RUNNING") {
+        this.db.prepare(`UPDATE followup_attempts SET status = 'UNKNOWN', ended_at = ?
+          WHERE merchant_id = ? AND task_id = ? AND attempt_no = ? AND status = 'RUNNING'`)
+          .run(stamp, merchantId, task.task_id, task.attempts);
+        this.db.prepare(`UPDATE followup_tasks SET status = 'UNKNOWN', revision = revision + 1,
+          lease_owner = NULL, lease_expires_at = NULL, updated_at = ? WHERE merchant_id = ? AND task_id = ?`)
+          .run(stamp, merchantId, task.task_id);
+      } else if ((task.status === "PENDING" || task.status === "READY") && task.deadline_at !== null && task.deadline_at <= stamp) {
+        this.db.prepare(`UPDATE followup_tasks SET status = 'CANCELLED', cancel_epoch = cancel_epoch + 1,
+          revision = revision + 1, updated_at = ? WHERE merchant_id = ? AND task_id = ?`)
+          .run(stamp, merchantId, task.task_id);
+      }
+    }
+  }
+
   private requireRule(merchantId: string, ruleId: string): AutomationRule {
     const rule = this.getRule(merchantId, ruleId);
     if (rule === undefined) {
@@ -1300,6 +1451,7 @@ interface TaskRow {
   deadline_at: string | null;
   snapshot_digest: string | null;
   operation_ref: string | null;
+  external_call_started: number;
   lease_owner: string | null;
   lease_expires_at: string | null;
   stop_requested: number;

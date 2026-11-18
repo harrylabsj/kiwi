@@ -106,6 +106,19 @@ export class MerchantOperationsSurface {
     this.now = options.now ?? (() => new Date().toISOString());
   }
 
+  getEvaluationRecovery(evaluationId: string, actor: ManagementActorInput): unknown {
+    return this.facade.learning.getPendingEvaluation({ merchant_id: this.facade.merchantId, actor: governanceActor(actor), evaluation_id: evaluationId });
+  }
+
+  resolveEvaluationRecovery(evaluationId: string, value: unknown, actor: ManagementActorInput): Promise<unknown> {
+    const body = objectBody(value);
+    if (Object.keys(body).some((key) => !["evidence_ref", "expected_dispatch_id", "command_id"].includes(key))) {
+      throw new ManagementError("invalid_input", "unexpected recovery field");
+    }
+    return this.facade.learning.resolvePendingEvaluation({ merchant_id: this.facade.merchantId, actor: governanceActor(actor), evaluation_id: evaluationId,
+      evidence_ref: text(body, "evidence_ref"), expected_dispatch_id: text(body, "expected_dispatch_id"), command_id: text(body, "command_id") });
+  }
+
   // ── 经营计划 ──────────────────────────────────────────────────────────
 
   listPlans(): unknown[] {

@@ -174,12 +174,17 @@ export function requestedDeliveryBeforeOf(payload: unknown): string | undefined 
  * 时限与商家已配置的权威交期对齐；解析不出就不猜。
  */
 export function requestedDeliveryDaysOf(text: string): number | undefined {
-  const numeric = /(\d{1,3})\s*(?:个)?\s*(?:工作日|天|日)\s*(?:内|以内|到|到达|送到|送达|发到|发货|到货)?/.exec(text);
+  // 日历日期与相对期限混在一起时无法确认买家的真实截止时间，不作推断。
+  // 单独“18日”也可能是日期；只有“18日内”等明确时长才按相对日数处理。
+  if (/(?:[\d一二两三四五六七八九十]+\s*月\s*[\d一二两三四五六七八九十]+\s*[日号]?|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|(?<!工作)[\d一二两三四五六七八九十]+\s*日(?!\s*(?:以)?内))/.test(text)) {
+    return undefined;
+  }
+  const numeric = /(?<!\d)(\d{1,3})\s*(?:个)?\s*(?:工作日|天|日(?=\s*(?:以)?内))\s*(?:内|以内|到|到达|送到|送达|发到|发货|到货)?/.exec(text);
   if (numeric !== null) {
     const days = Number(numeric[1]);
     return Number.isSafeInteger(days) && days > 0 ? days : undefined;
   }
-  const chinese = /([一二两三四五六七八九十]+)\s*(?:个)?\s*(?:工作日|天|日)\s*(?:内|以内|到|到达|送到|送达|发到|发货|到货)?/.exec(text);
+  const chinese = /([一二两三四五六七八九十]+)\s*(?:个)?\s*(?:工作日|天|日(?=\s*(?:以)?内))\s*(?:内|以内|到|到达|送到|送达|发到|发货|到货)?/.exec(text);
   if (chinese === null) return undefined;
   const digits: Record<string, number> = {
     一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10,

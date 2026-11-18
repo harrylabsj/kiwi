@@ -4,6 +4,9 @@
  * 重复提交返回原回执；暂停取消未提交任务。
  */
 import { DatabaseSync } from "node:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { registerGovernanceLedgers } from "../src/merchant-core/migrations/ledgers.js";
@@ -623,6 +626,86 @@ describe("经营任务 M4", () => {
     ).toBe("READY");
   });
 
+  it("暂停原子释放未启动预留；释放失败时规则与任务一并回滚", () => {
+    const active = rule().rule;
+    service.evaluateDue({ merchant_id: MERCHANT, prefilter: () => ({ result: "eligible" }) });
+    const task = db.prepare("SELECT operation_ref FROM followup_tasks WHERE rule_id = ?")
+      .get(active.rule_id) as { operation_ref: string };
+    db.exec(`CREATE TRIGGER fail_release BEFORE UPDATE OF state ON background_budget_reservations
+      WHEN NEW.state = 'RELEASED' BEGIN SELECT RAISE(ABORT, 'release failed'); END`);
+    expect(() => service.pauseRule({ merchant_id: MERCHANT, rule_id: active.rule_id,
+      expected_version: active.version, reason: "test" })).toThrow("release failed");
+    expect(service.getRule(MERCHANT, active.rule_id)?.state).toBe("ACTIVE");
+    expect(budgetStore.getRun(MERCHANT, task.operation_ref)?.state).toBe("RESERVED");
+    db.exec("DROP TRIGGER fail_release");
+    service.pauseRule({ merchant_id: MERCHANT, rule_id: active.rule_id,
+      expected_version: active.version, reason: "test" });
+    expect(budgetStore.getRun(MERCHANT, task.operation_ref)?.state).toBe("RELEASED");
+    expect(budgetStore.getDayUsage(MERCHANT, NOW.slice(0, 10)).runs_used).toBe(0);
+  });
+
+  it("暂停已领取后等待重试的任务按未知用量结算", () => {
+    const active = rule().rule;
+    service.evaluateDue({ merchant_id: MERCHANT, prefilter: () => ({ result: "eligible" }) });
+    const task = service.claimDue({ merchant_id: MERCHANT, worker_id: "w" })!;
+    const run = (db.prepare("SELECT operation_ref FROM followup_tasks WHERE task_id = ?")
+      .get(task.task_id) as { operation_ref: string }).operation_ref;
+    db.prepare("UPDATE followup_tasks SET status = 'FAILED' WHERE task_id = ?").run(task.task_id);
+    service.retryTask({ merchant_id: MERCHANT, task_id: task.task_id });
+    service.pauseRule({ merchant_id: MERCHANT, rule_id: active.rule_id,
+      expected_version: active.version, reason: "test" });
+    expect(budgetStore.getRun(MERCHANT, run)).toMatchObject({ state: "SETTLED", usage_state: "unknown" });
+  });
+
+  it("终态 UNKNOWN 的预留按未知用量结算", () => {
+    rule();
+    service.evaluateDue({ merchant_id: MERCHANT, prefilter: () => ({ result: "eligible" }) });
+    const task = service.claimDue({ merchant_id: MERCHANT, worker_id: "w" })!;
+    const run = (db.prepare("SELECT operation_ref FROM followup_tasks WHERE task_id = ?")
+      .get(task.task_id) as { operation_ref: string }).operation_ref;
+    db.prepare("UPDATE followup_tasks SET status = 'UNKNOWN' WHERE task_id = ?").run(task.task_id);
+    service.claimDue({ merchant_id: MERCHANT, worker_id: "other" });
+    expect(budgetStore.getRun(MERCHANT, run)).toMatchObject({ state: "SETTLED", usage_state: "unknown" });
+  });
+
+  it("过期租约按未知用量结算，旧 worker 不能提交", () => {
+    rule();
+    service.evaluateDue({ merchant_id: MERCHANT, prefilter: () => ({ result: "eligible" }) });
+    const claimed = service.claimDue({ merchant_id: MERCHANT, worker_id: "old", lease_ms: 1000 })!;
+    const run = (db.prepare("SELECT operation_ref FROM followup_tasks WHERE task_id = ?")
+      .get(claimed.task_id) as { operation_ref: string }).operation_ref;
+    clock = new Date(Date.parse(NOW) + 2000).toISOString();
+    expect(service.claimDue({ merchant_id: MERCHANT, worker_id: "new" })).toBeUndefined();
+    expect(budgetStore.getRun(MERCHANT, run)).toMatchObject({ state: "SETTLED", usage_state: "unknown" });
+    expect((db.prepare("SELECT status FROM followup_tasks WHERE task_id = ?").get(claimed.task_id) as { status: string }).status).toBe("UNKNOWN");
+    expect(() => service.commitInternalResult({ merchant_id: MERCHANT, task_id: claimed.task_id,
+      worker_id: "old", fencing: claimed.fencing_token,
+      expected_revision: claimed.revision, expected_cancel_epoch: claimed.cancel_epoch,
+      result_kind: "internal_summary", payload: { summary: "late" } })).toThrow();
+  });
+
+  it("预算释放后等待任务自动领取，重复领取不重复扣费", () => {
+    rule();
+    budgetStore.reserveRun({ merchant_id: MERCHANT, run_id: "occupied", day_key: NOW.slice(0, 10) });
+    service.evaluateDue({ merchant_id: MERCHANT, prefilter: () => ({ result: "eligible" }) });
+    budgetStore.releaseRun({ merchant_id: MERCHANT, run_id: "occupied" });
+    const claimed = service.claimDue({ merchant_id: MERCHANT, worker_id: "w" });
+    expect(claimed?.status).toBe("RUNNING");
+    expect(service.claimDue({ merchant_id: MERCHANT, worker_id: "w2" })).toBeUndefined();
+    expect(budgetStore.getDayUsage(MERCHANT, NOW.slice(0, 10)).runs_used).toBe(1);
+  });
+
+  it("预算等待任务截止后取消且不预留", () => {
+    rule();
+    budgetStore.reserveRun({ merchant_id: MERCHANT, run_id: "occupied", day_key: NOW.slice(0, 10) });
+    service.evaluateDue({ merchant_id: MERCHANT, prefilter: () => ({ result: "eligible" }) });
+    budgetStore.releaseRun({ merchant_id: MERCHANT, run_id: "occupied" });
+    db.prepare("UPDATE followup_tasks SET deadline_at = ?").run(NOW);
+    expect(service.claimDue({ merchant_id: MERCHANT, worker_id: "w" })).toBeUndefined();
+    expect((db.prepare("SELECT status FROM followup_tasks").get() as { status: string }).status).toBe("CANCELLED");
+    expect(budgetStore.getDayUsage(MERCHANT, NOW.slice(0, 10)).runs_used).toBe(0);
+  });
+
   it("C16：额度不足按动作优先级处理，其余保留 PENDING + budget_exhausted", () => {
     const summary = rule("unfinished_inquiry_digest").rule;
     const draft = rule("unfinished_inquiry_digest", { action_type: "internal_draft" }).rule;
@@ -649,5 +732,82 @@ describe("经营任务 M4", () => {
             .budget_exhausted === "string",
       ),
     ).toBe(true);
+    budgetStore.releaseRun({ merchant_id: MERCHANT, run_id: "run-occupied-c16" });
+    const claimed = service.claimDue({ merchant_id: MERCHANT, worker_id: "w" });
+    expect(claimed?.rule_id).toBe(summary.rule_id);
+    expect(service.claimDue({ merchant_id: MERCHANT, worker_id: "w2" })).toBeUndefined();
+    expect(budgetStore.getDayUsage(MERCHANT, NOW.slice(0, 10)).runs_used).toBe(1);
+  });
+
+  it("暂停预算等待规则后不再补额", () => {
+    const active = rule().rule;
+    budgetStore.reserveRun({ merchant_id: MERCHANT, run_id: "occupied", day_key: NOW.slice(0, 10) });
+    service.evaluateDue({ merchant_id: MERCHANT, prefilter: () => ({ result: "eligible" }) });
+    service.pauseRule({ merchant_id: MERCHANT, rule_id: active.rule_id, expected_version: active.version, reason: "test" });
+    budgetStore.releaseRun({ merchant_id: MERCHANT, run_id: "occupied" });
+    expect(service.claimDue({ merchant_id: MERCHANT, worker_id: "w" })).toBeUndefined();
+    expect(budgetStore.getDayUsage(MERCHANT, NOW.slice(0, 10)).runs_used).toBe(0);
+  });
+
+  it("不同连接竞争同一等待任务只产生一次预留和领取", () => {
+    rule();
+    budgetStore.reserveRun({ merchant_id: MERCHANT, run_id: "occupied", day_key: NOW.slice(0, 10) });
+    service.evaluateDue({ merchant_id: MERCHANT, prefilter: () => ({ result: "eligible" }) });
+    budgetStore.releaseRun({ merchant_id: MERCHANT, run_id: "occupied" });
+    const dir = mkdtempSync(join(tmpdir(), "kiwi-budget-"));
+    const path = join(dir, "test.sqlite");
+    db.prepare("VACUUM INTO ?").run(path);
+    const first = new DatabaseSync(path);
+    const second = new DatabaseSync(path);
+    try {
+      const a = new OperationsJobsService({ db: first, now: () => clock,
+        budgetStore: new BackgroundBudgetStore({ db: first, now: () => clock }) });
+      const b = new OperationsJobsService({ db: second, now: () => clock,
+        budgetStore: new BackgroundBudgetStore({ db: second, now: () => clock }) });
+      expect(a.claimDue({ merchant_id: MERCHANT, worker_id: "a" })).toBeDefined();
+      expect(b.claimDue({ merchant_id: MERCHANT, worker_id: "b" })).toBeUndefined();
+      expect((first.prepare("SELECT COUNT(*) AS n FROM background_budget_reservations WHERE state = 'RESERVED'")
+        .get() as { n: number }).n).toBe(1);
+      expect((first.prepare("SELECT COUNT(*) AS n FROM followup_attempts").get() as { n: number }).n).toBe(1);
+    } finally {
+      first.close();
+      second.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("任务状态写入失败时预算预留一并回滚", () => {
+    rule();
+    budgetStore.reserveRun({ merchant_id: MERCHANT, run_id: "occupied", day_key: NOW.slice(0, 10) });
+    service.evaluateDue({ merchant_id: MERCHANT, prefilter: () => ({ result: "eligible" }) });
+    budgetStore.releaseRun({ merchant_id: MERCHANT, run_id: "occupied" });
+    db.exec(`CREATE TRIGGER fail_admission BEFORE UPDATE OF operation_ref ON followup_tasks
+      BEGIN SELECT RAISE(ABORT, 'admission failed'); END`);
+    expect(() => service.claimDue({ merchant_id: MERCHANT, worker_id: "w" })).toThrow("admission failed");
+    expect(budgetStore.getDayUsage(MERCHANT, NOW.slice(0, 10)).runs_used).toBe(0);
+    expect((db.prepare("SELECT operation_ref FROM followup_tasks").get() as { operation_ref: string | null }).operation_ref).toBeNull();
+  });
+
+  it("规则到期时等待任务不补额", () => {
+    const active = rule().rule;
+    budgetStore.reserveRun({ merchant_id: MERCHANT, run_id: "occupied", day_key: NOW.slice(0, 10) });
+    service.evaluateDue({ merchant_id: MERCHANT, prefilter: () => ({ result: "eligible" }) });
+    budgetStore.releaseRun({ merchant_id: MERCHANT, run_id: "occupied" });
+    db.prepare("UPDATE automation_rules SET expires_at = ? WHERE rule_id = ?").run(NOW, active.rule_id);
+    expect(service.claimDue({ merchant_id: MERCHANT, worker_id: "w" })).toBeUndefined();
+    expect(budgetStore.getDayUsage(MERCHANT, NOW.slice(0, 10)).runs_used).toBe(0);
+  });
+
+  it("补额后领取被忽略时回滚预算和任务状态", () => {
+    rule();
+    budgetStore.reserveRun({ merchant_id: MERCHANT, run_id: "occupied", day_key: NOW.slice(0, 10) });
+    service.evaluateDue({ merchant_id: MERCHANT, prefilter: () => ({ result: "eligible" }) });
+    budgetStore.releaseRun({ merchant_id: MERCHANT, run_id: "occupied" });
+    db.exec(`CREATE TRIGGER ignore_claim BEFORE UPDATE OF status ON followup_tasks
+      WHEN NEW.status = 'RUNNING' BEGIN SELECT RAISE(IGNORE); END`);
+    expect(() => service.claimDue({ merchant_id: MERCHANT, worker_id: "w" })).toThrow("budget admission claim failed");
+    expect(budgetStore.getDayUsage(MERCHANT, NOW.slice(0, 10)).runs_used).toBe(0);
+    expect(db.prepare("SELECT status, operation_ref FROM followup_tasks").get())
+      .toMatchObject({ status: "PENDING", operation_ref: null });
   });
 });

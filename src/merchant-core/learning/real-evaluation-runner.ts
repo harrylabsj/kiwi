@@ -59,6 +59,8 @@ export interface ReceptionEvaluationRunnerOptions {
   readonly streamFn: StreamFn;
   /** 可选：为基线/候选提供独立脚本（测试/对照夹具）；缺省沿用 streamFn。 */
   readonly streamFnForVariant?: (variant: "baseline" | "candidate") => StreamFn;
+  /** 每个模型流调用可由可信传输适配器绑定调度标识；不代表 HTTP 请求或重试次数。 */
+  readonly streamFnForDispatch?: (binding: { readonly dispatch_id: string; readonly stream_ordinal: number }, streamFn: StreamFn) => StreamFn;
   readonly model: Model<Api>;
   readonly productSource?: ReceptionProductSource;
   readonly policy?: () => MerchantPolicy | undefined;
@@ -111,15 +113,20 @@ export function createReceptionEvaluationRunner(
   const questions = options.questionRegistry ?? DEFAULT_QUESTION_SPEC_REGISTRY;
   const baselineResults = new Map<string, boolean>();
 
-  function runtimeFor(variant: "baseline" | "candidate", candidate: LearningCandidate): ReceptionAgentRuntime {
+  function runtimeFor(variant: "baseline" | "candidate", candidate: LearningCandidate, dispatchId?: string): ReceptionAgentRuntime {
     const catalog =
       variant === "candidate"
         ? createStaticSkillCatalog([candidateBinding(candidate)])
         : createStaticSkillCatalog([]);
-    const streamFn =
+    const selectedStreamFn =
       options.streamFnForVariant !== undefined
         ? options.streamFnForVariant(variant)
         : options.streamFn;
+    let ordinal = 0;
+    const correlate = options.streamFnForDispatch;
+    const streamFn: StreamFn = correlate !== undefined && dispatchId !== undefined && dispatchId.length > 0
+      ? (...args) => correlate({ dispatch_id: dispatchId, stream_ordinal: ++ordinal }, selectedStreamFn)(...args)
+      : selectedStreamFn;
     return createPiReceptionRuntime({
       streamFn,
       model: options.model,
@@ -127,6 +134,7 @@ export function createReceptionEvaluationRunner(
       questionRegistry: questions,
       ...(options.productSource !== undefined ? { productSource: options.productSource } : {}),
       ...(options.policy !== undefined ? { policy: options.policy } : {}),
+      requireCompleteModelRun: true,
       maxSteps: 6,
       maxToolAttempts: 10,
       // 与生产 profile 的 turn_timeout_seconds=90 对齐；30s 会把真实模型
@@ -135,26 +143,21 @@ export function createReceptionEvaluationRunner(
     });
   }
 
-  return async ({ scenario, variant, attempt, candidate }) => {
+  return async ({ scenario, variant, attempt, candidate, baseline_passed, dispatch_id }) => {
     const input = asInput(scenario);
     const criteria = asCriteria(scenario);
     const now = options.now();
     const registry = new InMemoryFactRegistry();
-    const runtime = runtimeFor(variant, candidate);
-    let outcome: Awaited<ReturnType<ReceptionAgentRuntime["run"]>>;
-    try {
-      outcome = await runtime.run({
-        merchantId: options.merchantId,
-        identity: `eval:${scenario.scenario_id}:${variant}:${attempt}`,
-        contextId: `eval:${scenario.scenario_id}:${variant}:${attempt}`,
-        text: input.text,
-        ...(input.structuredSku !== undefined ? { structuredSku: input.structuredSku } : {}),
-        registry,
-        now,
-      });
-    } catch {
-      outcome = undefined;
-    }
+    const runtime = runtimeFor(variant, candidate, dispatch_id);
+    const outcome = await runtime.run({
+      merchantId: options.merchantId,
+      identity: `eval:${scenario.scenario_id}:${variant}:${attempt}:${dispatch_id ?? "unbound"}`,
+      contextId: `eval:${scenario.scenario_id}:${variant}:${attempt}:${dispatch_id ?? "unbound"}`,
+      text: input.text,
+      ...(input.structuredSku !== undefined ? { structuredSku: input.structuredSku } : {}),
+      registry,
+      now,
+    });
     if (outcome === undefined) {
       if (variant === "baseline") baselineResults.set(`${scenario.scenario_id}:${attempt}`, false);
       return { passed: false, hard_gate_failures: 0 };
@@ -217,7 +220,10 @@ export function createReceptionEvaluationRunner(
       baselineResults.set(`${scenario.scenario_id}:${attempt}`, passed);
       return { passed, hard_gate_failures: hardGateFailures, diagnostics };
     }
-    const baselinePassed = baselineResults.get(`${scenario.scenario_id}:${attempt}`) ?? false;
+    const baselinePassed = baseline_passed ?? baselineResults.get(`${scenario.scenario_id}:${attempt}`);
+    if (baselinePassed === undefined) {
+      throw new Error("evaluation_baseline_missing");
+    }
     return {
       passed,
       hard_gate_failures: hardGateFailures,

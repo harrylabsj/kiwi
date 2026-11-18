@@ -46,12 +46,12 @@ describe("M5 试点就绪与观测", () => {
       flags: parseGovernanceFeatureFlags(undefined),
     });
     expect(report.ready).toBe(true);
-    expect(report.checks.find((check) => check.id === "customer_delivery_disabled")?.ok).toBe(true);
+    expect(report.checks.find((check) => check.id === "customer_delivery_mode")?.ok).toBe(true);
     expect(report.checks.find((check) => check.id === "modules_default_off")?.ok).toBe(true);
     expect(report.checks.find((check) => check.id === "instance_ownership")).toBeUndefined();
   });
 
-  it("开启模块但未持有所有权：不就绪；持有后就绪；客户外发 true 被配置层拒绝", () => {
+  it("开启模块但未持有所有权：不就绪；持有后就绪；P1 启用后仍就绪", () => {
     const memoryOn = parseGovernanceFeatureFlags({ memory_enabled: true });
     const before = checkPilotReadiness({ db, merchantId: MERCHANT, flags: memoryOn });
     expect(before.ready).toBe(false);
@@ -63,9 +63,15 @@ describe("M5 试点就绪与观测", () => {
     ownership.acquire({ merchant_id: MERCHANT, owner_id: "proc-a" });
     const after = checkPilotReadiness({ db, merchantId: MERCHANT, flags: memoryOn });
     expect(after.ready).toBe(true);
-    expect(() =>
-      parseGovernanceFeatureFlags({ customer_delivery_enabled: true }),
-    ).toThrow(/P0 固定关闭/);
+    const deliveryOn = parseGovernanceFeatureFlags({ customer_delivery_enabled: true });
+    expect(deliveryOn.customer_delivery_enabled).toBe(true);
+    const deliveryReport = checkPilotReadiness({ db, merchantId: MERCHANT, flags: deliveryOn });
+    expect(deliveryReport.checks.find((check) => check.id === "customer_delivery_mode")?.ok).toBe(
+      true,
+    );
+    expect(
+      deliveryReport.checks.find((check) => check.id === "table_customer_delivery_bindings")?.ok,
+    ).toBe(true);
   });
 
   it("观测口径：计数可复核；无分母比率返回 null 而不是 0", () => {

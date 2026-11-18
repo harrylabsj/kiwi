@@ -24,7 +24,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const MERCHANT_OPS_SCHEMA_VERSION = 4;
+export const MERCHANT_OPS_SCHEMA_VERSION = 5;
 
 const MIGRATION_9 = `
 -- 商家持续经营 M1（设计 v0.2 §5.1/§16/§17.1）：经营计划与命令幂等。
@@ -494,6 +494,39 @@ CREATE INDEX idx_followup_outbox_stream ON followup_outbox (merchant_id, stream_
 CREATE INDEX idx_followup_outbox_due ON followup_outbox (merchant_id, status, valid_until);
 `;
 
+/** M6-3：P1 收件人绑定与目的订阅（持久化）。 */
+const MIGRATION_OPS_V5 = `
+CREATE TABLE customer_delivery_bindings (
+  merchant_id TEXT NOT NULL,
+  binding_id TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  address_ref TEXT NOT NULL,
+  verified_at TEXT NOT NULL,
+  revoked_at TEXT,
+  binding_epoch INTEGER NOT NULL CHECK (binding_epoch >= 1),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (merchant_id, binding_id)
+);
+CREATE TABLE customer_delivery_subscriptions (
+  merchant_id TEXT NOT NULL,
+  subscription_id TEXT NOT NULL,
+  binding_id TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  max_per_day INTEGER NOT NULL CHECK (max_per_day > 0),
+  granted_at TEXT NOT NULL,
+  expires_at TEXT,
+  unsubscribed_at TEXT,
+  grant_epoch INTEGER NOT NULL CHECK (grant_epoch >= 1),
+  consent_evidence_ref TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (merchant_id, subscription_id)
+);
+CREATE INDEX idx_customer_delivery_subscriptions_binding
+  ON customer_delivery_subscriptions (merchant_id, binding_id, purpose);
+`;
+
 const MIGRATIONS: Readonly<Record<number, string>> = {
   1: `${MIGRATION_9}
 ${MIGRATION_10}
@@ -502,6 +535,7 @@ ${MIGRATION_12}`,
   2: MIGRATION_OWNERSHIP,
   3: MIGRATION_OPS_V3,
   4: MIGRATION_OPS_V4,
+  5: MIGRATION_OPS_V5,
 };
 
 export function migrateMerchantOpsSchema(

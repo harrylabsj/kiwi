@@ -40,10 +40,12 @@ import { FakeMerchantClient, fakeMerchantProduct } from "../agent/merchant/fake-
 import { DefaultMerchantIntelligenceBackend } from "../agent/merchant/intelligence/default-backend.js";
 import { HttpMerchantClient } from "../agent/merchant/merchant-client.js";
 import type { MerchantClient } from "../agent/merchant/types.js";
+import { createReceptionMemoryWriter, type ReceptionMemoryWriter } from "../merchant-core/customer-memory/reception-writer.js";
+import { createRecoveryGatewayVerifierFromEnv } from "../merchant-core/learning/recovery-gateway.js";
 import { MemoryStore } from "../agent/memory/store.js";
 import { PrivateVault } from "../agent/memory/vault.js";
 import { MerchantOAuthVerifier } from "../auth/merchant-authorization.js";
-import { loadGovernanceFeatureFlagsFromEnv } from "../merchant-core/context-governance/feature-flags.js";
+import { GOVERNANCE_FLAGS_DEFAULT, loadGovernanceFeatureFlagsFromEnv } from "../merchant-core/context-governance/feature-flags.js";
 import {
   initializeGovernanceRuntime,
   type GovernanceRuntime,
@@ -114,6 +116,7 @@ export class MerchantAssemblyError extends Error {
 }
 
 export interface MerchantRuntimeAssemblyOptions {
+  recoveryVerifier?: import("../merchant-core/learning/service.js").LearningServiceOptions["recoveryVerifier"];
   profile: AgentProfile;
   /** 商家数据根目录（显式传入；本函数不推导路径）。 */
   dataDir: string;
@@ -166,10 +169,13 @@ export interface MerchantRuntimeAssembly {
   currentPolicy: () => MerchantPolicy | undefined;
   /** Internal only: current private floor converted exactly for quote eligibility. */
   privateFloorMinor: (sku: string, currency: string) => string | undefined;
-  /** 本进程当前是否持有 TOP1-3 治理所有权（管理写入准入依据）。 */
-  governanceActive: boolean;
-  /** 逐次写入前核验所有权；未初始化治理时 undefined。 */
+  merchantOperations: MerchantOperationsSurface | undefined;
+  /** 规则任务服务（调度器用；仅治理所有权持有者且已装配时存在）。 */
+  operationsJobs: import("../merchant-core/operations-jobs/service.js").OperationsJobsService | undefined;
+  governance: Parameters<typeof createMerchantManagementApiHandler>[0]["governance"];
+  /** 逐次核验治理所有权（未初始化/未持有时 undefined）。 */
   assertGovernanceOwner: (() => void) | undefined;
+  proposeReceptionMemory: ReceptionMemoryWriter | undefined;
   /** 关闭装配持有的数据库连接（不涉及 http server）。 */
   close: () => Promise<void>;
 }
@@ -334,15 +340,17 @@ export async function assembleMerchantRuntime(
   // cloud bootstrap，必须在商家装配处注册三个模块账本；feature flags 任一
   // 开启时由本进程 CAS 获取实例所有权（a2a 只读技能/记忆）。
   let governanceRuntime: GovernanceRuntime | undefined;
+  let governanceFlags = GOVERNANCE_FLAGS_DEFAULT;
   try {
     if (
       options.initializeGovernance !== false &&
       process.env.KIWI_GOVERNANCE_DISABLE_INIT !== "1"
     ) {
+      governanceFlags = loadGovernanceFeatureFlagsFromEnv(process.env);
       governanceRuntime = initializeGovernanceRuntime({
         db,
         merchantId: profile.owner_id,
-        flags: loadGovernanceFeatureFlagsFromEnv(process.env),
+        flags: governanceFlags,
         ownerId: `governance_${randomUUID()}`,
         onEvent: (event: GovernanceRuntimeEvent) =>
           log(`[kiwi] governance: ${JSON.stringify(event)}\n`),
@@ -651,9 +659,25 @@ export async function assembleMerchantRuntime(
   // 依赖 oauth.sqlite（管理会话）；未配置 OAuth 时保持原行为不挂载。
   // 现有管理路由保持原行为；TOP1-3 新功能路由只在持有治理所有权时挂载，
   // 避免无栅栏写入（管理写者由部署决定：standalone workbench 或 cloud）。
-  const governanceActive = governanceRuntime?.active === true;
-  const assertGovernanceOwner =
-    governanceRuntime === undefined ? undefined : () => governanceRuntime.assertOwner();
+  const recoveryVerifier =
+    options.recoveryVerifier ?? createRecoveryGatewayVerifierFromEnv(process.env);
+  const operationsFacade = governanceRuntime?.active === true
+    ? openMerchantOperationsFacade({ db, merchantId: profile.owner_id, now,
+        recoveryWriteGuard: (work) => governanceRuntime.writeUnderOwnership(work),
+        ...(recoveryVerifier !== undefined ? { recoveryVerifier } : {}),
+      })
+    : undefined;
+  const merchantOperations = operationsFacade !== undefined
+    ? new MerchantOperationsSurface({ facade: operationsFacade, now })
+    : undefined;
+  const runtime = governanceRuntime;
+  const governance = runtime?.active === true
+    ? { flags: governanceFlags, write: <T>(work: () => T) => runtime.writeUnderOwnership(work) }
+    : undefined;
+  const proposeReceptionMemory: ReceptionMemoryWriter | undefined =
+    governance !== undefined && governanceFlags.memory_enabled
+      ? createReceptionMemoryWriter({ db, merchantId: profile.owner_id, now, write: governance.write })
+      : undefined;
   const managementApi =
     oauthDb === undefined
       ? undefined
@@ -675,19 +699,8 @@ export async function assembleMerchantRuntime(
           operations: new MerchantManagementOperationStore({ db, now }),
           serviceState: new MutableServiceState("OPERATING", { now }),
           readiness: async () => ({ ready: true, checks: {} }),
-          ...(assertGovernanceOwner !== undefined ? { assertGovernanceOwner } : {}),
-          ...(governanceActive
-            ? {
-                merchantOperations: new MerchantOperationsSurface({
-                  facade: openMerchantOperationsFacade({
-                    db,
-                    merchantId: profile.owner_id,
-                    now,
-                  }),
-                  now,
-                }),
-              }
-            : {}),
+          ...(merchantOperations !== undefined ? { merchantOperations } : {}),
+          ...(governance !== undefined ? { governance } : {}),
           now: () => new Date(now()),
         });
   const serverOptions: MerchantMcpServerOptions = {
@@ -823,8 +836,12 @@ export async function assembleMerchantRuntime(
       if (floor === undefined) return undefined;
       return decimalMajorToMinor(currency, String(floor)).amount_minor;
     },
-    governanceActive,
-    assertGovernanceOwner,
+    merchantOperations,
+    operationsJobs: operationsFacade?.operationsJobs,
+    governance,
+    assertGovernanceOwner:
+      governance === undefined ? undefined : () => governance.write(() => undefined),
+    proposeReceptionMemory,
     close: createCleanup([
       { id: "merchant_conversations", run: () => conversation?.close() ?? Promise.resolve() },
       { id: "oauth_database", run: () => { if (oauthDb) closeDatabase(oauthDb); } },

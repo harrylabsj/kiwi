@@ -40,7 +40,7 @@ export interface GovernanceFeatureFlags {
   readonly learning_enabled: boolean;
   readonly memory_enabled: boolean;
   readonly jobs_enabled: boolean;
-  readonly customer_delivery_enabled: false;
+  readonly customer_delivery_enabled: boolean;
 }
 
 export const GOVERNANCE_FLAGS_DEFAULT: Readonly<GovernanceFeatureFlags> = Object.freeze({
@@ -49,9 +49,6 @@ export const GOVERNANCE_FLAGS_DEFAULT: Readonly<GovernanceFeatureFlags> = Object
   jobs_enabled: false,
   customer_delivery_enabled: false,
 });
-
-/** P0 固定关闭的开关（试图启用即 fail-closed）。 */
-const P0_LOCKED_FALSE: ReadonlySet<GovernanceFlagKey> = new Set(["customer_delivery_enabled"]);
 
 export function assertFeatureEnabled(flags: GovernanceFeatureFlags, key: GovernanceFlagKey): void {
   if (flags[key] !== true) {
@@ -64,8 +61,7 @@ export function assertFeatureEnabled(flags: GovernanceFeatureFlags, key: Governa
 }
 
 /**
- * 从配置对象严格解析开关。缺省键取默认 false；未知键、非布尔值、试图
- * 启用 P0 锁定开关都抛错。
+ * 从配置对象严格解析开关。缺省键取默认 false；未知键、非布尔值抛错。
  */
 export function parseGovernanceFeatureFlags(
   input: Record<string, unknown> | undefined,
@@ -85,13 +81,6 @@ export function parseGovernanceFeatureFlags(
           "validation",
           `flag_invalid:${key}`,
           `功能开关 ${key} 必须是布尔值，收到 ${typeof value}`,
-        );
-      }
-      if (value && P0_LOCKED_FALSE.has(key as GovernanceFlagKey)) {
-        throw new ContextGovernanceError(
-          "unsupported_capability",
-          `feature_locked:${key}`,
-          `${key} 在 P0 固定关闭（D-M0-09）；启用属于 P1 另行验收`,
         );
       }
       (flags as Record<GovernanceFlagKey, boolean>)[key as GovernanceFlagKey] = value;

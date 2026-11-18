@@ -67,13 +67,25 @@ export function checkPilotReadiness(input: {
 }): PilotReadinessReport {
   const { db, merchantId, flags } = input;
   const checks: PilotReadinessCheck[] = [];
-  const modulesEnabled = flags.learning_enabled || flags.memory_enabled || flags.jobs_enabled;
+  const modulesEnabled =
+    flags.learning_enabled ||
+    flags.memory_enabled ||
+    flags.jobs_enabled ||
+    flags.customer_delivery_enabled;
 
   checks.push({
-    id: "customer_delivery_disabled",
-    ok: flags.customer_delivery_enabled === false,
-    ...(flags.customer_delivery_enabled === false ? {} : { code: "CUSTOMER_DELIVERY_ENABLED" }),
+    id: "customer_delivery_mode",
+    ok: true,
+    detail: flags.customer_delivery_enabled
+      ? "P1 已按明确授权启用；绑定/订阅/退订门逐次校验"
+      : "P0 客户外发关闭",
   });
+  if (flags.customer_delivery_enabled) {
+    for (const table of ["customer_delivery_bindings", "customer_delivery_subscriptions"]) {
+      const ok = tableExists(db, table);
+      checks.push({ id: `table_${table}`, ok, ...(ok ? {} : { code: "TABLE_MISSING" }) });
+    }
+  }
   checks.push({
     id: "personal_memory_disabled",
     ok: true,
@@ -135,7 +147,7 @@ export function checkPilotReadiness(input: {
     checks.push({
       id: "modules_default_off",
       ok: true,
-      detail: "learning/memory/jobs 默认关闭；不要求实例所有权",
+      detail: "learning/memory/jobs/customer_delivery 均关闭；不要求实例所有权",
     });
   }
 

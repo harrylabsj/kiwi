@@ -764,6 +764,7 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
           now,
           // 单写者部署：管理写者由 standalone workbench 持有所有权；接待只读。
           allowWrites: false,
+          ...(process.env.KIWI_MEMORY_SOCKET_PATH ? { socketPath: process.env.KIWI_MEMORY_SOCKET_PATH } : {}),
         })
       : undefined;
   const receptionPi =

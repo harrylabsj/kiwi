@@ -50,6 +50,18 @@ const GRANT_MARKER = "MUST_NOT_LEAK-private-grant";
 const NOTE_MARKER = "MUST_NOT_LEAK-internal-note";
 const PRICE_TEXT = "29.9";
 
+function expectNoPriceLeak(value: unknown): void {
+  if (typeof value === "number") expect(value).not.toBe(Number(PRICE_TEXT));
+  else if (typeof value === "string") {
+    // ISO timestamps can coincidentally contain the price in their seconds or
+    // milliseconds; inspect every other string, including embedded text.
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) {
+      expect(value).not.toContain(PRICE_TEXT);
+    }
+  } else if (Array.isArray(value)) value.forEach(expectNoPriceLeak);
+  else if (value !== null && typeof value === "object") Object.values(value).forEach(expectNoPriceLeak);
+}
+
 const dirs: string[] = [];
 afterEach(() => dirs.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
 
@@ -296,6 +308,12 @@ function newService(
 const SEL = (sku: string, category = "widgets") => ({ sku, category });
 
 describe("file listing publication core", () => {
+  it("价格泄露断言区分 ISO 时间与数值或文本中的价格", () => {
+    expect(() => expectNoPriceLeak({ created_at: "2026-11-18T01:57:29.961Z" })).not.toThrow();
+    expect(() => expectNoPriceLeak({ nested: [29.9] })).toThrow();
+    expect(() => expectNoPriceLeak({ message: "价格 29.9 元" })).toThrow();
+  });
+
   it("未完成 published 接入时预览拒绝，不回退 owner token", async () => {
     const fixture = createFixture({ enrollmentStatus: "bound" });
     const service = newService(fixture);
@@ -362,7 +380,7 @@ describe("file listing publication core", () => {
     expect(freshMs).toBeLessThanOrEqual(Date.now() + 30 * 86_400_000 + 60_000);
     // 序列化响应不含价格、私有供货说明与 enrollment 凭据。
     const text = JSON.stringify(preview);
-    expect(text).not.toContain(PRICE_TEXT);
+    expectNoPriceLeak(preview);
     expect(text).not.toContain(NOTE_MARKER);
     expect(text).not.toContain(GRANT_MARKER);
     expect(preview.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
@@ -444,7 +462,7 @@ describe("file listing publication core", () => {
     const viewText = JSON.stringify(view);
     expect(viewText).not.toContain(GRANT_MARKER);
     expect(viewText).not.toContain(NOTE_MARKER);
-    expect(viewText).not.toContain(PRICE_TEXT);
+    expectNoPriceLeak(view);
 
     // 路径校验：用户输入永不拼路径；格式非法立即拒绝。
     await expect(service.getDraft("../../../../etc/passwd")).rejects.toMatchObject({ code: "INVALID_DRAFT_ID" });

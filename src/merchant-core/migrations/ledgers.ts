@@ -655,10 +655,32 @@ export const CUSTOMER_MEMORY_LEDGER: ModuleLedgerSpec = {
   migrations: { 1: DATA_GRANTS_V1, 2: SOURCE_GOVERNANCE_V2, 3: CUSTOMER_MEMORY_V3, 4: CUSTOMER_MEMORY_V4 },
 };
 
+const LEARNING_V2 = `
+CREATE TABLE learning_evaluation_claims (
+  claim_key TEXT PRIMARY KEY,
+  owner TEXT NOT NULL,
+  request_digest TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+CREATE TABLE learning_evaluation_config (
+  evaluation_key TEXT PRIMARY KEY,
+  config_digest TEXT NOT NULL,
+  pending_attempt TEXT
+);
+`;
+
+const LEARNING_V3 = `
+CREATE TABLE learning_evaluation_receipts (
+  evidence_ref TEXT PRIMARY KEY,
+  binding_json TEXT NOT NULL,
+  outcome_json TEXT NOT NULL
+);
+`;
+
 export const LEARNING_LEDGER: ModuleLedgerSpec = {
   module: "learning",
   ledgerTable: "learning_schema_migrations",
-  migrations: { 1: LEARNING_V1 },
+  migrations: { 1: LEARNING_V1, 2: LEARNING_V2, 3: LEARNING_V3 },
 };
 
 /**

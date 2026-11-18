@@ -37,7 +37,6 @@ import {
   type DataUseGrant,
 } from "../context-governance/data-use-grant.js";
 import {
-  DELETION_SURFACES,
   SourceGovernanceService,
   type DeletionJobRecord,
 } from "../context-governance/source-governance.js";
@@ -368,6 +367,7 @@ export class CustomerMemoryService {
         purpose: "customer_memory",
       });
       const stamp = nowUtc(this.now);
+      this.assertWithinRetention(memory, stamp);
       const updated: CustomerMemory = {
         ...memory,
         state: "active",
@@ -417,6 +417,7 @@ export class CustomerMemoryService {
         purpose: "customer_memory",
       });
       const stamp = nowUtc(this.now);
+      this.assertWithinRetention(old, stamp);
       const next: CustomerMemory = {
         ...old,
         memory_id: `mem_${randomUUID()}`,
@@ -457,61 +458,51 @@ export class CustomerMemoryService {
     requireActor(input.actor, merchantId, ["customer:self", "memory:write"]);
     const scopeId = text(input.erase_scope_id, "erase_scope_id");
     const stamp = nowUtc(this.now);
-    const subjects = this.db
-      .prepare(
-        `SELECT DISTINCT subject_id FROM customer_memories
-          WHERE merchant_id = ? AND erase_scope_id = ?`,
-      )
-      .all(merchantId, scopeId) as unknown as Array<{ subject_id: string }>;
-    let job: DeletionJobRecord | undefined;
-    if (this.sourceGovernance !== undefined) {
-      job = this.sourceGovernance.requestDeletion({
+    return inImmediateTransaction(this.db, () => {
+      const subjects = this.db
+        .prepare(
+          `SELECT DISTINCT subject_id FROM customer_memories
+            WHERE merchant_id = ? AND erase_scope_id = ? AND state <> 'deleted'`,
+        )
+        .all(merchantId, scopeId) as unknown as Array<{ subject_id: string }>;
+      const job = this.sourceGovernance?.requestDeletion({
         merchant_id: merchantId,
         erase_scope_id: scopeId,
         requested_by: text(input.requested_by, "requested_by"),
         reason: text(input.reason, "reason", 500),
       });
-    }
-    this.db
-      .prepare(
-        `UPDATE customer_memories
-            SET state = 'deleted', value_ref = '', source_refs_json = '[]', updated_at = ?
-          WHERE merchant_id = ? AND erase_scope_id = ?`,
-      )
-      .run(stamp, merchantId, scopeId);
-    this.db
-      .prepare(
-        "DELETE FROM history_fts WHERE merchant_id = ? AND document_id IN (SELECT document_id FROM history_index WHERE merchant_id = ? AND erase_scope_id = ?)",
-      )
-      .run(merchantId, merchantId, scopeId);
-    this.db
-      .prepare("DELETE FROM history_index WHERE merchant_id = ? AND erase_scope_id = ?")
-      .run(merchantId, scopeId);
-    for (const subject of subjects) {
-      this.bumpSetVersion(merchantId, subject.subject_id, stamp);
-    }
-    if (job !== undefined) {
-      for (const surface of DELETION_SURFACES) {
-        if (surface === "backups") {
-          this.sourceGovernance?.failSurface({
-            merchant_id: merchantId,
-            deletion_job_id: job.deletion_job_id,
-            surface,
-            reason: "backup_pending",
-          });
-        } else {
-          this.sourceGovernance?.completeSurface({
-            merchant_id: merchantId,
-            deletion_job_id: job.deletion_job_id,
-            surface,
-            receipt_ref: `mem_purge_${surface}`,
-          });
-        }
+      this.db
+        .prepare(
+          `DELETE FROM customer_memory_evidence
+            WHERE merchant_id = ? AND memory_id IN (
+              SELECT memory_id FROM customer_memories WHERE merchant_id = ? AND erase_scope_id = ?)`,
+        )
+        .run(merchantId, merchantId, scopeId);
+      this.db
+        .prepare(
+          `UPDATE customer_memories
+              SET state = 'deleted', key = '', value_ref = '', source_refs_json = '[]',
+                  confidence = NULL, confirmed_by = NULL, updated_at = ?
+            WHERE merchant_id = ? AND erase_scope_id = ? AND
+              (state <> 'deleted' OR key <> '' OR value_ref <> '' OR source_refs_json <> '[]'
+                OR confidence IS NOT NULL OR confirmed_by IS NOT NULL)`,
+        )
+        .run(stamp, merchantId, scopeId);
+      this.db
+        .prepare(
+          `DELETE FROM history_fts WHERE merchant_id = ? AND document_id IN (
+            SELECT document_id FROM history_index WHERE merchant_id = ? AND erase_scope_id = ?)`,
+        )
+        .run(merchantId, merchantId, scopeId);
+      this.db
+        .prepare("DELETE FROM history_index WHERE merchant_id = ? AND erase_scope_id = ?")
+        .run(merchantId, scopeId);
+      for (const subject of subjects) {
+        this.bumpSetVersion(merchantId, subject.subject_id, stamp);
       }
-      // 返回清理后的最新任务状态（不是登记时的快照）。
-      return this.sourceGovernance?.getDeletionJob(merchantId, job.deletion_job_id) ?? job;
-    }
-    return job;
+      // 此处只清理记忆与历史索引；跨模块存储面由对应清理方回执。
+      return job;
+    });
   }
 
   /** 到期/超过 purge_at 的记忆失效；历史索引超期删除。 */
@@ -521,13 +512,33 @@ export class CustomerMemoryService {
       const subjects = this.db
         .prepare(
           `SELECT DISTINCT merchant_id, subject_id FROM customer_memories
-            WHERE state IN ('active','candidate','needs_review') AND expires_at <= ?`,
+            WHERE state IN ('active','candidate','needs_review')
+              AND (expires_at <= ? OR purge_at <= ?)`,
         )
-        .all(stamp) as unknown as Array<{ merchant_id: string; subject_id: string }>;
+        .all(stamp, stamp) as unknown as Array<{ merchant_id: string; subject_id: string }>;
       const memories = this.db
         .prepare(
           `UPDATE customer_memories SET state = 'expired', updated_at = ?
-            WHERE state IN ('active','candidate','needs_review') AND expires_at <= ?`,
+            WHERE state IN ('active','candidate','needs_review')
+              AND (expires_at <= ? OR purge_at <= ?)`,
+        )
+        .run(stamp, stamp, stamp);
+      this.db
+        .prepare(
+          `DELETE FROM customer_memory_evidence
+            WHERE EXISTS (SELECT 1 FROM customer_memories AS memory
+               WHERE memory.merchant_id = customer_memory_evidence.merchant_id
+                 AND memory.memory_id = customer_memory_evidence.memory_id
+                 AND memory.purge_at <= ?)`,
+        )
+        .run(stamp);
+      this.db
+        .prepare(
+          `UPDATE customer_memories
+              SET key = '', value_ref = '', source_refs_json = '[]',
+                  confidence = NULL, confirmed_by = NULL, updated_at = ?
+            WHERE purge_at <= ? AND (key <> '' OR value_ref <> '' OR source_refs_json <> '[]'
+              OR confidence IS NOT NULL OR confirmed_by IS NOT NULL)`,
         )
         .run(stamp, stamp);
       for (const subject of subjects) {
@@ -565,26 +576,34 @@ export class CustomerMemoryService {
     expires_at: string;
     version: number;
   }> {
+    const stamp = nowUtc(this.now);
     return this.db
       .prepare(
         `SELECT memory_id, namespace, key, value_ref, value_type, confirmed_at, expires_at, version
            FROM customer_memories
           WHERE merchant_id = ? AND subject_id = ? AND state = 'active'
-            AND expires_at > ? ORDER BY updated_at DESC LIMIT 100`,
+            AND expires_at > ? AND purge_at > ? ORDER BY updated_at DESC LIMIT 100`,
       )
-      .all(text(merchantId, "merchant_id"), text(subjectId, "subject_id"), nowUtc(this.now)) as never;
+      .all(text(merchantId, "merchant_id"), text(subjectId, "subject_id"), stamp, stamp) as never;
   }
 
   /** 当前主体 active 记忆（接待 recall 工具用；最小字段）。 */
   listActiveForRecall(merchantId: string, subjectId: string): CustomerMemory[] {
+    const stamp = nowUtc(this.now);
     const rows = this.db
       .prepare(
         `SELECT * FROM customer_memories
           WHERE merchant_id = ? AND subject_id = ? AND state = 'active'
-            AND expires_at > ? ORDER BY updated_at DESC LIMIT 20`,
+            AND expires_at > ? AND purge_at > ? ORDER BY updated_at DESC LIMIT 20`,
       )
-      .all(text(merchantId, "merchant_id"), text(subjectId, "subject_id"), nowUtc(this.now)) as unknown as MemoryRow[];
+      .all(text(merchantId, "merchant_id"), text(subjectId, "subject_id"), stamp, stamp) as unknown as MemoryRow[];
     return rows.map(toMemory);
+  }
+
+  private assertWithinRetention(memory: CustomerMemory, stamp: string): void {
+    if (Date.parse(memory.expires_at) <= Date.parse(stamp) || memory.purge_at <= stamp) {
+      throw new CustomerMemoryError("version_conflict", "memory_expired", "记忆已过留存期限");
+    }
   }
 
   private requireMemory(merchantId: string, memoryId: string): CustomerMemory {

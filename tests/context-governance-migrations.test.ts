@@ -36,9 +36,9 @@ describe("独立迁移账本（D-M0-05）", () => {
     return (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
   }
 
-  it("三个账本注册到同一 state.sqlite，learning v1 / customer_memory v2 / operations_jobs v1 建表并记录 checksum", () => {
+  it("三个账本注册到同一 state.sqlite，learning v2 / customer_memory v3 / operations_jobs v3 建表并记录 checksum", () => {
     registerGovernanceLedgers(db);
-    expect(ledgerRows("learning_schema_migrations")).toBe(1);
+    expect(ledgerRows("learning_schema_migrations")).toBe(3);
     expect(ledgerRows("operations_jobs_schema_migrations")).toBe(3);
     expect(ledgerRows("customer_memory_schema_migrations")).toBe(4);
     const rows = db
@@ -85,10 +85,21 @@ describe("独立迁移账本（D-M0-05）", () => {
     registerGovernanceLedgers(db);
 
     expect(ledgerRows("customer_memory_schema_migrations")).toBe(4);
-    expect(ledgerRows("learning_schema_migrations")).toBe(1);
+    expect(ledgerRows("learning_schema_migrations")).toBe(3);
     const after = repo.getTask("m-1", task.task_id);
     expect(after?.task_id).toBe(task.task_id);
     expect(repo.listTasks("m-1")).toHaveLength(1);
+  });
+
+  it("learning v1 升级 v2 保留旧数据并幂等", () => {
+    migrateModuleSchema(db, LEARNING_LEDGER, 1);
+    db.prepare(`INSERT INTO learning_command_idempotency
+      (merchant_id, actor_id, operation, command_id, request_digest, result_json, created_at)
+      VALUES ('m', 'a', 'op', 'c', 'digest', '{}', '2026-01-01')`).run();
+    migrateModuleSchema(db, LEARNING_LEDGER);
+    migrateModuleSchema(db, LEARNING_LEDGER);
+    expect(ledgerRows("learning_schema_migrations")).toBe(3);
+    expect(ledgerRows("learning_command_idempotency")).toBe(1);
   });
 
   it("checksum 冲突 fail-closed：账本被篡改时拒绝打开", () => {
@@ -109,7 +120,7 @@ describe("独立迁移账本（D-M0-05）", () => {
       "CREATE TABLE learning_schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL, checksum TEXT NOT NULL)",
     );
     db.prepare(
-      "INSERT INTO learning_schema_migrations (version, applied_at, checksum) VALUES (2, '2026-01-01T00:00:00.000Z', 'x')",
+      "INSERT INTO learning_schema_migrations (version, applied_at, checksum) VALUES (4, '2026-01-01T00:00:00.000Z', 'x')",
     ).run();
     expect(() => migrateModuleSchema(db, LEARNING_LEDGER)).toThrowError(MigrationLedgerError);
     try {

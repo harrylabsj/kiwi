@@ -135,6 +135,19 @@ describe("merchant inquiry interpretation (P2)", () => {
     expect(text).toContain("non-binding");
   });
 
+  it("询价绝对日期不会误报相对期限可以满足", async () => {
+    const interpreter: InquiryInterpreter = {
+      async interpret() {
+        return { intent: "product_question", topics: ["delivery"], sku: SKU, language: "zh" } satisfies InquiryInterpretation;
+      },
+    };
+    const { text } = await run(makeHandler(interpreter), inquiryEnvelope({ type: "inquiry" }),
+      "11月18日能到货吗？");
+    expect(text).toContain("预计交期");
+    expect(text).not.toContain("18 天");
+    expect(text).not.toContain("可以满足");
+  });
+
   it("中文买家得到中文回复", async () => {
     const interpreter: InquiryInterpreter = {
       async interpret() {

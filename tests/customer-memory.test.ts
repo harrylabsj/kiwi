@@ -485,7 +485,7 @@ describe("客户记忆 M3", () => {
     if (theirs.status === "ok") expect(theirs.hits).toHaveLength(1);
   });
 
-  it("删除：封存 scope、撤销 grant、清理记忆/历史，备份面保持 pending", () => {
+  it("删除：封存 scope、撤销 grant、清理记忆/历史，故障原子回滚，外部存储面保持 pending", () => {
     grant("customer_memory");
     const candidate = memory.proposeMemory({
       merchant_id: MERCHANT,
@@ -497,6 +497,7 @@ describe("客户记忆 M3", () => {
       value_ref: "箱",
       value_type: "enum",
       source_kind: "explicit",
+      source_refs: ["test-memory-source"],
     });
     bindCustomer();
     const active = memory.confirmMemory({
@@ -505,28 +506,46 @@ describe("客户记忆 M3", () => {
       memory_id: candidate.memory_id,
       expected_version: 1,
     });
-    const job = memory.requestDeletion({
+    const historyGrant = grant("history_recall");
+    history.indexHistoryDocument({
+      merchant_id: MERCHANT,
+      subject_id: subjectId,
+      kind: "prior_inquiry",
+      sku: "test-memory-source",
+      source_version: 1,
+      occurred_at: NOW,
+      text: "纸箱包装和单位换算",
+      grant_id: historyGrant.grant_id,
+      erase_scope_id: scope,
+    });
+    const request = {
       merchant_id: MERCHANT,
       actor: customer(),
       erase_scope_id: scope,
       requested_by: "buyer-session-1",
       reason: "客户删除请求",
-    });
+    };
+    db.exec(`CREATE TRIGGER reject_index_delete BEFORE DELETE ON history_index
+             BEGIN SELECT RAISE(ABORT, 'fixture storage failure'); END`);
+    expect(() => memory.requestDeletion(request)).toThrow("fixture storage failure");
+    expect(memory.getMemory(MERCHANT, active.memory_id)?.state).toBe("active");
+    expect(db.prepare("SELECT COUNT(*) AS n FROM deletion_jobs").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM history_fts").get()).toEqual({ n: 1 });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM customer_memory_evidence").get()).toEqual({ n: 1 });
+
+    db.exec("DROP TRIGGER reject_index_delete");
+    const job = memory.requestDeletion(request);
     expect(job).toBeDefined();
-    expect(memory.getMemory(MERCHANT, active.memory_id)?.state).toBe("deleted");
+    expect(memory.getMemory(MERCHANT, active.memory_id)).toMatchObject({
+      state: "deleted", key: "", value_ref: "", source_refs: [],
+    });
     expect(memory.listMine(MERCHANT, subjectId)).toEqual([]);
-    const surfaces = job!.surfaces.map((surface) => ({
-      surface: surface.surface,
-      status: surface.status,
-    }));
-    expect(surfaces.find((item) => item.surface === "backups")).toEqual({
-      surface: "backups",
-      status: "FAILED",
-    });
-    expect(surfaces.find((item) => item.surface === "derived_objects")).toEqual({
-      surface: "derived_objects",
-      status: "PURGED",
-    });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM history_fts").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM customer_memory_evidence").get()).toEqual({ n: 0 });
+    expect(job?.surfaces.every((surface) => surface.status === "PENDING")).toBe(true);
+    const setVersion = memory.currentMemorySetVersion(MERCHANT, subjectId);
+    expect(memory.requestDeletion(request)?.deletion_job_id).toBe(job?.deletion_job_id);
+    expect(memory.currentMemorySetVersion(MERCHANT, subjectId)).toBe(setVersion);
     // 删除后该 scope 不能再用原 grant 写。
     expectError(
       () =>
@@ -558,7 +577,8 @@ describe("客户记忆 M3", () => {
       value_ref: "箱",
       value_type: "enum",
       source_kind: "explicit",
-      expires_at: "2026-11-18T00:00:00.000Z",
+      expires_at: "2026-12-31T00:00:00.000Z",
+      source_refs: ["test-expiry-source"],
     });
     bindCustomer();
     memory.confirmMemory({
@@ -567,11 +587,15 @@ describe("客户记忆 M3", () => {
       memory_id: candidate.memory_id,
       expected_version: 1,
     });
-    clock = "2026-11-19T00:00:00.000Z";
+    clock = candidate.purge_at;
+    expect(memory.listMine(MERCHANT, subjectId)).toEqual([]);
     const expired = memory.expireDue();
     expect(expired.memories).toBeGreaterThanOrEqual(1);
     expect(memory.listMine(MERCHANT, subjectId)).toEqual([]);
-    expect(memory.getMemory(MERCHANT, candidate.memory_id)?.state).toBe("expired");
+    expect(memory.getMemory(MERCHANT, candidate.memory_id)).toMatchObject({
+      state: "expired", key: "", value_ref: "", source_refs: [],
+    });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM customer_memory_evidence").get()).toEqual({ n: 0 });
   });
 
   it("B01：匿名 T0 两次访问只保留当前会话，不建个人档案", () => {
