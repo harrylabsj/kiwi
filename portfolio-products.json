@@ -1,6 +1,6 @@
 {
   "schema": "kiwi.portfolio.products.v1",
-  "snapshot_date": "2026-11-10",
+  "snapshot_date": "2026-11-19",
   "version_policy": "Versions remain independent by product. The portfolio release bundle binds each available source commit, package version, candidate artifact hash, and external approval state.",
   "products": [
     {
@@ -28,7 +28,7 @@
     {
       "id": "kiwi",
       "name": "Kiwi runtime",
-      "version": "0.12.31",
+      "version": "0.12.32",
       "version_source": {
         "type": "json",
         "scope": "central",
@@ -39,7 +39,7 @@
       "release_controller": "portfolio-release",
       "artifact": "release/npm/*.tgz",
       "state": "candidate",
-      "last_known_registry_version": "0.12.30",
+      "last_known_registry_version": "0.12.31",
       "gates": [
         "full Kiwi verify",
         "protected kiwi-release environment",
