@@ -86,7 +86,14 @@ export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] 
         properties: {
           query: { type: "string", minLength: 1 },
           category: { type: "string" },
-          region: { type: "string" },
+          region: {
+            type: "string",
+            deprecated: true,
+            description: tr(
+              "Ignored. Kiwi Network search is global. Confirm delivery timing separately.",
+              "此参数已弃用。Kiwi Network 在全球范围内搜索，到货时间另行确认。",
+            ),
+          },
         },
       },
       async handle(args) {
