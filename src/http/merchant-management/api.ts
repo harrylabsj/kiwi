@@ -360,6 +360,8 @@ export interface MerchantManagementApiOptions {
   workbenchEvents?: WorkbenchEventProjectionStore;
   /** 商家持续经营（v0.2）：经营计划/机会/方案/跟进；未配置时对应路由 404。 */
   merchantOperations?: MerchantOperationsSurface;
+  /** M6-3 收件人绑定/订阅（P1 管理面；无则路由不存在）。 */
+  deliveryConsent?: import("../../merchant-core/customer-delivery/consent-repository.js").DeliveryConsentRepository;
   governance?: {
     flags: GovernanceFeatureFlags;
     write: <T>(work: () => T) => T;
@@ -473,6 +475,34 @@ async function resolvePlatformRules(
     return normalizeTradePlatformRules(await options.marketplacePlatforms?.());
   } catch {
     return normalizeTradePlatformRules(undefined);
+  }
+}
+
+function deliveryField(body: Record<string, unknown>, key: string): string {
+  const value = body[key];
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new ManagementError("invalid_input", `${key} must be a non-empty string`);
+  }
+  return value;
+}
+
+function deliveryNumber(body: Record<string, unknown>, key: string): number {
+  const value = body[key];
+  if (!Number.isSafeInteger(value)) {
+    throw new ManagementError("invalid_input", `${key} must be an integer`);
+  }
+  return value as number;
+}
+
+function deliveryCall<T>(work: () => T): T {
+  try {
+    return work();
+  } catch (err) {
+    const code = (err as { code?: unknown } | null)?.code;
+    if (typeof code === "string" && code !== "") {
+      throw new ManagementError("invalid_input", err instanceof Error ? err.message : code);
+    }
+    throw err;
   }
 }
 
@@ -638,6 +668,21 @@ export function createMerchantManagementApiHandler(
     if (governanceRouteDisabled(rest)) {
       writeWorkbenchProblem(res, "RESOURCE_NOT_FOUND", requestId, "资源不存在", "Workbench API 路由不存在或尚未实现。");
       return;
+    }
+    if (options.deliveryConsent !== undefined && rest.startsWith("/delivery/")) {
+      const auth = requireActor(req);
+      authorizeOrThrow(auth.ctx, "followups:read");
+      if (rest === "/delivery/bindings") {
+        writeJson(res, 200, { bindings: options.deliveryConsent.listBindings(auth.ctx.merchantId) }, { "x-request-id": requestId });
+        return;
+      }
+      if (rest === "/delivery/subscriptions") {
+        const bindingId = url.searchParams.get("binding_id") ?? undefined;
+        writeJson(res, 200, {
+          subscriptions: options.deliveryConsent.listSubscriptions(auth.ctx.merchantId, bindingId),
+        }, { "x-request-id": requestId });
+        return;
+      }
     }
     if (rest === "/products/publication-status") {
       const auth = requireActor(req);
@@ -1309,6 +1354,70 @@ export function createMerchantManagementApiHandler(
     if (governanceRouteDisabled(rest)) {
       writeWorkbenchProblem(res, "RESOURCE_NOT_FOUND", requestId, "资源不存在", "Workbench API 路由不存在或尚未实现。");
       return;
+    }
+    if (options.deliveryConsent !== undefined && rest.startsWith("/delivery/")) {
+      const auth = requireActor(req);
+      assertWriteGuards(req, auth.sessionId);
+      authorizeOrThrow(auth.ctx, "followups:manage");
+      const body = await readJsonBody(req);
+      const fields = objectFields(body, [
+        "channel",
+        "address_ref",
+        "proof_ref",
+        "expected_epoch",
+        "binding_id",
+        "purpose",
+        "max_per_day",
+        "expires_at",
+        "consent_evidence_ref",
+      ]);
+      if (rest === "/delivery/bindings") {
+        writeJson(res, 201, deliveryCall(() =>
+          options.deliveryConsent!.createBinding({
+            merchant_id: auth.ctx.merchantId,
+            channel: deliveryField(fields, "channel") as "wechat" | "sms" | "email" | "in_app",
+            address_ref: deliveryField(fields, "address_ref"),
+            proof_ref: deliveryField(fields, "proof_ref"),
+          }),
+        ), { "x-request-id": requestId });
+        return;
+      }
+      const revokeBindingMatch = /^\/delivery\/bindings\/([^/]+)\/revoke$/.exec(rest);
+      if (revokeBindingMatch !== null) {
+        writeJson(res, 200, deliveryCall(() =>
+          options.deliveryConsent!.revokeBinding(
+            auth.ctx.merchantId,
+            pathSegment(revokeBindingMatch[1] ?? ""),
+            deliveryNumber(fields, "expected_epoch"),
+          ),
+        ), { "x-request-id": requestId });
+        return;
+      }
+      if (rest === "/delivery/subscriptions") {
+        const expiresAt = typeof fields["expires_at"] === "string" ? fields["expires_at"] : null;
+        writeJson(res, 201, deliveryCall(() =>
+          options.deliveryConsent!.createSubscription({
+            merchant_id: auth.ctx.merchantId,
+            binding_id: deliveryField(fields, "binding_id"),
+            purpose: deliveryField(fields, "purpose") as "arrival_notification" | "status_notification" | "service_reply",
+            max_per_day: deliveryNumber(fields, "max_per_day"),
+            expires_at: expiresAt,
+            consent_evidence_ref: deliveryField(fields, "consent_evidence_ref"),
+          }),
+        ), { "x-request-id": requestId });
+        return;
+      }
+      const unsubscribeMatch = /^\/delivery\/subscriptions\/([^/]+)\/unsubscribe$/.exec(rest);
+      if (unsubscribeMatch !== null) {
+        writeJson(res, 200, deliveryCall(() =>
+          options.deliveryConsent!.unsubscribe(
+            auth.ctx.merchantId,
+            pathSegment(unsubscribeMatch[1] ?? ""),
+            deliveryNumber(fields, "expected_epoch"),
+          ),
+        ), { "x-request-id": requestId });
+        return;
+      }
     }
     if (options.merchantOperations !== undefined) {
       const ops = options.merchantOperations;

@@ -30,6 +30,7 @@ import { assembleMerchantRuntime } from "../mcp/merchant-runtime-assembly.js";
 import { createOperationAdviceRunner } from "../merchant-core/operations-jobs/advice-runner.js";
 import { OperationsScheduler } from "../merchant-core/operations-jobs/scheduler.js";
 import { OperationsProjection } from "../merchant-core/operations-jobs/projection.js";
+import { DeliveryConsentRepository } from "../merchant-core/customer-delivery/consent-repository.js";
 import { buildModel, realStreamFn } from "../runtime/model.js";
 import { PRODUCT_VERSION } from "../product-cli.js";
 import { DEFAULT_MERCHANT_MCP_PATH } from "../mcp/merchant-server.js";
@@ -198,6 +199,7 @@ export async function startStandaloneMerchantWorkbench(
   }
 
   const db = new DatabaseSync(`${dataDir}/state.sqlite`);
+  const deliveryConsent = new DeliveryConsentRepository({ db, now: () => new Date().toISOString() });
   const serviceState = MutableServiceState.fromDeclared(process.env.KIWI_WORKBENCH_SERVICE_STATE);
   serviceState.attachPersistence(db, profile.owner_id);
   const now = () => new Date().toISOString();
@@ -253,13 +255,18 @@ export async function startStandaloneMerchantWorkbench(
     }
     return { ready: Object.values(checks).every((check) => check.ok), checks };
   };
+  const writeOrigins = allowedOrigins(
+    host,
+    port,
+    options.publicOrigin ?? profile.merchant_mcp?.public_url,
+  );
   const api = createMerchantManagementApiHandler({
     merchantId: profile.owner_id,
     merchantName: profile.name ?? profile.owner_id,
     generation: () => 1,
     runtimeVersion: PRODUCT_VERSION,
     sessions: admin.sessions,
-    allowedOrigins: allowedOrigins(host, port, options.publicOrigin ?? profile.merchant_mcp?.public_url),
+    allowedOrigins: writeOrigins,
     listPending: () => admin.surface.listPending(),
     mintCandidateConfirmation: (input) => admin.store.createConfirmation(input),
     executeDecision: async (input) => {
@@ -279,6 +286,7 @@ export async function startStandaloneMerchantWorkbench(
     readiness,
     workbenchConfirmations,
     ...(merchantOperations !== undefined ? { merchantOperations } : {}),
+    deliveryConsent,
     ...(governance !== undefined ? { governance } : {}),
   });
   const adminHandle = createMerchantHttpHandler(assembly.serverOptions);
@@ -302,6 +310,9 @@ export async function startStandaloneMerchantWorkbench(
     server.listen(port, host, () => {
       const address = server.address();
       const actualPort = typeof address === "object" && address !== null ? address.port : port;
+      if (["0.0.0.0", "::", "127.0.0.1", "::1", "localhost"].includes(host)) {
+        writeOrigins.push(`http://127.0.0.1:${actualPort}`, `http://localhost:${actualPort}`);
+      }
       resolve({
         url: `http://${host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host}:${actualPort}/merchant/`,
         close: (cb) => server.close(cb),

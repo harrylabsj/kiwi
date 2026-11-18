@@ -151,6 +151,61 @@ describe("standalone merchant workbench", () => {
     expect(rules.status).toBe(404);
   });
 
+  it("M6-3：绑定/订阅/退订管理路由", async () => {
+    const root = mkdtempSync(join(tmpdir(), "kiwi-workbench-"));
+    dirs.push(root);
+    const handle = await startWorkbench(root);
+    if (handle === undefined) throw new Error("workbench failed to start");
+    workbenches.push(handle);
+    const origin = new URL(handle.url).origin;
+    const login = await fetch(new URL("/admin/login?next=%2Fmerchant%2F", handle.url), {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "password=strong-pw-123&next=%2Fmerchant%2F",
+      redirect: "manual",
+    });
+    const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+    const session = await fetch(new URL("/merchant/api/session", handle.url), {
+      headers: { cookie },
+    });
+    const csrf = ((await session.json()) as { csrf_token: string }).csrf_token;
+    const post = async (path: string, body: unknown) =>
+      fetch(new URL(path, handle.url), {
+        method: "POST",
+        headers: { cookie, "x-csrf-token": csrf, origin, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    const created = await post("/merchant/api/v1/delivery/bindings", {
+      channel: "wechat",
+      address_ref: "wxref:abc",
+      proof_ref: "proof-1",
+    });
+    const createdBody = await created.text();
+    expect(created.status, createdBody).toBe(201);
+    const binding = JSON.parse(createdBody) as { binding_id: string; binding_epoch: number };
+    expect(binding.binding_id).toMatch(/^bind_/);
+    const subscription = await post("/merchant/api/v1/delivery/subscriptions", {
+      binding_id: binding.binding_id,
+      purpose: "arrival_notification",
+      max_per_day: 2,
+      expires_at: "2026-11-25T00:00:00.000Z",
+      consent_evidence_ref: "phrase:confirm-1",
+    });
+    expect(subscription.status).toBe(201);
+    const sub = (await subscription.json()) as { subscription_id: string; grant_epoch: number };
+    const list = await fetch(new URL("/merchant/api/v1/delivery/subscriptions", handle.url), {
+      headers: { cookie },
+    });
+    expect(list.status).toBe(200);
+    expect(((await list.json()) as { subscriptions: unknown[] }).subscriptions).toHaveLength(1);
+    const unsubscribed = await post(
+      `/merchant/api/v1/delivery/subscriptions/${sub.subscription_id}/unsubscribe`,
+      { expected_epoch: sub.grant_epoch },
+    );
+    expect(unsubscribed.status).toBe(200);
+    expect(await unsubscribed.json()).toMatchObject({ grant_epoch: sub.grant_epoch + 1 });
+  });
+
   it("does not mount TOP1-3 routes when governance flags are off", async () => {
     const root = mkdtempSync(join(tmpdir(), "kiwi-workbench-"));
     dirs.push(root);

@@ -7,7 +7,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { registerGovernanceLedgers } from "../src/merchant-core/migrations/ledgers.js";
 import { migrateMerchantOpsSchema } from "../src/merchant-core/ops/schema.js";
 import { BackgroundBudgetStore } from "../src/merchant-core/budget/background-budget.js";
-import { OperationsJobsService } from "../src/merchant-core/operations-jobs/service.js";
+import {
+  OperationsJobsService,
+  type AutomationRule,
+  type PrefilterResult,
+} from "../src/merchant-core/operations-jobs/service.js";
 import {
   OperationsScheduler,
   invalidEvidenceRefs,
@@ -72,7 +76,7 @@ describe("经营任务运行时调度", () => {
     runner: (input: never) => Promise<OperationAdviceRun>,
     overrides: {
       assertOwner?: () => void;
-      prefilter?: () => { result: "eligible" };
+      prefilter?: (rule: AutomationRule) => PrefilterResult;
       write?: <T>(work: () => T) => T;
     } = {},
   ) {

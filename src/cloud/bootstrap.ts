@@ -90,6 +90,7 @@ import { createOperationAdviceRunner } from "../merchant-core/operations-jobs/ad
 import { createRecoveryGatewayVerifierFromEnv } from "../merchant-core/learning/recovery-gateway.js";
 import { OperationsScheduler } from "../merchant-core/operations-jobs/scheduler.js";
 import { OperationsProjection } from "../merchant-core/operations-jobs/projection.js";
+import { DeliveryConsentRepository } from "../merchant-core/customer-delivery/consent-repository.js";
 import { buildModel, realStreamFn } from "../runtime/model.js";
 import {
   loadGovernanceFeatureFlagsFromEnv,
@@ -1178,6 +1179,7 @@ export async function bootstrapCloudRuntime(
       },
       policyCurrent: () => assembly.currentPolicy(),
       merchantOperations,
+      deliveryConsent: new DeliveryConsentRepository({ db: managementDb, now: () => new Date().toISOString() }),
       ...(governanceRuntime.active ? {
         governance: {
           flags: governanceFlags,
