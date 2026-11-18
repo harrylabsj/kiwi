@@ -86,6 +86,10 @@ import { createServiceControlExecutors } from "../merchant/service-control-execu
 import { calculateWorkbenchQuote } from "../merchant/quote-calculator.js";
 import { openMerchantOperationsFacade } from "../merchant-core/ops/facade.js";
 import { MerchantOperationsSurface } from "../merchant-core/ops/surface.js";
+import { createOperationAdviceRunner } from "../merchant-core/operations-jobs/advice-runner.js";
+import { createRecoveryGatewayVerifierFromEnv } from "../merchant-core/learning/recovery-gateway.js";
+import { OperationsScheduler } from "../merchant-core/operations-jobs/scheduler.js";
+import { buildModel, realStreamFn } from "../runtime/model.js";
 import {
   loadGovernanceFeatureFlagsFromEnv,
 } from "../merchant-core/context-governance/feature-flags.js";
@@ -758,6 +762,7 @@ export async function bootstrapCloudRuntime(
   let directConnection: MerchantConnectionService | undefined;
   let enrollmentHeartbeat: EnrollmentHeartbeat | undefined;
   let governanceRuntime: GovernanceRuntime | undefined;
+  let operationsScheduler: OperationsScheduler | undefined;
   let catalogMerchantIdForProducts: () => string | undefined = () => undefined;
   // 开关开启但无管理面（无 state.sqlite）时，新功能静默不可用会误导运维：
   // 明确记录「保持关闭」，默认关闭路径行为不变。
@@ -793,13 +798,38 @@ export async function bootstrapCloudRuntime(
     serviceState.attachPersistence(managementDb, profile.owner_id);
     // 商家持续经营（v0.2）：经营计划/机会/方案/跟进共用 state.sqlite；
     // 商家身份由认证主体注入，路由层不再接受请求正文自报 merchant_id。
-    const merchantOperations = new MerchantOperationsSurface({
-      facade: openMerchantOperationsFacade({
-        db: managementDb,
-        merchantId: profile.owner_id,
-        now: () => new Date().toISOString(),
-      }),
+    const recoveryVerifier = createRecoveryGatewayVerifierFromEnv(process.env);
+    const cloudOperationsFacade = openMerchantOperationsFacade({
+      db: managementDb,
+      merchantId: profile.owner_id,
+      now: () => new Date().toISOString(),
+      ...(recoveryVerifier !== undefined ? { recoveryVerifier } : {}),
     });
+    const merchantOperations = new MerchantOperationsSurface({ facade: cloudOperationsFacade });
+    if (
+      process.env.KIWI_OPERATIONS_SCHEDULER === "1" &&
+      governanceRuntime?.active === true &&
+      profile.model?.provider !== undefined &&
+      profile.model.provider !== "fake"
+    ) {
+      const runner = createOperationAdviceRunner({
+        streamFn: realStreamFn(),
+        model: buildModel(profile),
+        ...(profile.model.api_key_env !== undefined
+          ? { getApiKey: () => process.env[profile.model.api_key_env as string] }
+          : {}),
+        now: () => new Date().toISOString(),
+      });
+      operationsScheduler = new OperationsScheduler({
+        service: cloudOperationsFacade.operationsJobs,
+        merchant_id: profile.owner_id,
+        assertOwner: () => governanceRuntime?.assertOwner(),
+        runner,
+        now: () => new Date().toISOString(),
+        log: (line: string) => log(line),
+      });
+      operationsScheduler.start();
+    }
 
     // 开通向导通道（M4 §5.4 + P3 §4.6）：store 与 /admin 同库；配了 catalog_url 时
     // 接上 Catalog 串联（绑定/发布的权威证据适配器 + DEPLOYED_UNBOUND 后台对账）。
@@ -1574,6 +1604,7 @@ export async function bootstrapCloudRuntime(
       reconciliationTimer = clockTimer = bindingReconcileTimer = directConnectionTimer = undefined;
     } },
     { id: "heartbeat", run: () => enrollmentHeartbeat?.stop() },
+    { id: "operations_scheduler", run: () => operationsScheduler?.stop() },
     { id: "http_server", run: () => closeHttpServer(server) },
     { id: "background_work", after: ["timers"], run: async () => {
       await Promise.allSettled([directConnectionWork, bindingReconcileWork]);

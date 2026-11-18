@@ -27,6 +27,9 @@ import { WorkbenchConfirmationStore } from "../http/merchant-management/webauthn
 import { ManagementError, type MerchantProductPage, type PageQuery } from "../merchant/application/service.js";
 import { createMerchantHttpHandler } from "../mcp/merchant-server.js";
 import { assembleMerchantRuntime } from "../mcp/merchant-runtime-assembly.js";
+import { createOperationAdviceRunner } from "../merchant-core/operations-jobs/advice-runner.js";
+import { OperationsScheduler } from "../merchant-core/operations-jobs/scheduler.js";
+import { buildModel, realStreamFn } from "../runtime/model.js";
 import { PRODUCT_VERSION } from "../product-cli.js";
 import { DEFAULT_MERCHANT_MCP_PATH } from "../mcp/merchant-server.js";
 
@@ -199,7 +202,35 @@ export async function startStandaloneMerchantWorkbench(
   const now = () => new Date().toISOString();
   const drafts = new MerchantImportDraftStore({ db, now });
   // 治理业务与所有权事务须使用装配持有的同一个 SQLite 连接。
-  const { merchantOperations, governance } = assembly;
+  const { merchantOperations, governance, operationsJobs } = assembly;
+  // 经营任务调度：仅所有权持有进程、显式开关且真实模型时启动。缺投影数据
+  // 时调度器只产生 data_incomplete 待办（不伪造 no_change）。
+  let operationsScheduler: OperationsScheduler | undefined;
+  if (
+    governance !== undefined &&
+    operationsJobs !== undefined &&
+    process.env.KIWI_OPERATIONS_SCHEDULER === "1" &&
+    profile.model?.provider !== undefined &&
+    profile.model.provider !== "fake"
+  ) {
+    const runner = createOperationAdviceRunner({
+      streamFn: realStreamFn(),
+      model: buildModel(profile),
+      ...(profile.model.api_key_env !== undefined
+        ? { getApiKey: () => process.env[profile.model.api_key_env as string] }
+        : {}),
+      now,
+    });
+    operationsScheduler = new OperationsScheduler({
+      service: operationsJobs,
+      merchant_id: profile.owner_id,
+      assertOwner: () => governance.write(() => undefined),
+      runner,
+      now,
+      log: (line: string) => process.stderr.write(line),
+    });
+    operationsScheduler.start();
+  }
   const operations = new MerchantManagementOperationStore({ db });
   const workbenchConfirmations = new WorkbenchConfirmationStore({ db });
   const productReader = buildProductReader(profile);
@@ -291,6 +322,7 @@ export async function startStandaloneMerchantWorkbench(
   const close = async (): Promise<void> => {
     if (closed) return;
     closed = true;
+    operationsScheduler?.stop();
     if (memoryServer) await new Promise<void>((resolve) => memoryServer!.close(() => resolve()));
     await new Promise<void>((resolve) => listening.close(resolve));
     await adminHandle.close().catch(() => undefined);

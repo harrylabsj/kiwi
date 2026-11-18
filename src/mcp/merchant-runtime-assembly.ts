@@ -41,6 +41,7 @@ import { DefaultMerchantIntelligenceBackend } from "../agent/merchant/intelligen
 import { HttpMerchantClient } from "../agent/merchant/merchant-client.js";
 import type { MerchantClient } from "../agent/merchant/types.js";
 import { createReceptionMemoryWriter, type ReceptionMemoryWriter } from "../merchant-core/customer-memory/reception-writer.js";
+import { createRecoveryGatewayVerifierFromEnv } from "../merchant-core/learning/recovery-gateway.js";
 import { MemoryStore } from "../agent/memory/store.js";
 import { PrivateVault } from "../agent/memory/vault.js";
 import { MerchantOAuthVerifier } from "../auth/merchant-authorization.js";
@@ -169,6 +170,8 @@ export interface MerchantRuntimeAssembly {
   /** Internal only: current private floor converted exactly for quote eligibility. */
   privateFloorMinor: (sku: string, currency: string) => string | undefined;
   merchantOperations: MerchantOperationsSurface | undefined;
+  /** 规则任务服务（调度器用；仅治理所有权持有者且已装配时存在）。 */
+  operationsJobs: import("../merchant-core/operations-jobs/service.js").OperationsJobsService | undefined;
   governance: Parameters<typeof createMerchantManagementApiHandler>[0]["governance"];
   proposeReceptionMemory: ReceptionMemoryWriter | undefined;
   /** 关闭装配持有的数据库连接（不涉及 http server）。 */
@@ -654,14 +657,16 @@ export async function assembleMerchantRuntime(
   // 依赖 oauth.sqlite（管理会话）；未配置 OAuth 时保持原行为不挂载。
   // 现有管理路由保持原行为；TOP1-3 新功能路由只在持有治理所有权时挂载，
   // 避免无栅栏写入（管理写者由部署决定：standalone workbench 或 cloud）。
-  const merchantOperations = governanceRuntime?.active === true
-    ? new MerchantOperationsSurface({
-        facade: openMerchantOperationsFacade({ db, merchantId: profile.owner_id, now,
-          recoveryWriteGuard: (work) => governanceRuntime.writeUnderOwnership(work),
-          ...(options.recoveryVerifier !== undefined ? { recoveryVerifier: options.recoveryVerifier } : {}),
-        }),
-        now,
+  const recoveryVerifier =
+    options.recoveryVerifier ?? createRecoveryGatewayVerifierFromEnv(process.env);
+  const operationsFacade = governanceRuntime?.active === true
+    ? openMerchantOperationsFacade({ db, merchantId: profile.owner_id, now,
+        recoveryWriteGuard: (work) => governanceRuntime.writeUnderOwnership(work),
+        ...(recoveryVerifier !== undefined ? { recoveryVerifier } : {}),
       })
+    : undefined;
+  const merchantOperations = operationsFacade !== undefined
+    ? new MerchantOperationsSurface({ facade: operationsFacade, now })
     : undefined;
   const runtime = governanceRuntime;
   const governance = runtime?.active === true
@@ -830,6 +835,7 @@ export async function assembleMerchantRuntime(
       return decimalMajorToMinor(currency, String(floor)).amount_minor;
     },
     merchantOperations,
+    operationsJobs: operationsFacade?.operationsJobs,
     governance,
     proposeReceptionMemory,
     close: createCleanup([

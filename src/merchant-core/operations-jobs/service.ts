@@ -1154,6 +1154,56 @@ export class OperationsJobsService {
     }
   }
 
+  /**
+   * 执行器明确失败（模型错误/超时/证据无效）：只允许当前 worker/fencing 在
+   * 租约内把 RUNNING 任务置为 FAILED；之后由 retryTask 持久化退避。外部调用
+   * 结果不明时不得调用本方法（应保留 UNKNOWN 供核对）。
+   */
+  failClaimedTask(input: {
+    merchant_id: string;
+    task_id: string;
+    worker_id: string;
+    fencing: number;
+    error_code: string;
+    now?: string;
+  }): void {
+    const merchantId = text(input.merchant_id, "merchant_id");
+    const taskId = text(input.task_id, "task_id");
+    const workerId = text(input.worker_id, "worker_id");
+    const errorCode = text(input.error_code, "error_code", 128);
+    const stamp = input.now ?? nowUtc(this.now);
+    inImmediateTransaction(this.db, () => {
+      const task = this.db
+        .prepare("SELECT * FROM followup_tasks WHERE merchant_id = ? AND task_id = ?")
+        .get(merchantId, taskId) as unknown as TaskRow | undefined;
+      if (
+        task === undefined ||
+        task.status !== "RUNNING" ||
+        task.lease_owner !== workerId ||
+        task.fencing_token !== input.fencing
+      ) {
+        throw new OperationsJobsError(
+          "invalid_transition",
+          "fail_guard_failed",
+          "任务状态、执行者或 fencing 已变化",
+        );
+      }
+      this.db
+        .prepare(
+          `UPDATE followup_tasks SET status = 'FAILED', last_error = ?,
+             lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
+           WHERE merchant_id = ? AND task_id = ? AND status = 'RUNNING'`,
+        )
+        .run(errorCode, stamp, merchantId, taskId);
+      this.db
+        .prepare(
+          `UPDATE followup_attempts SET status = 'FAILED', ended_at = ?, error_code = ?
+            WHERE merchant_id = ? AND task_id = ? AND attempt_no = ?`,
+        )
+        .run(stamp, errorCode, merchantId, taskId, task.attempts);
+    });
+  }
+
   /** 仅处理规则任务；过期 worker 不可继续提交，未知消耗不重试。 */
   private sweepRuleTasks(merchantId: string, stamp: string): void {
     const terminalReservations = this.budgetStore === undefined ? "0" : `EXISTS (
