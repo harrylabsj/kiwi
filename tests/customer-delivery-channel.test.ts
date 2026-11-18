@@ -9,6 +9,7 @@ import {
   createWebhookChannelAdapter,
   type DeliveryChannelAdapter,
 } from "../src/merchant-core/customer-delivery/channel.js";
+import { createWeixinChannelAdapter } from "../src/merchant-core/customer-delivery/weixin-adapter.js";
 import type { DeliveryRecord, DeliveryStore } from "../src/merchant-core/customer-delivery/dispatcher.js";
 import type { PrepareDeliveryInput } from "../src/merchant-core/customer-delivery/types.js";
 import {
@@ -140,6 +141,43 @@ describe("M6-6 渠道发送", () => {
     expect(() =>
       store.findBlocking(MERCHANT, record().stream_key, "dlv-2"),
     ).not.toThrow();
+  });
+
+  it("微信 iLink：成功 accepted；异常 unknown；渠道不符 not_sent", async () => {
+    const calls: Array<{ to_user_id: string; text: string }> = [];
+    const sender = {
+      async sendMessage(input: { to_user_id: string; text: string }) {
+        calls.push(input);
+      },
+    };
+    const adapter = createWeixinChannelAdapter({
+      sender,
+      credentials: {
+        ilink_bot_id: "bot-1",
+        bot_token: "token",
+        base_url: "https://ilinkai.weixin.qq.com",
+        ilink_user_id: "wxid-owner",
+        saved_at: NOW,
+      },
+    });
+    const delivery = record();
+    expect(await adapter.send({ delivery, idempotency_key: "dlv-1", timeout_ms: 1_000 })).toMatchObject({
+      outcome: "accepted",
+    });
+    expect(calls).toEqual([{ to_user_id: "wxid-owner", text: "到货\n已到货" }]);
+    const failing = createWeixinChannelAdapter({
+      sender: { async sendMessage() { throw new Error("timeout"); } },
+      credentials: {
+        ilink_bot_id: "bot-1",
+        bot_token: "token",
+        base_url: "https://ilinkai.weixin.qq.com",
+        ilink_user_id: "wxid-owner",
+        saved_at: NOW,
+      },
+    });
+    expect(
+      (await failing.send({ delivery, idempotency_key: "dlv-1", timeout_ms: 1_000 })).outcome,
+    ).toBe("unknown");
   });
 
   it("webhook：202 accepted；4xx not_sent；5xx unknown", async () => {
