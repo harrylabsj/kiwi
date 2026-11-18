@@ -282,10 +282,15 @@ describe("经营任务 M4", () => {
     });
     expect(result[0]?.result).toBe("blocked");
     expect(result[0]?.reason_code).toContain("budget:");
-    const count = db
-      .prepare("SELECT COUNT(*) AS n FROM followup_tasks WHERE rule_id = ?")
-      .get(activated.rule_id) as { n: number };
-    expect(count.n).toBe(0);
+    // C16：不丢事件，保留 PENDING 任务等待配额并记录 budget_exhausted。
+    const waiting = db
+      .prepare("SELECT status, payload_json FROM followup_tasks WHERE rule_id = ?")
+      .all(activated.rule_id) as Array<{ status: string; payload_json: string }>;
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0]!.status).toBe("PENDING");
+    expect(JSON.parse(waiting[0]!.payload_json)).toMatchObject({
+      budget_exhausted: expect.stringContaining("budget:"),
+    });
   });
 
   it("领取与提交：fencing/CAS、唯一产物与回执、重复提交幂等", () => {
@@ -420,5 +425,229 @@ describe("经营任务 M4", () => {
     expect(nextDailyDueAt({ now: NOW, local_time: "09:00", timezone: "Asia/Shanghai" })).toBe(
       "2026-11-17T01:00:00.000Z",
     );
+  });
+
+  it("C02：v8 后收到 v7 不回滚；无权威结果只产生缺证待办", () => {
+    expect(
+      service.ingestTrustedEvent({
+        merchant_id: MERCHANT,
+        source_scope: "inquiry",
+        external_event_id: "evt-v8",
+        payload_digest: "sha256:v8",
+        entity_ref: "inq-versioned",
+        source_version: "v8",
+        occurred_at: NOW,
+      }).status,
+    ).toBe("accepted");
+    expect(
+      service.ingestTrustedEvent({
+        merchant_id: MERCHANT,
+        source_scope: "inquiry",
+        external_event_id: "evt-v7",
+        payload_digest: "sha256:v7",
+        entity_ref: "inq-versioned",
+        source_version: "v7",
+        occurred_at: NOW,
+      }).status,
+    ).toBe("superseded");
+    const current = db
+      .prepare(
+        "SELECT version_rank FROM source_entity_versions WHERE merchant_id = ? AND entity_ref = ?",
+      )
+      .get(MERCHANT, "inq-versioned") as { version_rank: number };
+    expect(current.version_rank).toBe(8);
+    const late = db
+      .prepare("SELECT superseded FROM event_inbox WHERE external_event_id = 'evt-v7'")
+      .get() as { superseded: number };
+    expect(late.superseded).toBe(1);
+    // 无权威结果：只生成 data_incomplete 待办，不伪造 no_change。
+    rule("unfinished_inquiry_digest");
+    const evaluated = service.evaluateDue({ merchant_id: MERCHANT });
+    expect(evaluated[0]?.result).toBe("data_incomplete");
+    expect(evaluated[0]?.detail).toMatchObject({ missing: "projection" });
+  });
+
+  it("C03：停机跨三个窗口只补最新窗口并记录 missed", () => {
+    const { rule: activated } = rule("unfinished_inquiry_digest");
+    const threeDaysAgo = new Date(Date.parse(NOW) - 3 * 86_400_000).toISOString();
+    db.prepare("UPDATE automation_rules SET next_due_at = ? WHERE rule_id = ?").run(
+      threeDaysAgo,
+      activated.rule_id,
+    );
+    const first = service.evaluateDue({
+      merchant_id: MERCHANT,
+      prefilter: () => ({ result: "no_change" }),
+    });
+    expect(first).toHaveLength(1);
+    expect(first[0]?.detail).toMatchObject({ missed_windows: 3 });
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM followup_tasks").get() as { n: number }).n,
+    ).toBe(0);
+    const missed = service.getRule(MERCHANT, activated.rule_id)?.missed_count;
+    expect(missed).toBeGreaterThanOrEqual(3);
+    const nextDue = service.getRule(MERCHANT, activated.rule_id)?.next_due_at;
+    expect(Date.parse(nextDue ?? "")).toBeGreaterThan(Date.parse(NOW));
+    // 时钟回拨不重复 occurrence。
+    clock = new Date(Date.parse(NOW) - 86_400_000).toISOString();
+    expect(service.evaluateDue({ merchant_id: MERCHANT })).toHaveLength(0);
+  });
+
+  it("C04：no_change/阈值未达零任务零模型调用；eligible 才入队", () => {
+    rule("unfinished_inquiry_digest");
+    const noChange = service.evaluateDue({
+      merchant_id: MERCHANT,
+      prefilter: () => ({ result: "no_change", reason_code: "threshold_not_met" }),
+    });
+    expect(noChange[0]?.result).toBe("no_change");
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM followup_tasks").get() as { n: number }).n,
+    ).toBe(0);
+    clock = new Date(Date.parse(clock) + 60_000).toISOString();
+    db.prepare("UPDATE automation_rules SET next_due_at = ?").run(clock);
+    const eligible = service.evaluateDue({
+      merchant_id: MERCHANT,
+      prefilter: () => ({ result: "eligible", detail: { candidates: 2 } }),
+    });
+    expect(eligible[0]?.result).toBe("eligible");
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM followup_tasks WHERE status = 'READY'").get() as {
+        n: number;
+      }).n,
+    ).toBe(1);
+  });
+
+  it("C06：产物写入失败时任务/attempt/回执整体回滚", () => {
+    rule("unfinished_inquiry_digest");
+    service.evaluateDue({ merchant_id: MERCHANT, prefilter: () => ({ result: "eligible" }) });
+    const claimed = service.claimDue({ merchant_id: MERCHANT, worker_id: "worker-a" })!;
+    db.exec(
+      "CREATE TRIGGER abort_artifact BEFORE INSERT ON operation_artifacts BEGIN SELECT RAISE(ABORT, 'boom'); END",
+    );
+    expect(() =>
+      service.commitInternalResult({
+        merchant_id: MERCHANT,
+        task_id: claimed.task_id,
+        worker_id: "worker-a",
+        fencing: claimed.fencing_token,
+        expected_revision: claimed.revision,
+        expected_cancel_epoch: claimed.cancel_epoch,
+        result_kind: "internal_summary",
+        payload: { summary: "失败注入" },
+      }),
+    ).toThrow();
+    const task = db
+      .prepare("SELECT status, revision FROM followup_tasks WHERE task_id = ?")
+      .get(claimed.task_id) as { status: string; revision: number };
+    expect(task.status).toBe("RUNNING");
+    expect(task.revision).toBe(claimed.revision);
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM operation_artifacts").get() as { n: number }).n,
+    ).toBe(0);
+    db.exec("DROP TRIGGER abort_artifact");
+    const committed = service.commitInternalResult({
+      merchant_id: MERCHANT,
+      task_id: claimed.task_id,
+      worker_id: "worker-a",
+      fencing: claimed.fencing_token,
+      expected_revision: claimed.revision,
+      expected_cancel_epoch: claimed.cancel_epoch,
+      result_kind: "internal_summary",
+      payload: { summary: "恢复后提交" },
+    });
+    expect(committed.receipt_ref).toMatch(/^rcpt_/);
+  });
+
+  it("C08：Retry-After 持久化退避；截止后不再领取", () => {
+    rule("unfinished_inquiry_digest");
+    service.evaluateDue({ merchant_id: MERCHANT, prefilter: () => ({ result: "eligible" }) });
+    const claimed = service.claimDue({ merchant_id: MERCHANT, worker_id: "worker-a" })!;
+    db.prepare("UPDATE followup_tasks SET status = 'FAILED', deadline_at = ? WHERE task_id = ?").run(
+      new Date(Date.parse(NOW) + 45_000).toISOString(),
+      claimed.task_id,
+    );
+    service.retryTask({
+      merchant_id: MERCHANT,
+      task_id: claimed.task_id,
+      backoff_ms: 5_000,
+      retry_after_ms: 60_000,
+    });
+    const retried = db
+      .prepare("SELECT due_at FROM followup_tasks WHERE task_id = ?")
+      .get(claimed.task_id) as { due_at: string };
+    expect(Date.parse(retried.due_at)).toBeGreaterThanOrEqual(Date.parse(NOW) + 60_000);
+    expect(
+      service.claimDue({
+        merchant_id: MERCHANT,
+        worker_id: "worker-b",
+        now: new Date(Date.parse(NOW) + 30_000).toISOString(),
+      }),
+    ).toBeUndefined();
+    // 截止已过：即使退避到期也不再领取/发起新调用。
+    expect(
+      service.claimDue({
+        merchant_id: MERCHANT,
+        worker_id: "worker-b",
+        now: new Date(Date.parse(NOW) + 61_000).toISOString(),
+      }),
+    ).toBeUndefined();
+  });
+
+  it("C15：投影缺失生成 data_incomplete 待办；补读后重评新任务", () => {
+    rule("unfinished_inquiry_digest", { budget: { max_runs_per_day: 2 } });
+    const incomplete = service.evaluateDue({ merchant_id: MERCHANT });
+    expect(incomplete[0]?.result).toBe("data_incomplete");
+    expect(incomplete[0]?.detail).toMatchObject({ missing: "projection" });
+    const firstTask = db
+      .prepare("SELECT task_id, status FROM followup_tasks")
+      .all() as Array<{ task_id: string; status: string }>;
+    expect(firstTask).toHaveLength(1);
+    const runId = (
+      db.prepare("SELECT operation_ref FROM followup_tasks WHERE task_id = ?").get(
+        firstTask[0]!.task_id,
+      ) as { operation_ref: string }
+    ).operation_ref;
+    budgetStore.releaseRun({ merchant_id: MERCHANT, run_id: runId });
+    clock = new Date(Date.parse(clock) + 60_000).toISOString();
+    db.prepare("UPDATE automation_rules SET next_due_at = ?").run(clock);
+    const reEvaluated = service.evaluateDue({
+      merchant_id: MERCHANT,
+      prefilter: () => ({ result: "eligible", detail: { backfilled: true } }),
+    });
+    expect(reEvaluated[0]?.result).toBe("eligible");
+    const tasks = db.prepare("SELECT task_id FROM followup_tasks").all();
+    expect(tasks).toHaveLength(2);
+    expect(
+      (db.prepare("SELECT status FROM followup_tasks WHERE task_id = ?").get(firstTask[0]!.task_id) as {
+        status: string;
+      }).status,
+    ).toBe("READY");
+  });
+
+  it("C16：额度不足按动作优先级处理，其余保留 PENDING + budget_exhausted", () => {
+    const summary = rule("unfinished_inquiry_digest").rule;
+    const draft = rule("unfinished_inquiry_digest", { action_type: "internal_draft" }).rule;
+    budgetStore.reserveRun({
+      merchant_id: MERCHANT,
+      run_id: "run-occupied-c16",
+      day_key: NOW.slice(0, 10),
+    });
+    const results = service.evaluateDue({
+      merchant_id: MERCHANT,
+      prefilter: () => ({ result: "eligible" }),
+    });
+    expect(results.map((item) => item.rule_id)).toEqual([summary.rule_id, draft.rule_id]);
+    expect(results.every((item) => item.result === "blocked")).toBe(true);
+    const waiting = db
+      .prepare("SELECT status, payload_json FROM followup_tasks WHERE rule_id IN (?, ?)")
+      .all(summary.rule_id, draft.rule_id) as Array<{ status: string; payload_json: string }>;
+    expect(waiting).toHaveLength(2);
+    expect(waiting.every((task) => task.status === "PENDING")).toBe(true);
+    expect(
+      waiting.every(
+        (task) =>
+          typeof (JSON.parse(task.payload_json) as { budget_exhausted?: unknown })
+            .budget_exhausted === "string",
+      ),
+    ).toBe(true);
   });
 });

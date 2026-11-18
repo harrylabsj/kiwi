@@ -84,6 +84,14 @@ export interface LearningServiceOptions {
    * 写入统一 `schema_unavailable`，不影响现有接待/经营路径。
    */
   available?: boolean;
+  /** A01：客户案例蒸馏必须持有 experience_learning 授权（非记忆授权）。 */
+  experienceLearningGrant?: (input: {
+    merchant_id: string;
+    subject_id: string;
+    resource_scope_id: string;
+  }) => boolean;
+  /** A12：来源被删除/封存后旧案例派生失效；审核与发布前重新核验。 */
+  sourceAvailable?: (merchantId: string, sourceRef: string) => boolean;
 }
 
 function requireOpaque(value: string, field: string, maxLength = 128): string {
@@ -275,11 +283,15 @@ function caseDigest(input: {
 export class LearningService {
   private readonly repository: LearningRepository;
   private readonly now: () => string;
+  private readonly experienceLearningGrant?: LearningServiceOptions["experienceLearningGrant"];
+  private readonly sourceAvailable?: LearningServiceOptions["sourceAvailable"];
   private readonly available: boolean;
 
   constructor(options: LearningServiceOptions) {
     this.repository = options.repository;
     this.now = options.now;
+    this.experienceLearningGrant = options.experienceLearningGrant;
+    this.sourceAvailable = options.sourceAvailable;
     this.available = options.available ?? true;
   }
 
@@ -297,6 +309,77 @@ export class LearningService {
    * 提交或编辑商家主动纠正。编辑必须带 `correction_id` 与
    * `expected_revision`；成功返回新 revision，旧案例与候选置 STALE。
    */
+  /**
+   * A01/A02：从客户案例蒸馏学习材料。
+   *
+   * 必须持有 experience_learning 授权（记忆授权不能替代）；未授权时只写
+   * 最小拒绝登记（原因 + 摘要，不含原文），客户正文不进入模型或学习库。
+   * 授权通过后仍走同一纠正经预检/持久化路径；本方法不暴露任何策略或
+   * 发布工具，客户文本只作为案例数据。
+   */
+  distillCustomerCase(input: {
+    merchant_id: string;
+    actor: ActorContext;
+    subject_id: string;
+    resource_scope_id: string;
+    case_text: string;
+    issue_tags?: readonly string[];
+  }): LearningCorrection {
+    const merchantId = requireOpaque(input.merchant_id, "merchant_id");
+    requireActorCapability(merchantId, input.actor, "learning:manage");
+    const subjectId = requireOpaque(input.subject_id, "subject_id");
+    const scopeId = requireOpaque(input.resource_scope_id, "resource_scope_id");
+    const authorized =
+      this.experienceLearningGrant?.({
+        merchant_id: merchantId,
+        subject_id: subjectId,
+        resource_scope_id: scopeId,
+      }) === true;
+    if (!authorized) {
+      this.repository.recordRejection({
+        merchantId,
+        actorId: input.actor.actor_id,
+        operation: "learning.distill_customer_case",
+        reasonCode: "experience_learning_grant_required",
+        subjectDigest: contentDigest({ operation: "customer_case", case_text: input.case_text }),
+        createdAt: this.now(),
+      });
+      throw new LearningError(
+        "access_denied",
+        "experience_learning_grant_required",
+        "客户案例蒸馏需要 experience_learning 授权；记忆授权不能替代",
+      );
+    }
+    return this.submitCorrection({
+      merchant_id: merchantId,
+      actor: input.actor,
+      correction_text: input.case_text,
+      issue_tags: input.issue_tags ?? ["customer_case"],
+      case_refs: [`customer_case:${subjectId}:${scopeId}`],
+    });
+  }
+
+  /** A12：来源删除/封存后旧案例派生不能继续审核或发布。 */
+  private assertCandidateSourcesAvailable(
+    merchantId: string,
+    candidate: LearningCandidate,
+  ): void {
+    if (this.sourceAvailable === undefined) return;
+    for (const caseId of candidate.case_ids) {
+      const learningCase = this.repository.readCase(merchantId, caseId);
+      if (learningCase === undefined) continue;
+      for (const ref of learningCase.source_refs) {
+        if (!this.sourceAvailable(merchantId, ref)) {
+          throw new LearningError(
+            "version_conflict",
+            "source_unavailable",
+            "来源已删除/封存；旧案例派生失效，需要重新形成候选",
+          );
+        }
+      }
+    }
+  }
+
   submitCorrection(
     input: {
       merchant_id: string;
@@ -1037,6 +1120,7 @@ export class LearningService {
             `候选状态 ${candidate.state} 不可审核`,
           );
         }
+        this.assertCandidateSourcesAvailable(merchantId, candidate);
         const evaluation = this.repository.readEvaluation(merchantId, evaluationId);
         if (
           evaluation === undefined ||
@@ -1152,6 +1236,7 @@ export class LearningService {
             "候选不再是已批准状态；请重新审核",
           );
         }
+        this.assertCandidateSourcesAvailable(merchantId, candidate);
         if (
           candidate.revision !== review.candidate_revision ||
           candidate.content_digest !== review.content_hash ||

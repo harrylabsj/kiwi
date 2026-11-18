@@ -71,6 +71,32 @@ export const RULE_ACTION_TYPES = [
 ] as const;
 export type RuleActionType = (typeof RULE_ACTION_TYPES)[number];
 
+/** 来源版本只接受纯数字或 vN；其他形式按“无权威版本”处理（不回滚事实）。 */
+export function parseSourceVersionRank(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const match = /^v?(\d+)$/.exec(value.trim());
+  if (match === null) return undefined;
+  const rank = Number(match[1]);
+  return Number.isSafeInteger(rank) ? rank : undefined;
+}
+
+/** 评估优先级：日报摘要 > 草稿 > 待办（C16）。 */
+const ACTION_PRIORITY: Readonly<Record<RuleActionType, number>> = {
+  internal_summary: 0,
+  internal_draft: 1,
+  merchant_todo: 2,
+};
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** C03：停机跨过的日报窗口数（只补最新窗口，不重复 occurrence）。 */
+function dailyMissedWindows(nextDueAt: string | null, now: string): number {
+  if (nextDueAt === null) return 0;
+  const delta = Date.parse(now) - Date.parse(nextDueAt);
+  if (!Number.isFinite(delta) || delta < DAY_MS) return 0;
+  return Math.floor(delta / DAY_MS);
+}
+
 export type RuleState = "ACTIVE" | "PAUSED";
 
 export interface RuleTriggerSpec {
@@ -336,12 +362,26 @@ export class OperationsJobsService {
         return { status: "duplicate", inbox_id: existing.inbox_id };
       }
       const inboxId = `evt_${randomUUID()}`;
+      const rank = parseSourceVersionRank(input.source_version);
+      const current =
+        rank === undefined
+          ? undefined
+          : (this.db
+              .prepare(
+                `SELECT version_rank FROM source_entity_versions
+                  WHERE merchant_id = ? AND source_scope = ? AND entity_ref = ?`,
+              )
+              .get(merchantId, sourceScope, entityRef) as { version_rank: number } | undefined);
+      // C02：v8 之后收到 v7 不回滚当前事实；记录为 superseded 供审计，
+      // 后续评估只能给出缺证待办（data_incomplete），不能当作新事实。
+      const superseded = rank !== undefined && current !== undefined && current.version_rank > rank;
       this.db
         .prepare(
           `INSERT INTO event_inbox
             (inbox_id, merchant_id, source_scope, external_event_id, payload_digest,
-             entity_ref, source_version, occurred_at, received_at, evidence_ref, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             entity_ref, source_version, source_version_rank, superseded,
+             occurred_at, received_at, evidence_ref, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           inboxId,
@@ -351,12 +391,28 @@ export class OperationsJobsService {
           digest,
           entityRef,
           input.source_version ?? null,
+          rank ?? null,
+          superseded ? 1 : 0,
           occurredAt,
           receivedAt,
           input.evidence_ref ?? null,
           receivedAt,
         );
-      return { status: "accepted", inbox_id: inboxId };
+      if (rank !== undefined && !superseded) {
+        this.db
+          .prepare(
+            `INSERT INTO source_entity_versions
+              (merchant_id, source_scope, entity_ref, version_rank, inbox_id, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(merchant_id, source_scope, entity_ref) DO UPDATE SET
+               version_rank = excluded.version_rank,
+               inbox_id = excluded.inbox_id,
+               updated_at = excluded.updated_at
+             WHERE excluded.version_rank > source_entity_versions.version_rank`,
+          )
+          .run(merchantId, sourceScope, entityRef, rank, inboxId, receivedAt);
+      }
+      return { status: superseded ? "superseded" : "accepted", inbox_id: inboxId };
     });
   }
 
@@ -626,9 +682,17 @@ export class OperationsJobsService {
             AND next_due_at <= ?`,
       )
       .all(merchantId, stamp) as unknown as RuleRow[];
+    // C16：额度有限时先处理优先级高的动作（日报摘要 > 草稿 > 待办）。
+    due.sort((left, right) => {
+      const byAction =
+        (ACTION_PRIORITY[left.action_type] ?? 9) - (ACTION_PRIORITY[right.action_type] ?? 9);
+      if (byAction !== 0) return byAction;
+      return String(left.next_due_at).localeCompare(String(right.next_due_at));
+    });
     const evaluations: RuleEvaluation[] = [];
     for (const row of due) {
       const rule = toRule(row);
+      const missedWindows = dailyMissedWindows(rule.next_due_at, stamp);
       const triggerKey = `${rule.rule_id}:${rule.version}:${rule.next_due_at}`;
       const existing = this.db
         .prepare(
@@ -657,6 +721,7 @@ export class OperationsJobsService {
           ...(evaluated.detail ?? {}),
           content_hash: rule.content_hash,
           next_due_at: rule.next_due_at,
+          ...(missedWindows > 0 ? { missed_windows: missedWindows } : {}),
         };
         let finalResult = evaluated.result;
         let finalReason = evaluated.reason_code ?? null;
@@ -665,8 +730,11 @@ export class OperationsJobsService {
             this.enqueueEligibleTask(rule, triggerKey, detail, stamp);
           } catch (err) {
             if (err instanceof OperationsJobsError && err.code === "budget_exhausted") {
+              // C16：额度不足不丢事件；保留 PENDING 任务等待配额，评估标记
+              // blocked + budget_exhausted，工作台可展示原因。
               finalResult = "blocked";
               finalReason = err.reason;
+              this.enqueueBudgetWaitingTask(rule, triggerKey, detail, stamp, err.reason);
             } else {
               throw err;
             }
@@ -944,13 +1012,19 @@ export class OperationsJobsService {
     merchant_id: string;
     task_id: string;
     backoff_ms?: number;
+    /** 429/Retry-After：取与本地退避的较大值并持久化（C08）。 */
+    retry_after_ms?: number;
     now?: string;
   }): void {
     const merchantId = text(input.merchant_id, "merchant_id");
     const taskId = text(input.task_id, "task_id");
     const backoffMs = input.backoff_ms ?? 15_000;
+    const retryAfterMs = input.retry_after_ms ?? 0;
+    if (!Number.isSafeInteger(retryAfterMs) || retryAfterMs < 0) {
+      throw new OperationsJobsError("validation", "retry_after_invalid", "retry_after_ms 必须是非负整数");
+    }
     const stamp = input.now ?? nowUtc(this.now);
-    const dueAt = new Date(Date.parse(stamp) + backoffMs).toISOString();
+    const dueAt = new Date(Date.parse(stamp) + Math.max(backoffMs, retryAfterMs)).toISOString();
     const result = this.db
       .prepare(
         `UPDATE followup_tasks
@@ -1018,6 +1092,48 @@ export class OperationsJobsService {
     return rule;
   }
 
+  /** C16：额度不足时保留 PENDING 任务（不占配额），等待下一次准入。 */
+  private enqueueBudgetWaitingTask(
+    rule: AutomationRule,
+    triggerKey: string,
+    detail: Record<string, unknown>,
+    stamp: string,
+    reason: string,
+  ): void {
+    const taskId = `fu_${randomUUID()}`;
+    const deadlineAt = new Date(Date.parse(stamp) + DEFAULT_RUN_DEADLINE_MS).toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO followup_tasks
+          (task_id, merchant_id, opportunity_id, trigger_event, action_type, target_version,
+           status, due_at, attempts, max_attempts, fencing_token, external_call_started,
+           stop_requested, idempotency_key, payload_json, rule_id, rule_version, revision,
+           cancel_epoch, deadline_at, snapshot_digest, candidate_ref, operation_ref,
+           created_at, updated_at)
+         VALUES (?, ?, NULL, ?, ?, NULL, 'PENDING', ?, 0, 3, 0, 0, 0, ?, ?, ?, ?, 1, 0, ?, ?, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        taskId,
+        rule.merchant_id,
+        `automation:${rule.template}`,
+        rule.action_type,
+        stamp,
+        `rule:${triggerKey}`,
+        JSON.stringify({
+          rule_id: rule.rule_id,
+          rule_version: rule.version,
+          ...detail,
+          budget_exhausted: reason,
+        }),
+        rule.rule_id,
+        rule.version,
+        deadlineAt,
+        contentDigest(detail),
+        stamp,
+        stamp,
+      );
+  }
+
   private enqueueEligibleTask(
     rule: AutomationRule,
     triggerKey: string,
@@ -1080,11 +1196,8 @@ export class OperationsJobsService {
       local_time: rule.trigger_spec.local_time,
       timezone: rule.trigger_spec.timezone,
     });
-    const missed =
-      rule.next_due_at !== null &&
-      Date.parse(stamp) - Date.parse(rule.next_due_at) > 24 * 60 * 60 * 1000
-        ? rule.missed_count + 1
-        : rule.missed_count;
+    const missedWindows = dailyMissedWindows(rule.next_due_at, stamp);
+    const missed = rule.missed_count + (missedWindows > 0 ? missedWindows : 0);
     this.db
       .prepare(
         `UPDATE automation_rules SET next_due_at = ?, missed_count = ?, updated_at = ?

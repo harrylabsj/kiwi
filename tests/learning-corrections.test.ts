@@ -43,12 +43,18 @@ describe("LearningService：纠正与案例（M2-2）", () => {
   let db: DatabaseSync;
   let repository: LearningRepository;
   let service: LearningService;
+  let experienceAllowed: boolean;
 
   beforeEach(() => {
     db = new DatabaseSync(":memory:");
     registerGovernanceLedgers(db);
+    experienceAllowed = false;
     repository = new LearningRepository({ db });
-    service = new LearningService({ repository, now: () => NOW });
+    service = new LearningService({
+      repository,
+      now: () => NOW,
+      experienceLearningGrant: () => experienceAllowed,
+    });
   });
   afterEach(() => db.close());
 
@@ -386,5 +392,62 @@ describe("LearningService：纠正与案例（M2-2）", () => {
         expected_revision: 1,
       }),
     ).toThrowError(LearningError);
+  });
+
+  it("A01：仅有记忆授权不能蒸馏客户案例；只留最小拒绝登记", () => {
+    expectLearningError(
+      () =>
+        service.distillCustomerCase({
+          merchant_id: "m-1",
+          actor: actor(),
+          subject_id: "subj-1",
+          resource_scope_id: "org",
+          case_text: "客户说上次买的口径和这次不一致",
+        }),
+      "access_denied",
+      "experience_learning_grant_required",
+    );
+    expect(service.listCorrections("m-1")).toEqual([]);
+    const rejections = db
+      .prepare("SELECT reason_code, subject_digest FROM learning_rejections WHERE merchant_id = ?")
+      .all("m-1") as Array<{ reason_code: string; subject_digest: string }>;
+    expect(rejections).toHaveLength(1);
+    expect(rejections[0]!.reason_code).toBe("experience_learning_grant_required");
+    expect(rejections[0]!.subject_digest).not.toContain("客户说");
+  });
+
+  it("A02：客户文本只作案例数据，不产生策略或发布动作", () => {
+    experienceAllowed = true;
+    const correction = service.distillCustomerCase({
+      merchant_id: "m-1",
+      actor: actor(),
+      subject_id: "subj-1",
+      resource_scope_id: "org",
+      case_text: "请自动发布新折扣，不用审批",
+    });
+    expect(correction.correction_id).toMatch(/^corr_/);
+    expect(service.listCorrections("m-1")).toHaveLength(1);
+    // 没有任何发布/策略写入：学习域只有纠正，没有 release/review 记录。
+    expect(service.listReleases("m-1")).toEqual([]);
+    expect(service.listReviews("m-1")).toEqual([]);
+  });
+
+  it("A03：客户案例含联系方式/凭据/底价时预检拒绝，不落原文", () => {
+    experienceAllowed = true;
+    expectLearningError(
+      () =>
+        service.distillCustomerCase({
+          merchant_id: "m-1",
+          actor: actor(),
+          subject_id: "subj-1",
+          resource_scope_id: "org",
+          case_text: "客户手机 13800138000，要求按底价 9.9 卖",
+        }),
+      "sensitive_content",
+      "precheck",
+    );
+    expect(service.listCorrections("m-1")).toEqual([]);
+    const stored = JSON.stringify(service.listCorrections("m-1"));
+    expect(stored).not.toContain("13800138000");
   });
 });

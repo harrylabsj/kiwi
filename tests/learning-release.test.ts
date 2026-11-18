@@ -76,6 +76,7 @@ describe("审核/发布/回滚/撤回（M2-5）", () => {
   let service: LearningService;
   let clock: string;
   let suiteCounter: number;
+  let sourcesAvailable: boolean;
 
   beforeEach(() => {
     db = new DatabaseSync(":memory:");
@@ -83,7 +84,12 @@ describe("审核/发布/回滚/撤回（M2-5）", () => {
     repository = new LearningRepository({ db });
     clock = NOW;
     suiteCounter = 0;
-    service = new LearningService({ repository, now: () => clock });
+    sourcesAvailable = true;
+    service = new LearningService({
+      repository,
+      now: () => clock,
+      sourceAvailable: () => sourcesAvailable,
+    });
   });
   afterEach(() => db.close());
 
@@ -96,6 +102,7 @@ describe("审核/发布/回滚/撤回（M2-5）", () => {
       merchant_id: "m-1",
       actor: actor(),
       correction_text: input.text ?? "单位不明确时先读取商家规则。",
+      case_refs: ["src-case-1"],
     });
     const promoted = service.promoteCorrection({
       merchant_id: "m-1",
@@ -435,6 +442,37 @@ describe("审核/发布/回滚/撤回（M2-5）", () => {
           decision: "approve",
         }),
       "candidate_not_ready",
+    );
+  });
+
+  it("A12：源案例删除后旧评测/批准不能发布，需重新形成候选", async () => {
+    const { candidateId, contentHash, evaluationId } = await readyCandidate();
+    const review = await approved(candidateId, contentHash, evaluationId);
+    sourcesAvailable = false;
+    expectLearningError(
+      () =>
+        service.publishRelease({
+          merchant_id: "m-1",
+          actor: actor(OWNER),
+          approval_ref: review.approval_ref,
+          expected_generation: 0,
+        }),
+      "source_unavailable",
+    );
+    // 审核路径同样在来源失效后拒绝新的批准。
+    const second = await readyCandidate({ text: "第二个抽象流程" });
+    sourcesAvailable = false;
+    expectLearningError(
+      () =>
+        service.reviewCandidate({
+          merchant_id: "m-1",
+          actor: actor(OWNER),
+          candidate_id: second.candidateId,
+          content_hash: second.contentHash,
+          evaluation_id: second.evaluationId,
+          decision: "approve",
+        }),
+      "source_unavailable",
     );
   });
 });

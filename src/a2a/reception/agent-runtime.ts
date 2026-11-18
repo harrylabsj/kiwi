@@ -198,6 +198,8 @@ const DEFAULT_SYSTEM_PROMPT = [
   "{\"kind\":\"ask_registered_question\",\"question_id\":\"q_missing_quantity_v1\"},",
   "{\"kind\":\"next_step\",\"action\":\"send_rfq\"}.",
   "Do not add free-text fields to next_step; the publisher renders all text.",
+  "History search hits mean the buyer only asked before: say 曾询价, never 购买 or 已购买;",
+  "history is not a current quote. Re-read commercial facts before any price/stock claim.",
 ].join(" ");
 
 function buildReceptionSystemPrompt(registry: QuestionSpecRegistry): string {

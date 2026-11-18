@@ -712,10 +712,25 @@ CREATE TABLE operation_receipts (
 );
 `;
 
+const OPERATIONS_JOBS_V3 = `
+-- C02：来源实体版本水位。v8 后收到 v7 只记录 superseded，不回滚事实。
+ALTER TABLE event_inbox ADD COLUMN source_version_rank INTEGER;
+ALTER TABLE event_inbox ADD COLUMN superseded INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE source_entity_versions (
+  merchant_id TEXT NOT NULL,
+  source_scope TEXT NOT NULL,
+  entity_ref TEXT NOT NULL,
+  version_rank INTEGER NOT NULL,
+  inbox_id TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (merchant_id, source_scope, entity_ref)
+);
+`;
+
 export const OPERATIONS_JOBS_LEDGER: ModuleLedgerSpec = {
   module: "operations-jobs",
   ledgerTable: "operations_jobs_schema_migrations",
-  migrations: { 1: BACKGROUND_BUDGET_V1, 2: OPERATIONS_JOBS_V2 },
+  migrations: { 1: BACKGROUND_BUDGET_V1, 2: OPERATIONS_JOBS_V2, 3: OPERATIONS_JOBS_V3 },
 };
 
 /**

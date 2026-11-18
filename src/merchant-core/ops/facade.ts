@@ -28,6 +28,7 @@ import { migrateMerchantOpsSchema } from "./schema.js";
 import { registerGovernanceLedgers } from "../migrations/ledgers.js";
 import { LearningRepository } from "../learning/repository.js";
 import { LearningService } from "../learning/service.js";
+import { DataUseGrantStore } from "../context-governance/data-use-grant.js";
 import { BackgroundBudgetStore } from "../budget/background-budget.js";
 import { OperationsJobsService } from "../operations-jobs/service.js";
 import { MerchantOperatingPlanRepository } from "../operating/repository.js";
@@ -134,10 +135,30 @@ export class MerchantOperationsFacade {
       orders: new OrderRepository({ db: options.db, now }),
       contributions: this.contributions,
     });
+    const grants = new DataUseGrantStore({ db: options.db, now });
     this.learning = new LearningService({
       repository: new LearningRepository({ db: options.db }),
       now,
       available: learningAvailable,
+      // A01：客户案例蒸馏只认 experience_learning；记忆授权不能替代。
+      experienceLearningGrant: (input) =>
+        grants.getActiveGrant({
+          merchant_id: input.merchant_id,
+          subject_id: input.subject_id,
+          purpose: "experience_learning",
+          resource_scope_id: input.resource_scope_id,
+        }) !== undefined,
+      // A12：来源对象已 erased/缺失时，旧案例派生不能继续审核/发布。
+      sourceAvailable: (merchantId, sourceRef) => {
+        const row = options.db
+          .prepare(
+            `SELECT erased_at FROM source_refs
+              WHERE merchant_id = ? AND object_id = ?
+              ORDER BY version DESC LIMIT 1`,
+          )
+          .get(merchantId, sourceRef) as { erased_at: string | null } | undefined;
+        return row === undefined || row.erased_at === null;
+      },
     });
     this.operationsJobs = new OperationsJobsService({
       db: options.db,
