@@ -39,7 +39,7 @@ describe("独立迁移账本（D-M0-05）", () => {
   it("三个账本注册到同一 state.sqlite，learning v1 / customer_memory v2 / operations_jobs v1 建表并记录 checksum", () => {
     registerGovernanceLedgers(db);
     expect(ledgerRows("learning_schema_migrations")).toBe(1);
-    expect(ledgerRows("operations_jobs_schema_migrations")).toBe(2);
+    expect(ledgerRows("operations_jobs_schema_migrations")).toBe(3);
     expect(ledgerRows("customer_memory_schema_migrations")).toBe(3);
     const rows = db
       .prepare("SELECT version, checksum FROM customer_memory_schema_migrations ORDER BY version")
@@ -263,7 +263,7 @@ describe("账本与 merchant_ops 账本隔离（文件库升级）", () => {
     ).n;
     expect(opsCount).toBe(1);
     // operations-jobs 账本独立推进到 v1（后台预算表），不影响 merchant_ops。
-    expect(Object.keys(OPERATIONS_JOBS_LEDGER.migrations)).toEqual(["1", "2"]);
+    expect(Object.keys(OPERATIONS_JOBS_LEDGER.migrations)).toEqual(["1", "2", "3"]);
     expect(
       second
         .prepare(
