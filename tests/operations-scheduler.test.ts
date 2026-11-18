@@ -13,6 +13,7 @@ import {
   invalidEvidenceRefs,
 } from "../src/merchant-core/operations-jobs/scheduler.js";
 import type { OperationAdviceRun } from "../src/merchant-core/operations-jobs/advice-runner.js";
+import { OperationsProjection } from "../src/merchant-core/operations-jobs/projection.js";
 
 const NOW = "2026-11-18T00:00:00.000Z";
 const MERCHANT = "m-1";
@@ -179,5 +180,27 @@ describe("经营任务运行时调度", () => {
     const result = await scheduler(async () => advice()).tick();
     expect(result.evaluations).toBe(0);
     expect(result.claimed).toBe(0);
+  });
+
+  it("投影 → 调度 → 模型建议引用真实机会 → 原子提交", async () => {
+    db.prepare(
+      `INSERT INTO sales_opportunities
+        (opportunity_id, merchant_id, status, owner, revision, created_at, updated_at)
+       VALUES ('opp-1', ?, 'NEW', 'admin-1', 1, ?, ?)`,
+    ).run(MERCHANT, NOW, NOW);
+    dueRule();
+    const projection = new OperationsProjection({ db, now: () => clock });
+    const result = await scheduler(
+      async () => advice(["opportunity:opp-1"]),
+      { prefilter: (rule) => projection.prefilter(rule) },
+    ).tick();
+    expect(result).toMatchObject({ evaluations: 1, claimed: 1, committed: 1 });
+    const artifact = db
+      .prepare("SELECT result_kind, payload_json FROM operation_artifacts")
+      .get() as { result_kind: string; payload_json: string };
+    expect(artifact.result_kind).toBe("internal_summary");
+    expect(JSON.parse(artifact.payload_json)).toMatchObject({
+      advice: { evidence_refs: ["opportunity:opp-1"] },
+    });
   });
 });

@@ -89,6 +89,7 @@ import { MerchantOperationsSurface } from "../merchant-core/ops/surface.js";
 import { createOperationAdviceRunner } from "../merchant-core/operations-jobs/advice-runner.js";
 import { createRecoveryGatewayVerifierFromEnv } from "../merchant-core/learning/recovery-gateway.js";
 import { OperationsScheduler } from "../merchant-core/operations-jobs/scheduler.js";
+import { OperationsProjection } from "../merchant-core/operations-jobs/projection.js";
 import { buildModel, realStreamFn } from "../runtime/model.js";
 import {
   loadGovernanceFeatureFlagsFromEnv,
@@ -820,9 +821,11 @@ export async function bootstrapCloudRuntime(
           : {}),
         now: () => new Date().toISOString(),
       });
+      const projection = new OperationsProjection({ db: managementDb, now: () => new Date().toISOString() });
       operationsScheduler = new OperationsScheduler({
         service: cloudOperationsFacade.operationsJobs,
         merchant_id: profile.owner_id,
+        prefilter: (rule) => projection.prefilter(rule),
         assertOwner: () => governanceRuntime?.assertOwner(),
         write: (work) => {
           if (governanceRuntime === undefined) throw new Error("governance runtime unavailable");

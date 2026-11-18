@@ -29,6 +29,7 @@ import { createMerchantHttpHandler } from "../mcp/merchant-server.js";
 import { assembleMerchantRuntime } from "../mcp/merchant-runtime-assembly.js";
 import { createOperationAdviceRunner } from "../merchant-core/operations-jobs/advice-runner.js";
 import { OperationsScheduler } from "../merchant-core/operations-jobs/scheduler.js";
+import { OperationsProjection } from "../merchant-core/operations-jobs/projection.js";
 import { buildModel, realStreamFn } from "../runtime/model.js";
 import { PRODUCT_VERSION } from "../product-cli.js";
 import { DEFAULT_MERCHANT_MCP_PATH } from "../mcp/merchant-server.js";
@@ -221,9 +222,11 @@ export async function startStandaloneMerchantWorkbench(
         : {}),
       now,
     });
+    const projection = new OperationsProjection({ db, now });
     operationsScheduler = new OperationsScheduler({
       service: operationsJobs,
       merchant_id: profile.owner_id,
+      prefilter: (rule) => projection.prefilter(rule),
       assertOwner: () => governance.write(() => undefined),
       write: governance.write,
       runner,
