@@ -24,6 +24,9 @@ import type {
 } from "../src/merchant-core/learning/evaluation.js";
 import { LearningError } from "../src/merchant-core/learning/types.js";
 import { createActorContext } from "../src/merchant-core/context-governance/actor-context.js";
+import { createTestDispatchGateway } from "../src/merchant-core/learning/test-dispatch-gateway.js";
+import { createRecoveryGatewayVerifier } from "../src/merchant-core/learning/recovery-gateway.js";
+import { contentDigest } from "../src/negotiation/jcs.js";
 
 const NOW = "2026-11-17T00:00:00.000Z";
 
@@ -692,4 +695,51 @@ describe("候选评测（M2-4）", () => {
     } finally { clock.mockRestore(); }
   });
 
+
+  it("测试终态网关：HTTP completed 恢复已派发未知评测", async () => {
+    const gateway = createTestDispatchGateway();
+    const port = await gateway.listen(0);
+    const base = `http://127.0.0.1:${port}`;
+    try {
+      await expect(evaluate(async () => { throw new Error("uncertain"); })).rejects.toMatchObject({
+        reason: "evaluation_attempt_uncertain",
+      });
+      const reviewer = createActorContext({
+        merchant_id: "m-1",
+        actor_id: "reviewer",
+        auth_strength: "verified",
+        subject_binding: "organization",
+        capabilities: ["learning:review"],
+      });
+      const query = { merchant_id: "m-1", actor: reviewer, evaluation_id: service.listEvaluations("m-1")[0]!.evaluation_id };
+      const pending = service.getPendingEvaluation(query);
+      expect(pending.binding).toBeDefined();
+      const binding = pending.binding!;
+      const marked = await fetch(`${base}/dispatch/${binding.dispatch_id}/complete`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          binding_digest: contentDigest(binding),
+          outcome: { passed: true, hard_gate_failures: 0 },
+        }),
+      });
+      expect(marked.status).toBe(200);
+      const trusted = new LearningService({
+        repository,
+        now: () => NOW,
+        recoveryVerifier: createRecoveryGatewayVerifier({ base_url: base }),
+      });
+      const request = {
+        ...query,
+        expected_dispatch_id: binding.dispatch_id,
+        evidence_ref: "gateway:test",
+        command_id: "gateway-recover-1",
+      };
+      expect(await trusted.resolvePendingEvaluation(request)).toEqual({ status: "completed" });
+      expect(trusted.getPendingEvaluation(query).pending).toBeNull();
+      expect(trusted.getEvaluation("m-1", query.evaluation_id)?.runs_completed).toBe(1);
+    } finally {
+      await gateway.close();
+    }
+  });
 });
