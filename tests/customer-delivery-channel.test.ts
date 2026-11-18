@@ -10,6 +10,7 @@ import {
   type DeliveryChannelAdapter,
 } from "../src/merchant-core/customer-delivery/channel.js";
 import { createWeixinChannelAdapter } from "../src/merchant-core/customer-delivery/weixin-adapter.js";
+import { createEmailChannelAdapter } from "../src/merchant-core/customer-delivery/email-adapter.js";
 import type { DeliveryRecord, DeliveryStore } from "../src/merchant-core/customer-delivery/dispatcher.js";
 import type { PrepareDeliveryInput } from "../src/merchant-core/customer-delivery/types.js";
 import {
@@ -178,6 +179,32 @@ describe("M6-6 渠道发送", () => {
     expect(
       (await failing.send({ delivery, idempotency_key: "dlv-1", timeout_ms: 1_000 })).outcome,
     ).toBe("unknown");
+  });
+
+  it("邮件：2xx accepted（带 provider id）；4xx not_sent；5xx unknown", async () => {
+    const delivery = { ...record(), channel: "email" as const };
+    let status = 200;
+    const fetchImpl = (async () => {
+      return new Response(JSON.stringify({ id: "email-1" }), { status });
+    }) as typeof fetch;
+    const adapter = createEmailChannelAdapter({
+      api_key: "test-key",
+      from: "notify@example.com",
+      to: "1711496337@qq.com",
+      fetchImpl,
+    });
+    expect(await adapter.send({ delivery, idempotency_key: "dlv-1", timeout_ms: 1_000 })).toMatchObject({
+      outcome: "accepted",
+      provider_request_id: "email-1",
+    });
+    status = 422;
+    expect((await adapter.send({ delivery, idempotency_key: "dlv-1", timeout_ms: 1_000 })).outcome).toBe(
+      "not_sent",
+    );
+    status = 503;
+    expect((await adapter.send({ delivery, idempotency_key: "dlv-1", timeout_ms: 1_000 })).outcome).toBe(
+      "unknown",
+    );
   });
 
   it("webhook：202 accepted；4xx not_sent；5xx unknown", async () => {
