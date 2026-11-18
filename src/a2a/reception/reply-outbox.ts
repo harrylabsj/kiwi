@@ -43,6 +43,10 @@ export interface ReceptionReplyOutboxOptions {
   /** 绝对路径；父目录不存在时自动创建。 */
   file: string;
   now: () => string;
+  /** 与经营通知共用的发送流门（M6-5）；unknown 期间占用同一 stream。 */
+  gate?: import("../../merchant-core/customer-delivery/stream-gate.js").StreamGate;
+  /** 默认 merchant:a2a:identity:contextId。 */
+  streamKeyFor?: (record: Pick<ReplyOutboxRecord, "merchantId" | "identity" | "contextId">) => string;
 }
 
 interface OutboxFile {
@@ -57,11 +61,16 @@ function keyOf(merchantId: string, identity: string, contextId: string): string 
 export class ReceptionReplyOutbox {
   private readonly file: string;
   private readonly now: () => string;
+  private readonly gate?: ReceptionReplyOutboxOptions["gate"];
+  private readonly streamKeyFor: (record: Pick<ReplyOutboxRecord, "merchantId" | "identity" | "contextId">) => string;
   private state: OutboxFile;
 
   constructor(options: ReceptionReplyOutboxOptions) {
     this.file = options.file;
     this.now = options.now;
+    this.gate = options.gate;
+    this.streamKeyFor = options.streamKeyFor ?? ((record) =>
+      `${record.merchantId}:a2a:${record.identity}:${record.contextId}`);
     this.state = this.load();
   }
 
@@ -72,6 +81,14 @@ export class ReceptionReplyOutbox {
     );
     if (existing !== undefined) return existing;
     const record: ReplyOutboxRecord = { ...input, created_at: this.now() };
+    if (record.status === "unknown" && this.gate !== undefined) {
+      this.gate.enter({
+        stream_key: this.streamKeyFor(record),
+        holder_id: record.response_id,
+        lease_ms: 24 * 60 * 60 * 1000,
+        now: this.now(),
+      });
+    }
     this.state.records.push(record);
     this.save();
     return record;
@@ -81,8 +98,12 @@ export class ReceptionReplyOutbox {
   markStatus(responseId: string, status: ReplyOutboxStatus, reason?: string): boolean {
     const record = this.state.records.find((item) => item.response_id === responseId);
     if (record === undefined) return false;
+    const wasBlocking = record.status === "unknown";
     record.status = status;
     if (reason !== undefined) record.reason = reason;
+    if (this.gate !== undefined && wasBlocking && status !== "unknown") {
+      this.gate.leave(this.streamKeyFor(record), record.response_id);
+    }
     this.save();
     return true;
   }
