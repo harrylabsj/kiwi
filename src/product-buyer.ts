@@ -148,6 +148,7 @@ export interface BuyerSearchOptions {
   catalogUrl: string;
   limit?: number;
   category?: string;
+  /** @deprecated Accepted for older callers. Listing discovery is global. */
   region?: string;
   listingType?: "product" | "capability";
   fetchImpl?: typeof fetch;
@@ -176,7 +177,6 @@ export async function buyerSearch(options: BuyerSearchOptions): Promise<BuyerSea
   const results = await source.searchListings({
     q: options.query,
     ...(options.category !== undefined ? { category: options.category } : {}),
-    ...(options.region !== undefined ? { region: options.region } : {}),
     ...(options.listingType !== undefined ? { listing_type: options.listingType } : {}),
     ...(options.limit !== undefined ? { limit: options.limit } : {}),
   });

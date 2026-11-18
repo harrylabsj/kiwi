@@ -142,7 +142,7 @@ export class KiwiCatalogMerchantIndex {
 
   private async runSearch(
     query: string,
-    opts?: { category?: string; region?: string },
+    opts?: { category?: string },
   ): Promise<{
     merchants: MerchantRecord[];
     diagnostics: NetworkSearchDiagnostics;
@@ -153,7 +153,6 @@ export class KiwiCatalogMerchantIndex {
         q: query,
         listing_type: "product",
         ...(opts?.category !== undefined ? { category: opts.category } : {}),
-        ...(opts?.region !== undefined ? { region: opts.region } : {}),
         limit: 50,
       }),
       this.source.searchRecords({ q: query, include: "buyer_access" }),

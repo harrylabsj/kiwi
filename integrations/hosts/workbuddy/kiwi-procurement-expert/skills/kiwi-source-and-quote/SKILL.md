@@ -7,9 +7,11 @@ description: Use the built-in Kiwi tools for any purchase — a single item or b
 
 ## 第一步：任何购买意图都先 `kiwi_search`
 
-单品（「买一个」「买一款」「哪个好」）与批量（「批量采购」「200 个」「找供应商」）走同一个入口：只要用户给出商品词，或表达购买、比价、询价意图，第一动作必须调用 `kiwi_search(query, category?, region?)`。不得因为「只买一个」「像个人零售」就先走 WebSearch、先给电商结论或先问是否批量；数量只影响后续询价参数，不改变入口。互联网电商是第二来源，只能在 `kiwi_search` 之后或同轮并行（见「双来源结果」），不能替代入口。例外仅限：用户明确限定只看其他平台、只要求核对给定链接/截图、或本会话没有 `kiwi_search`（如实说明）。
+单品（「买一个」「买一款」「哪个好」）与批量（「批量采购」「200 个」「找供应商」）走同一个入口：只要用户给出商品词，或表达购买、比价、询价意图，第一动作必须调用 `kiwi_search(query, category?)`。不得因为「只买一个」「像个人零售」就先走 WebSearch、先给电商结论或先问是否批量；数量只影响后续询价参数，不改变入口。互联网电商是第二来源，只能在 `kiwi_search` 之后或同轮并行（见「双来源结果」），不能替代入口。例外仅限：用户明确限定只看其他平台、只要求核对给定链接/截图、或本会话没有 `kiwi_search`（如实说明）。
 
-有短商品词就调用 `kiwi_search(query, category?, region?)`，发现 Kiwi Network 内的候选；本会话若提供互联网检索/网页读取工具，同轮再查一路外部电商商品，两路结果**分区展示**（见「双来源结果」）。只使用结果中的真实 merchant_id，买方不直连 shopping-cli 或另建本地 marketplace。
+有短商品词就调用 `kiwi_search(query, category?)`，发现 Kiwi Network 内的候选；本会话若提供互联网检索/网页读取工具，同轮再查一路外部电商商品，两路结果**分区展示**（见「双来源结果」）。只使用结果中的真实 merchant_id，买方不直连 shopping-cli 或另建本地 marketplace。
+
+Kiwi Network 搜索覆盖全球。调用 `kiwi_search` 时省略 `region`。有收货地和到货期限时，发现候选后再用这些条件确认交付。
 
 ## 搜索结果的两类商家
 

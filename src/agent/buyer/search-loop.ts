@@ -408,7 +408,6 @@ async function runCatalogSearchCycle(
     (task.intent.query_text ?? task.intent.category) !== ""
       ? { q: task.intent.query_text ?? task.intent.category }
       : {}),
-    ...(task.intent.city !== undefined ? { region: task.intent.city } : {}),
     limit: task.search_budget.max_candidates,
   };
   let results: ListingSearchResult[];
