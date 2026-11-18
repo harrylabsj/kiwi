@@ -25,7 +25,9 @@
             "type": "string"
           },
           "region": {
-            "type": "string"
+            "type": "string",
+            "deprecated": true,
+            "description": "Ignored. Kiwi Network search is global. Confirm delivery timing separately."
           }
         }
       }
