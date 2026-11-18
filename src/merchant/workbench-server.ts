@@ -225,6 +225,7 @@ export async function startStandaloneMerchantWorkbench(
       service: operationsJobs,
       merchant_id: profile.owner_id,
       assertOwner: () => governance.write(() => undefined),
+      write: governance.write,
       runner,
       now,
       log: (line: string) => process.stderr.write(line),

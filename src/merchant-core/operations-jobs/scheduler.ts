@@ -30,6 +30,8 @@ export interface OperationsSchedulerOptions {
   readonly merchant_id: string;
   /** 治理所有权预检；抛错即视为失权，停止调度。 */
   readonly assertOwner: () => void;
+  /** 所有权栅栏写；提供时领取/提交在该事务内执行（推荐）。 */
+  readonly write?: <T>(work: () => T) => T;
   readonly runner: (input: {
     rule: NonNullable<ReturnType<OperationsJobsService["getRule"]>>;
     task: { task_id: string; payload: Record<string, unknown> };
@@ -96,6 +98,10 @@ export class OperationsScheduler {
     this.options = options;
   }
 
+  private withWrite<T>(work: () => T): T {
+    return this.options.write !== undefined ? this.options.write(work) : work();
+  }
+
   get isRunning(): boolean {
     return this.timer !== undefined && !this.stopped;
   }
@@ -139,10 +145,9 @@ export class OperationsScheduler {
         reason_code: "projection_unavailable",
         detail: { missing: "projection" },
       }));
-    const evaluations = this.options.service.evaluateDue({
-      merchant_id: merchantId,
-      prefilter,
-    });
+    const evaluations = this.withWrite(() =>
+      this.options.service.evaluateDue({ merchant_id: merchantId, prefilter }),
+    );
     result.evaluations = evaluations.length;
 
     const maxTasks = this.options.max_tasks_per_tick ?? 5;
@@ -154,11 +159,13 @@ export class OperationsScheduler {
         result.stopped = true;
         break;
       }
-      const claimed = this.options.service.claimDue({
-        merchant_id: merchantId,
-        worker_id: workerId,
-        lease_ms: this.options.lease_ms ?? DEFAULT_LEASE_MS,
-      });
+      const claimed = this.withWrite(() =>
+        this.options.service.claimDue({
+          merchant_id: merchantId,
+          worker_id: workerId,
+          lease_ms: this.options.lease_ms ?? DEFAULT_LEASE_MS,
+        }),
+      );
       if (claimed === undefined) break;
       result.claimed += 1;
       const rule = claimed.rule_id === null ? undefined : this.options.service.getRule(merchantId, claimed.rule_id);
@@ -218,19 +225,21 @@ export class OperationsScheduler {
                 payload: { advice: adviceRun.advice },
               };
         this.options.assertOwner();
-        this.options.service.commitInternalResult({
-          merchant_id: merchantId,
-          task_id: claimed.task_id,
-          worker_id: workerId,
-          fencing: claimed.fencing_token,
-          expected_revision: claimed.revision,
-          expected_cancel_epoch: claimed.cancel_epoch,
-          result_kind: commitInput.result_kind,
-          payload: commitInput.payload,
-          ...(invalid.length === 0
-            ? { usage: { input: adviceRun.usage.input, output: adviceRun.usage.output } }
-            : {}),
-        });
+        this.withWrite(() =>
+          this.options.service.commitInternalResult({
+            merchant_id: merchantId,
+            task_id: claimed.task_id,
+            worker_id: workerId,
+            fencing: claimed.fencing_token,
+            expected_revision: claimed.revision,
+            expected_cancel_epoch: claimed.cancel_epoch,
+            result_kind: commitInput.result_kind,
+            payload: commitInput.payload,
+            ...(invalid.length === 0
+              ? { usage: { input: adviceRun.usage.input, output: adviceRun.usage.output } }
+              : {}),
+          }),
+        );
         result.committed += 1;
       } catch (err) {
         if (isNotOwner(err)) {

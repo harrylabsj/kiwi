@@ -824,6 +824,10 @@ export async function bootstrapCloudRuntime(
         service: cloudOperationsFacade.operationsJobs,
         merchant_id: profile.owner_id,
         assertOwner: () => governanceRuntime?.assertOwner(),
+        write: (work) => {
+          if (governanceRuntime === undefined) throw new Error("governance runtime unavailable");
+          return governanceRuntime.writeUnderOwnership(work);
+        },
         runner,
         now: () => new Date().toISOString(),
         log: (line: string) => log(line),

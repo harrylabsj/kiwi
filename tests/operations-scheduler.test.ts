@@ -69,12 +69,17 @@ describe("经营任务运行时调度", () => {
 
   function scheduler(
     runner: (input: never) => Promise<OperationAdviceRun>,
-    overrides: { assertOwner?: () => void; prefilter?: () => { result: "eligible" } } = {},
+    overrides: {
+      assertOwner?: () => void;
+      prefilter?: () => { result: "eligible" };
+      write?: <T>(work: () => T) => T;
+    } = {},
   ) {
     return new OperationsScheduler({
       service,
       merchant_id: MERCHANT,
       assertOwner: overrides.assertOwner ?? (() => undefined),
+      ...(overrides.write !== undefined ? { write: overrides.write } : {}),
       runner: runner as never,
       now: () => clock,
       worker_id: "scheduler-1",
@@ -85,8 +90,15 @@ describe("经营任务运行时调度", () => {
 
   it("评估→领取→模型建议→原子提交；预算结算", async () => {
     const ruleId = dueRule();
-    const result = await scheduler(async () => advice()).tick();
+    let writes = 0;
+    const result = await scheduler(async () => advice(), {
+      write: (work) => {
+        writes += 1;
+        return work();
+      },
+    }).tick();
     expect(result).toMatchObject({ evaluations: 1, claimed: 1, committed: 1, failed: 0 });
+    expect(writes).toBeGreaterThanOrEqual(3);
     const task = db
       .prepare("SELECT status FROM followup_tasks WHERE rule_id = ?")
       .get(ruleId) as { status: string };
