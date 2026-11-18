@@ -32,12 +32,6 @@ const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as {
 /** 已发布连接器的工具集合（九件套；新增工具不在此列）。 */
 const PUBLISHED_TOOLS = fixture.tools.map((tool) => tool.name);
 
-/** `kiwi_search.region` 已弃用；这是唯一被评审过的本地化弃用说明。 */
-const REGION_DESCRIPTION = {
-  en: "Ignored. Kiwi Network search is global. Confirm delivery timing separately.",
-  zh: "此参数已弃用。Kiwi Network 在全球范围内搜索，到货时间另行确认。",
-} as const;
-
 function toolsByName(): Map<string, { name: string; inputSchema: unknown }> {
   const tools = buildKiwiTools({} as never) as Array<{ name: string; inputSchema: unknown }>;
   return new Map(
@@ -91,14 +85,6 @@ describe("买方已发布工具契约（冻结）", () => {
           request.properties.reuse_history.description =
             "Reuse-last-spec revisit: query this merchant's previously published quotes for the buyer first (requires authorization); a unique match sends the standard RFQ with that SKU and this call's quantity. Explicit sku in intent takes precedence. No history / ambiguous / unsupported returns a clarification object instead of creating a task.";
         }
-      }
-      if (frozen.name === "kiwi_search") {
-        const search = schema as {
-          properties: { region: { description?: string } };
-        };
-        const region = search.properties.region;
-        expect(region.description).toBe(REGION_DESCRIPTION[locale as "en" | "zh"]);
-        region.description = REGION_DESCRIPTION.en;
       }
       expect(schema, `翻译改变机器契约：${frozen.name}`).toEqual(frozen.inputSchema);
     }
