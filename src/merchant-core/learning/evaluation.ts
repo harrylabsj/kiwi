@@ -100,6 +100,7 @@ export interface RunEvaluationInput {
   readonly requireImprovement?: boolean;
   readonly assertClaim?: () => void;
   readonly setAttempt?: (attempt: string | null) => void;
+  readonly transitionAttempt?: (expected: string, next: string) => void;
   readonly saveReceipt?: (marker: { scenario_id: string; kind: ScenarioKind; repetitions: number; variant: "baseline" | "candidate"; attempt: number; dispatch_id: string }, outcome: EvaluationAttemptOutcome) => void;
   readonly clearReceipt?: (dispatchId: string) => void;
 }
@@ -542,9 +543,16 @@ export async function runCandidateEvaluation(
         }
         let outcome: EvaluationAttemptOutcome;
         const dispatchId = randomUUID();
+        const marker = { scenario_id: scenario.scenario_id, kind: scenario.kind, repetitions, variant, attempt, dispatch_id: dispatchId };
+        const prepared = JSON.stringify({ ...marker, phase: "prepared" });
+        const dispatched = JSON.stringify({ ...marker, phase: "dispatched" });
         repository.transaction(() => {
           input.assertClaim?.();
-          input.setAttempt?.(JSON.stringify({ scenario_id: scenario.scenario_id, kind: scenario.kind, repetitions, variant, attempt, dispatch_id: dispatchId }));
+          input.setAttempt?.(prepared);
+        });
+        repository.transaction(() => {
+          input.assertClaim?.();
+          input.transitionAttempt?.(prepared, dispatched);
         });
         try {
           outcome = validateOutcome(
@@ -584,7 +592,7 @@ export async function runCandidateEvaluation(
             ...(err instanceof Error ? {} : {}),
           });
         }
-        input.saveReceipt?.({ scenario_id: scenario.scenario_id, kind: scenario.kind, repetitions, variant, attempt, dispatch_id: dispatchId }, outcome);
+        input.saveReceipt?.(marker, outcome);
         receiptToClear = dispatchId;
         attempts.push({
           variant,

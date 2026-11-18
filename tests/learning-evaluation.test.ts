@@ -497,6 +497,66 @@ describe("候选评测（M2-4）", () => {
       expect((err as LearningError).reason).toBe("candidate_state_locked");
     }
   });
+  it("准备后派发前故障可安全取消，旧执行者被栅栏阻止且重试使用新标识", async () => {
+    const reviewer = createActorContext({ merchant_id: "m-1", actor_id: "reviewer", auth_strength: "verified", subject_binding: "organization", capabilities: ["learning:review"] });
+    const db2 = new DatabaseSync(join(tempDir, "state.sqlite"));
+    const repo2 = new LearningRepository({ db: db2 });
+    const other = new LearningService({ repository: repo2, now: () => NOW });
+    let oldOwner = "";
+    let oldKey = "";
+    let oldPrepared = "";
+    let oldDispatched = "";
+    let activeRef: string | undefined;
+    let calls = 0;
+    const transition = vi.spyOn(repository, "transitionEvaluationAttempt").mockImplementationOnce((key, prepared, dispatched) => {
+      oldKey = key; oldPrepared = prepared; oldDispatched = dispatched;
+      oldOwner = (db.prepare("SELECT owner FROM learning_evaluation_claims WHERE claim_key = ?").get(`evaluation:${key}`) as { owner: string }).owner;
+      const evaluationId = other.listEvaluations("m-1")[0]!.evaluation_id;
+      activeRef = other.getPendingEvaluation({ merchant_id: "m-1", actor: reviewer, evaluation_id: evaluationId }).evidence_ref;
+      throw new Error("injected_before_dispatch");
+    });
+    try {
+      await expect(evaluate(() => { calls++; return { passed: true, hard_gate_failures: 0 }; })).rejects.toThrow("injected_before_dispatch");
+      transition.mockRestore();
+      expect(calls).toBe(0);
+      expect(activeRef).toBeUndefined();
+      const query = { merchant_id: "m-1", actor: reviewer, evaluation_id: other.listEvaluations("m-1")[0]!.evaluation_id };
+      const pending = other.getPendingEvaluation(query);
+      expect(pending.evidence_ref).toBe(`local-prepared:${pending.binding!.dispatch_id}`);
+      const request = { ...query, expected_dispatch_id: pending.binding!.dispatch_id, evidence_ref: pending.evidence_ref!, command_id: "cancel-prepared" };
+      repo2.transaction(() => repo2.claimEvaluation([`evaluation:${oldKey}`], "still-active", "test", Date.now(), 60_000));
+      expect(other.getPendingEvaluation(query).evidence_ref).toBeUndefined();
+      await expect(other.resolvePendingEvaluation(request)).rejects.toMatchObject({ reason: "evaluation_in_progress" });
+      db2.prepare("UPDATE learning_evaluation_claims SET expires_at = 0 WHERE claim_key = ?").run(`evaluation:${oldKey}`);
+      expect(other.getPendingEvaluation(query).evidence_ref).toBe(request.evidence_ref);
+      expect(await other.resolvePendingEvaluation(request)).toEqual({ status: "not_executed" });
+      expect(await other.resolvePendingEvaluation(request)).toEqual({ status: "not_executed" });
+      expect(other.getPendingEvaluation(query).pending).toBeNull();
+      expect(() => repository.transaction(() => {
+        repository.assertEvaluationClaim([`evaluation:${oldKey}`], oldOwner, Date.now());
+        repository.transitionEvaluationAttempt(oldKey, oldPrepared, oldDispatched);
+      })).toThrowError(LearningError);
+      expect(() => repo2.transaction(() => repo2.transitionEvaluationAttempt(oldKey, oldPrepared, oldDispatched))).toThrowError(LearningError);
+      expect(calls).toBe(0);
+      let newDispatch = "";
+      await expect(evaluate(({ dispatch_id }) => { calls++; newDispatch = dispatch_id!; throw new Error("stop_after_dispatch"); })).rejects.toMatchObject({ reason: "evaluation_attempt_uncertain" });
+      expect(calls).toBe(1);
+      expect(newDispatch).not.toBe(pending.binding!.dispatch_id);
+      const after = other.getPendingEvaluation(query);
+      expect(after.evidence_ref).toBeUndefined();
+      await expect(other.resolvePendingEvaluation({ ...request, expected_dispatch_id: newDispatch, evidence_ref: `local-prepared:${newDispatch}`, command_id: "reject-dispatched" })).rejects.toMatchObject({ reason: "evaluation_recovery_unavailable" });
+      const current = repo2.readEvaluationConfig(oldKey)!;
+      const legacy = JSON.parse(current.pending_attempt!) as { phase?: string };
+      delete legacy.phase;
+      db2.prepare("UPDATE learning_evaluation_config SET pending_attempt = ? WHERE evaluation_key = ?").run(JSON.stringify(legacy), oldKey);
+      expect(other.getPendingEvaluation(query).evidence_ref).toBeUndefined();
+      await expect(other.resolvePendingEvaluation({ ...request, expected_dispatch_id: newDispatch, evidence_ref: `local-prepared:${newDispatch}`, command_id: "reject-legacy" })).rejects.toMatchObject({ reason: "evaluation_recovery_unavailable" });
+      const events = db2.prepare("SELECT detail_json FROM learning_events WHERE event = ?").all("evaluation_attempt_reconciled") as Array<{ detail_json: string }>;
+      expect(events).toHaveLength(1);
+      expect(JSON.parse(events[0]!.detail_json)).toMatchObject({ status: "not_executed", dispatch_id: pending.binding!.dispatch_id });
+    } finally { transition.mockRestore(); db2.close(); }
+  });
+
   it("真实 runner 评分回执跨连接恢复，结果落账前故障不重复执行", async () => {
     const reviewer = createActorContext({ merchant_id: "m-1", actor_id: "reviewer", auth_strength: "verified", subject_binding: "organization", capabilities: ["learning:review"] });
     const model = { id: "fake-model", name: "fake-model", api: "openai-completions", provider: "fake", baseUrl: "", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 8192 } as Model<Api>;

@@ -324,6 +324,16 @@ export class LearningRepository {
     this.db.prepare("UPDATE learning_evaluation_config SET pending_attempt = ? WHERE evaluation_key = ?").run(attempt, key);
   }
 
+  transitionEvaluationAttempt(key: string, expected: string, next: string): void {
+    const result = this.db.prepare("UPDATE learning_evaluation_config SET pending_attempt = ? WHERE evaluation_key = ? AND pending_attempt = ?").run(next, key, expected);
+    if (result.changes !== 1) throw new LearningError("version_conflict", "evaluation_attempt_changed", "评测调用已变化");
+  }
+
+  hasActiveEvaluationClaim(key: string, now: number): boolean {
+    const row = this.db.prepare("SELECT expires_at FROM learning_evaluation_claims WHERE claim_key = ?").get(key) as { expires_at: number } | undefined;
+    return row !== undefined && row.expires_at > now;
+  }
+
   saveEvaluationReceipt(ref: string, binding: unknown, outcome: unknown): void {
     this.db.prepare("INSERT INTO learning_evaluation_receipts (evidence_ref, binding_json, outcome_json) VALUES (?, ?, ?)")
       .run(ref, JSON.stringify(binding), JSON.stringify(outcome));

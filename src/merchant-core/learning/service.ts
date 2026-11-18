@@ -1084,10 +1084,11 @@ export class LearningService {
         repository: this.repository, now: this.now, candidate, suite: input.suite, runner: input.runner,
         assertClaim,
         setAttempt: (attempt) => this.repository.setEvaluationAttempt(evaluationKey, attempt),
+        transitionAttempt: (expected, next) => this.repository.transitionEvaluationAttempt(evaluationKey, expected, next),
         saveReceipt: (marker, outcome) => this.repository.transaction(() => {
           assertClaim();
           const config = this.repository.readEvaluationConfig(evaluationKey);
-          if (config?.config_digest !== configDigest || config.pending_attempt !== JSON.stringify(marker)) {
+          if (config?.config_digest !== configDigest || config.pending_attempt !== JSON.stringify({ ...marker, phase: "dispatched" })) {
             throw new LearningError("version_conflict", "evaluation_attempt_changed", "评测调用已变化");
           }
           const binding: EvaluationRecoveryBinding = {
@@ -1127,13 +1128,15 @@ export class LearningService {
     const key = contentDigest({ merchantId: input.merchant_id, candidateId: evaluation.candidate_id, artifact: evaluation.artifact_hash, suite: evaluation.suite_version });
     const config = this.repository.readEvaluationConfig(key);
     if (config === undefined || config.pending_attempt === null) return { pending: null };
-    let marker: { scenario_id: string; kind: "target" | "adjacent" | "boundary"; repetitions: number; variant: "baseline" | "candidate"; attempt: number; dispatch_id: string };
+    let marker: { scenario_id: string; kind: "target" | "adjacent" | "boundary"; repetitions: number; variant: "baseline" | "candidate"; attempt: number; dispatch_id: string; phase?: string };
     try { marker = JSON.parse(config.pending_attempt) as typeof marker; } catch { return { pending: "legacy_unverifiable" }; }
     if (marker === null || typeof marker !== "object" || typeof marker.dispatch_id !== "string" || typeof marker.scenario_id !== "string" || !["target", "adjacent", "boundary"].includes(marker.kind) || marker.repetitions !== 3 || !["baseline", "candidate"].includes(marker.variant) || !Number.isSafeInteger(marker.attempt) || marker.attempt < 1 || marker.attempt > marker.repetitions) return { pending: "legacy_unverifiable" };
     const binding: EvaluationRecoveryBinding = { merchant_id: input.merchant_id, candidate_id: evaluation.candidate_id, candidate_revision: evaluation.candidate_revision, artifact_hash: evaluation.artifact_hash, suite_version: evaluation.suite_version, config_digest: config.config_digest, scenario_id: marker.scenario_id, kind: marker.kind, repetitions: marker.repetitions, variant: marker.variant, attempt: marker.attempt, dispatch_id: marker.dispatch_id };
     const evidenceRef = `local:${binding.dispatch_id}`;
     const receipt = this.repository.readEvaluationReceipt(evidenceRef);
-    return { pending: "uncertain", binding, ...(receipt !== undefined && contentDigest(receipt.binding) === contentDigest(binding) ? { evidence_ref: evidenceRef } : {}) };
+    const preparedRef = `local-prepared:${binding.dispatch_id}`;
+    const preparedAvailable = marker.phase === "prepared" && receipt === undefined && !this.repository.hasActiveEvaluationClaim(`evaluation:${key}`, Date.now());
+    return { pending: "uncertain", binding, ...(receipt !== undefined && contentDigest(receipt.binding) === contentDigest(binding) ? { evidence_ref: evidenceRef } : preparedAvailable ? { evidence_ref: preparedRef } : {}) };
   }
 
   /** 核验器由可信宿主注入；核验不调用模型，完成后由调用方显式续跑。
@@ -1170,10 +1173,22 @@ export class LearningService {
       if (receipt === undefined && evidenceRef.startsWith("local:")) {
         throw new LearningError("version_conflict", "evaluation_recovery_unavailable", "本机回执不存在");
       }
-      if (receipt === undefined && this.recoveryVerifier === undefined) throw new LearningError("version_conflict", "evaluation_recovery_unavailable", "缺少可信证据来源");
+      const config = this.repository.readEvaluationConfig(key);
+      let phase: unknown;
+      try { phase = JSON.parse(config?.pending_attempt ?? "null")?.phase; } catch { phase = undefined; }
+      const preparedRef = `local-prepared:${binding.dispatch_id}`;
+      const localPrepared = receipt === undefined && phase === "prepared" && evidenceRef === preparedRef;
+      if (evidenceRef.startsWith("local-prepared:") && !localPrepared) {
+        throw new LearningError("version_conflict", "evaluation_recovery_unavailable", "缺少本机未派发证明");
+      }
+      if (phase === "prepared" && receipt === undefined && evidenceRef !== preparedRef) {
+        throw new LearningError("version_conflict", "evaluation_evidence_mismatch", "已准备调用必须使用本机证明");
+      }
       const verified: EvaluationRecoveryVerification = receipt !== undefined
         ? { status: "completed", binding: receipt.binding as EvaluationRecoveryBinding, outcome: receipt.outcome as EvaluationAttemptOutcome }
+        : localPrepared ? { status: "not_executed", binding }
         : this.recoveryVerifier !== undefined ? await this.recoveryVerifier(binding, evidenceRef) : { status: "unknown" };
+      if (receipt === undefined && !localPrepared && this.recoveryVerifier === undefined) throw new LearningError("version_conflict", "evaluation_recovery_unavailable", "缺少可信证据来源");
       if (verified.status !== "completed" && verified.status !== "not_executed") throw new LearningError("version_conflict", "evaluation_evidence_unknown", "证据不足，评测仍被阻塞");
       if (contentDigest(verified.binding) !== contentDigest(binding)) throw new LearningError("version_conflict", "evaluation_evidence_mismatch", "证据与待核对调用不匹配");
       const outcome = verified.status === "completed" ? validateOutcome(verified.outcome) : undefined;
@@ -1186,6 +1201,10 @@ export class LearningService {
         }
         const fresh = this.getPendingEvaluation(input);
         if (fresh.binding === undefined || contentDigest(fresh.binding) !== contentDigest(binding)) throw new LearningError("version_conflict", "evaluation_attempt_changed", "待核对调用已变化");
+        if (localPrepared) {
+          const current = this.repository.readEvaluationConfig(key);
+          if (current?.pending_attempt !== config?.pending_attempt || phase !== "prepared") throw new LearningError("version_conflict", "evaluation_attempt_changed", "待核对调用已变化");
+        }
         const candidate = this.repository.readCandidate(binding.merchant_id, binding.candidate_id);
         const evaluation = this.repository.findEvaluation(binding.merchant_id, binding.candidate_id, binding.artifact_hash, binding.suite_version);
         if (candidate?.state !== "EVALUATING" || candidate.revision !== binding.candidate_revision || evaluation === undefined || evaluation.candidate_revision !== binding.candidate_revision || evaluation.state !== "EVALUATING" || evaluation.run_status === "completed") throw new LearningError("version_conflict", "evaluation_attempt_changed", "评测或候选已变化");
