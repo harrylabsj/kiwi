@@ -31,6 +31,9 @@ import { createOperationAdviceRunner } from "../merchant-core/operations-jobs/ad
 import { OperationsScheduler } from "../merchant-core/operations-jobs/scheduler.js";
 import { OperationsProjection } from "../merchant-core/operations-jobs/projection.js";
 import { DeliveryConsentRepository } from "../merchant-core/customer-delivery/consent-repository.js";
+import { CustomerDeliveryRepository } from "../merchant-core/customer-delivery/repository.js";
+import { DeliveryDispatcherLoop } from "../merchant-core/customer-delivery/dispatcher-loop.js";
+import { createSmtpChannelAdapter } from "../merchant-core/customer-delivery/smtp-adapter.js";
 import { buildModel, realStreamFn } from "../runtime/model.js";
 import { PRODUCT_VERSION } from "../product-cli.js";
 import { DEFAULT_MERCHANT_MCP_PATH } from "../mcp/merchant-server.js";
@@ -237,6 +240,38 @@ export async function startStandaloneMerchantWorkbench(
     });
     operationsScheduler.start();
   }
+  // P1 邮件投递循环：仅在显式开关且 SMTP/收件人配置齐全时启动。
+  let deliveryDispatcher: DeliveryDispatcherLoop | undefined;
+  if (governance !== undefined && process.env.KIWI_DELIVERY_DISPATCHER === "1") {
+    const smtp = {
+      host: String(process.env.KIWI_DELIVERY_EMAIL_SMTP_HOST ?? "").trim(),
+      port: Number(process.env.KIWI_DELIVERY_EMAIL_SMTP_PORT ?? "587"),
+      user: String(process.env.KIWI_DELIVERY_EMAIL_SMTP_USER ?? "").trim(),
+      password: String(process.env.KIWI_DELIVERY_EMAIL_SMTP_PASSWORD ?? ""),
+      from: String(process.env.KIWI_DELIVERY_EMAIL_FROM ?? "").trim(),
+      to: String(process.env.KIWI_DELIVERY_EMAIL_TO ?? "").trim(),
+    };
+    if (smtp.host !== "" && smtp.user !== "" && smtp.password !== "" && smtp.from !== "" && smtp.to !== "") {
+      const emailAdapter = createSmtpChannelAdapter({
+        host: smtp.host,
+        port: smtp.port,
+        user: smtp.user,
+        password: smtp.password,
+        from: smtp.from,
+        to: smtp.to,
+      });
+      const deliveryRepository = new CustomerDeliveryRepository({ db, now });
+      deliveryDispatcher = new DeliveryDispatcherLoop({
+        store: deliveryRepository,
+        merchant_id: profile.owner_id,
+        adapterFor: (delivery) => (delivery.channel === "email" ? emailAdapter : undefined),
+        now,
+        assertOwner: () => governance.write(() => undefined),
+        log: (line) => process.stderr.write(line),
+      });
+      deliveryDispatcher.start();
+    }
+  }
   const operations = new MerchantManagementOperationStore({ db });
   const workbenchConfirmations = new WorkbenchConfirmationStore({ db });
   const productReader = buildProductReader(profile);
@@ -338,6 +373,7 @@ export async function startStandaloneMerchantWorkbench(
     if (closed) return;
     closed = true;
     operationsScheduler?.stop();
+    deliveryDispatcher?.stop();
     if (memoryServer) await new Promise<void>((resolve) => memoryServer!.close(() => resolve()));
     await new Promise<void>((resolve) => listening.close(resolve));
     await adminHandle.close().catch(() => undefined);
