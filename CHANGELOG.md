@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **买家搜索改为全球范围**：`kiwi_search` / `kiwi buyer search` 不再按 `region`
+  过滤，在 Kiwi Network 内全球匹配商品与商家；`region` 参数仅为旧宿主保留兼容、
+  实际被忽略，并在工具描述中标注弃用。到货时间需另行确认。
 - **管理员口令命令简化**：新增 `kiwi merchant admin-passwd`（`merchant mcp
   admin-passwd` 保留兼容）。交互终端会静默提示输入两次并确认；脚本仍可用
   `KIWI_MERCHANT_ADMIN_PASSWORD`。已有凭据时重置需显式 `--force`。
