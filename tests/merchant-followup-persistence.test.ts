@@ -51,6 +51,13 @@ describe("跟进任务持久化", () => {
     expect(() =>
       schedule({ idempotency_key: "fu-key-1", trigger_event: "other" }),
     ).toThrowError(FollowUpError);
+    // X07：目标/due/重试参数变化同样冲突，不能静默复用旧任务。
+    expect(() =>
+      schedule({ idempotency_key: "fu-key-1", due_at: "2026-10-30T10:00:00.000Z" }),
+    ).toThrowError(FollowUpError);
+    expect(() =>
+      schedule({ idempotency_key: "fu-key-1", max_attempts: 5 }),
+    ).toThrowError(FollowUpError);
   });
 
   it("到期 → READY；领取原子占用并递增 fencing/attempts；重复领取失败", () => {

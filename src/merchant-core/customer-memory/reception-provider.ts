@@ -86,7 +86,7 @@ export class SqliteCustomerMemoryProvider implements CustomerMemoryToolProvider 
     return {
       identity: new CustomerIdentityService({ db, now: this.now }),
       grants: new DataUseGrantStore({ db, now: this.now }),
-      memory: new CustomerMemoryService({ db, now: this.now, sourceGovernance: source }),
+      memory: new CustomerMemoryService({ db, now: this.now, sourceGovernance: source, identity: new CustomerIdentityService({ db, now: this.now }) }),
       history: new HistorySearchService({ db, now: this.now }),
       source,
     };

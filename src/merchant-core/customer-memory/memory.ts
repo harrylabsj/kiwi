@@ -31,6 +31,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { contentDigest } from "../../negotiation/jcs.js";
 import type { ActorContext } from "../context-governance/actor-context.js";
 import { hasCapability } from "../context-governance/actor-context.js";
+import type { CustomerIdentityService } from "./identity.js";
 import {
   DataUseGrantStore,
   type DataUseGrant,
@@ -140,6 +141,11 @@ export interface CustomerMemoryServiceOptions {
   now: () => string;
   /** 来源治理（删除作业/封存/来源可用性）；缺省时删除只清理本域表。 */
   sourceGovernance?: SourceGovernanceService;
+  /**
+   * 主体绑定查询（B04）：客户自助确认/纠错必须证明自己是该记忆的主体。
+   * 缺省时客户写路径 fail-closed（管理员 memory:write 不受影响）。
+   */
+  identity?: CustomerIdentityService;
 }
 
 export class CustomerMemoryService {
@@ -147,12 +153,32 @@ export class CustomerMemoryService {
   private readonly now: () => string;
   private readonly grants: DataUseGrantStore;
   private readonly sourceGovernance?: SourceGovernanceService;
+  private readonly identity?: CustomerIdentityService;
 
   constructor(options: CustomerMemoryServiceOptions) {
     this.db = options.db;
     this.now = options.now;
     this.grants = new DataUseGrantStore({ db: options.db, now: options.now });
     this.sourceGovernance = options.sourceGovernance;
+    this.identity = options.identity;
+  }
+
+  /**
+   * B04：客户自助写路径必须绑定到目标主体。商家管理员（memory:write 且
+   * organization/agent_scope）可跨主体管理；匿名/未绑定会话一律拒绝。
+   */
+  private assertActorOwnsSubject(actor: ActorContext, subjectId: string): void {
+    if (hasCapability(actor, "memory:write") && actor.subject_binding !== "none") {
+      return;
+    }
+    const bound = this.identity?.currentSubjectForActor(actor.merchant_id, actor.actor_id);
+    if (bound === undefined || bound.subject_id !== subjectId) {
+      throw new CustomerMemoryError(
+        "access_denied",
+        "subject_not_bound",
+        "当前会话未绑定到该记忆主体",
+      );
+    }
   }
 
   private requireActiveGrant(input: {
@@ -328,6 +354,7 @@ export class CustomerMemoryService {
     const memoryId = text(input.memory_id, "memory_id");
     return inImmediateTransaction(this.db, () => {
       const memory = this.requireMemory(merchantId, memoryId);
+      this.assertActorOwnsSubject(input.actor, memory.subject_id);
       if (memory.state !== "candidate" && memory.state !== "needs_review") {
         throw new CustomerMemoryError("version_conflict", "memory_state_invalid", `状态 ${memory.state} 不能确认`);
       }
@@ -376,6 +403,7 @@ export class CustomerMemoryService {
     }
     return inImmediateTransaction(this.db, () => {
       const old = this.requireMemory(merchantId, memoryId);
+      this.assertActorOwnsSubject(input.actor, old.subject_id);
       if (old.state !== "active" && old.state !== "needs_review") {
         throw new CustomerMemoryError("version_conflict", "memory_state_invalid", `状态 ${old.state} 不能纠错`);
       }

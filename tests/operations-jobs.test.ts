@@ -112,6 +112,26 @@ describe("经营任务 M4", () => {
     );
   });
 
+  it("C11：P0 规则只能产出工作台内部结果，不能代表买家接受或下单", () => {
+    for (const actionType of ["accept_agreement", "place_order", "authorize_payment"]) {
+      expectError(
+        () =>
+          service.prepareRule({
+            merchant_id: MERCHANT,
+            mode: "template",
+            template: "unfinished_inquiry_digest",
+            trigger_spec: { kind: "daily_local", local_time: "09:00", timezone: "Asia/Shanghai" },
+            scope: { window: "previous_local_day" },
+            predicate_spec: { kind: "fixed_template", template: "unfinished_inquiry_digest" },
+            action_type: actionType as never,
+            budget: { max_runs_per_day: 1 },
+          }),
+        "validation",
+        "action_type_invalid",
+      );
+    }
+  });
+
   it("C01：同事件 100 次突发只产生一条 Inbox 与一个评估任务", () => {
     for (let index = 0; index < 100; index += 1) {
       service.ingestTrustedEvent({

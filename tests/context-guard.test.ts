@@ -31,6 +31,7 @@ describe("ContextGuard（设计 §4.3）", () => {
   let grantId: string;
   let configVersion: string;
   let bindingEpoch: number | undefined;
+  let memorySetVersion: number;
   const clock = (): string => NOW;
   const okSource: SourceRefCheck = { object_id: "src-ok", version: 3 };
 
@@ -50,6 +51,7 @@ describe("ContextGuard（设计 §4.3）", () => {
       .grant_id;
     configVersion = "cfg-1";
     bindingEpoch = 1;
+    memorySetVersion = 0;
     actor = createActorContext({
       merchant_id: "m-1",
       actor_id: "runtime-1",
@@ -62,6 +64,7 @@ describe("ContextGuard（设计 §4.3）", () => {
         grants,
         bindingEpoch: () => bindingEpoch,
         configVersion: () => configVersion,
+        memorySetVersion: () => memorySetVersion,
         sourceAvailable: (_merchantId, ref) =>
           ref.object_id === "src-ok" && ref.erased !== true,
         skillBinding: (_merchantId, skillKey) =>
@@ -253,6 +256,40 @@ describe("ContextGuard（设计 §4.3）", () => {
       () => drifting.checkRead({ actor, snapshot: snapshot(), capability: "memory:read" }),
       "stale_context",
       "grant_epoch_changed",
+    );
+  });
+
+  it("B08：纠错后 memory_set_version 变化，旧上下文的 provider/发布被阻断", () => {
+    memorySetVersion = 1;
+    const snap = snapshot({ memory_set_version: 1 });
+    guard.checkProviderAttempt({
+      actor,
+      snapshot: snap,
+      capability: "memory:read",
+      source_refs: [okSource],
+    });
+    memorySetVersion = 2;
+    expectFail(
+      () =>
+        guard.checkProviderAttempt({
+          actor,
+          snapshot: snap,
+          capability: "memory:read",
+          source_refs: [okSource],
+        }),
+      "stale_context",
+      "memory_set_version_changed",
+    );
+    expectFail(
+      () =>
+        guard.checkPublish({
+          actor,
+          snapshot: snap,
+          capability: "memory:write",
+          source_refs: [okSource],
+        }),
+      "stale_context",
+      "memory_set_version_changed",
     );
   });
 

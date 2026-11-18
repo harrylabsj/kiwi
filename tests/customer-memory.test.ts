@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerGovernanceLedgers } from "../src/merchant-core/migrations/ledgers.js";
 import { createActorContext } from "../src/merchant-core/context-governance/actor-context.js";
 import { SourceGovernanceService } from "../src/merchant-core/context-governance/source-governance.js";
+import { DataUseGrantStore } from "../src/merchant-core/context-governance/data-use-grant.js";
 import { CustomerIdentityService } from "../src/merchant-core/customer-memory/identity.js";
 import { GrantRequestService } from "../src/merchant-core/customer-memory/grants.js";
 import { CustomerMemoryService } from "../src/merchant-core/customer-memory/memory.js";
@@ -67,7 +68,7 @@ describe("客户记忆 M3", () => {
     const sourceGovernance = new SourceGovernanceService({ db, now });
     identity = new CustomerIdentityService({ db, now });
     grantRequests = new GrantRequestService({ db, now });
-    memory = new CustomerMemoryService({ db, now, sourceGovernance });
+    memory = new CustomerMemoryService({ db, now, sourceGovernance, identity });
     history = new HistorySearchService({ db, now });
     subjectId = identity.createSubject({
       merchant_id: MERCHANT,
@@ -92,6 +93,22 @@ describe("客户记忆 M3", () => {
       actor: customer(),
       grant_request_id: request.grant_request.grant_request_id,
       confirmation_phrase: request.confirmation_phrase,
+    });
+  }
+
+  function bindCustomer(targetSubjectId = subjectId, sessionId = "session-1") {
+    const challenge = identity.linkChallenge({
+      merchant_id: MERCHANT,
+      actor: customer(),
+      source_session_id: sessionId,
+      target_subject_id: targetSubjectId,
+    });
+    identity.linkConfirm({
+      merchant_id: MERCHANT,
+      actor: customer(),
+      challenge_id: challenge.challenge_id,
+      source_session_id: sessionId,
+      proof: challenge.proof,
     });
   }
 
@@ -218,6 +235,7 @@ describe("客户记忆 M3", () => {
     });
     expect(candidate.state).toBe("candidate");
     expect(memory.listMine(MERCHANT, subjectId)).toEqual([]);
+    bindCustomer();
     const active = memory.confirmMemory({
       merchant_id: MERCHANT,
       actor: customer(),
@@ -338,6 +356,135 @@ describe("客户记忆 M3", () => {
     expect(none.status).toBe("no_match");
   });
 
+  it("B15：确认前卡片引用被篡改 → 摘要校验失败，不建 grant", () => {
+    const request = grantRequests.createGrantRequest({
+      merchant_id: MERCHANT,
+      actor: manager(),
+      subject_id: subjectId,
+      purpose: "customer_memory",
+      resource_scope_id: scope,
+      grant_ttl_seconds: 60 * 60,
+    });
+    db.prepare(
+      "UPDATE grant_requests SET confirmation_ref_digest = ? WHERE merchant_id = ? AND grant_request_id = ?",
+    ).run("sha256:tampered", MERCHANT, request.grant_request.grant_request_id);
+    expectError(
+      () =>
+        grantRequests.confirmGrant({
+          merchant_id: MERCHANT,
+          actor: customer(),
+          grant_request_id: request.grant_request.grant_request_id,
+          confirmation_ref: request.confirmation_ref,
+        }),
+      "confirmation_invalid",
+      "confirmation_mismatch",
+    );
+    const count = db
+      .prepare("SELECT COUNT(*) AS n FROM data_grants WHERE merchant_id = ? AND subject_id = ?")
+      .get(MERCHANT, subjectId) as { n: number };
+    expect(count.n).toBe(0);
+  });
+
+  it("B11：撤权后旧历史游标不能继续分页", () => {
+    const active = grant("history_recall");
+    for (let index = 0; index < 7; index++) {
+      history.indexHistoryDocument({
+        merchant_id: MERCHANT,
+        subject_id: subjectId,
+        kind: "prior_inquiry",
+        sku: `SKU-${index}`,
+        occurred_at: `2026-11-0${(index % 9) + 1}T00:00:00.000Z`,
+        source_version: index + 1,
+        text: `客户询问纸箱包装和单位换算 ${index}`,
+        grant_id: active.grant_id,
+        erase_scope_id: scope,
+      });
+    }
+    const first = history.search({
+      merchant_id: MERCHANT,
+      actor: customer(),
+      subject_id: subjectId,
+      resource_scope_id: scope,
+      query: "纸箱包装",
+    });
+    expect(first.status).toBe("ok");
+    if (first.status !== "ok" || first.next_cursor === undefined) {
+      throw new Error("expected cursor");
+    }
+    // 读取后撤权：旧游标再分页必须失败，不返回第二页。
+    const grants = new DataUseGrantStore({ db, now: () => clock });
+    grants.revokeGrant({
+      merchant_id: MERCHANT,
+      grant_id: active.grant_id,
+      expected_epoch: active.grant_epoch,
+    });
+    expectError(
+      () =>
+        history.search({
+          merchant_id: MERCHANT,
+          actor: customer(),
+          subject_id: subjectId,
+          resource_scope_id: scope,
+          query: "纸箱包装",
+          cursor: first.next_cursor,
+        }),
+      "grant_unavailable",
+      "grant_not_active",
+    );
+  });
+
+  it("B05：同 scope 高相关也硬过滤其他客户，不进入检索结果", () => {
+    const scopeA = "shared-scope";
+    grant("history_recall", scopeA);
+    const otherSubject = identity.createSubject({
+      merchant_id: MERCHANT,
+      actor: manager(),
+      subject_kind: "organization",
+    }).subject_id;
+    const otherRequest = grantRequests.createGrantRequest({
+      merchant_id: MERCHANT,
+      actor: manager(),
+      subject_id: otherSubject,
+      purpose: "history_recall",
+      resource_scope_id: scopeA,
+      grant_ttl_seconds: 24 * 60 * 60,
+    });
+    grantRequests.confirmGrant({
+      merchant_id: MERCHANT,
+      actor: customer(),
+      grant_request_id: otherRequest.grant_request.grant_request_id,
+      confirmation_phrase: otherRequest.confirmation_phrase,
+    });
+    history.indexHistoryDocument({
+      merchant_id: MERCHANT,
+      subject_id: otherSubject,
+      kind: "prior_inquiry",
+      sku: "SKU-OTHER",
+      occurred_at: NOW,
+      source_version: 1,
+      text: "另一个客户询问纸箱包装和单位换算",
+      grant_id: "unused",
+      erase_scope_id: scopeA,
+    });
+    const mine = history.search({
+      merchant_id: MERCHANT,
+      actor: customer(),
+      subject_id: subjectId,
+      resource_scope_id: scopeA,
+      query: "纸箱包装",
+    });
+    expect(mine.status).toBe("no_match");
+    const theirs = history.search({
+      merchant_id: MERCHANT,
+      actor: customer(),
+      subject_id: otherSubject,
+      resource_scope_id: scopeA,
+      query: "纸箱包装",
+    });
+    expect(theirs.status).toBe("ok");
+    if (theirs.status === "ok") expect(theirs.hits).toHaveLength(1);
+  });
+
   it("删除：封存 scope、撤销 grant、清理记忆/历史，备份面保持 pending", () => {
     grant("customer_memory");
     const candidate = memory.proposeMemory({
@@ -351,6 +498,7 @@ describe("客户记忆 M3", () => {
       value_type: "enum",
       source_kind: "explicit",
     });
+    bindCustomer();
     const active = memory.confirmMemory({
       merchant_id: MERCHANT,
       actor: customer(),
@@ -412,6 +560,7 @@ describe("客户记忆 M3", () => {
       source_kind: "explicit",
       expires_at: "2026-11-18T00:00:00.000Z",
     });
+    bindCustomer();
     memory.confirmMemory({
       merchant_id: MERCHANT,
       actor: customer(),
@@ -423,5 +572,122 @@ describe("客户记忆 M3", () => {
     expect(expired.memories).toBeGreaterThanOrEqual(1);
     expect(memory.listMine(MERCHANT, subjectId)).toEqual([]);
     expect(memory.getMemory(MERCHANT, candidate.memory_id)?.state).toBe("expired");
+  });
+
+  it("B01：匿名 T0 两次访问只保留当前会话，不建个人档案", () => {
+    const anonymous = createActorContext({
+      merchant_id: MERCHANT,
+      actor_id: "anon-1",
+      auth_strength: "anonymous",
+      subject_binding: "none",
+      capabilities: ["customer:self"],
+    });
+    const before = db
+      .prepare("SELECT COUNT(*) AS n FROM customer_subjects WHERE merchant_id = ?")
+      .get(MERCHANT) as { n: number };
+    expect(identity.currentSubjectForActor(MERCHANT, "anon-1")).toBeUndefined();
+    expect(identity.currentSubjectForActor(MERCHANT, "anon-2")).toBeUndefined();
+    expectError(
+      () =>
+        identity.createSubject({
+          merchant_id: MERCHANT,
+          actor: anonymous,
+          subject_kind: "organization",
+        }),
+      "access_denied",
+      "capability_missing",
+    );
+    const after = db
+      .prepare("SELECT COUNT(*) AS n FROM customer_subjects WHERE merchant_id = ?")
+      .get(MERCHANT) as { n: number };
+    expect(after.n).toBe(before.n);
+  });
+
+  it("B02：同一 Agent 代理两人无被代理证明不合并档案", () => {
+    const agentSubject = identity.createSubject({
+      merchant_id: MERCHANT,
+      actor: manager(),
+      subject_kind: "agent_scope",
+    }).subject_id;
+    const actorA = createActorContext({
+      merchant_id: MERCHANT,
+      actor_id: "agent-proxy-a",
+      auth_strength: "session",
+      subject_binding: "agent_scope",
+      capabilities: ["customer:self"],
+    });
+    const actorB = createActorContext({
+      merchant_id: MERCHANT,
+      actor_id: "agent-proxy-b",
+      auth_strength: "session",
+      subject_binding: "agent_scope",
+      capabilities: ["customer:self"],
+    });
+    expect(identity.currentSubjectForActor(MERCHANT, actorA.actor_id)).toBeUndefined();
+    expect(identity.currentSubjectForActor(MERCHANT, actorB.actor_id)).toBeUndefined();
+    const challenge = identity.linkChallenge({
+      merchant_id: MERCHANT,
+      actor: actorA,
+      source_session_id: "session-a",
+      target_subject_id: agentSubject,
+    });
+    identity.linkConfirm({
+      merchant_id: MERCHANT,
+      actor: actorA,
+      challenge_id: challenge.challenge_id,
+      source_session_id: "session-a",
+      proof: challenge.proof,
+    });
+    expect(identity.currentSubjectForActor(MERCHANT, actorA.actor_id)?.subject_id).toBe(
+      agentSubject,
+    );
+    expect(identity.currentSubjectForActor(MERCHANT, actorB.actor_id)).toBeUndefined();
+  });
+
+  it("B04：未绑定到该主体的会话不能确认/纠错他人记忆", () => {
+    const otherSubject = identity.createSubject({
+      merchant_id: MERCHANT,
+      actor: manager(),
+      subject_kind: "organization",
+    }).subject_id;
+    const otherGrantRequest = grantRequests.createGrantRequest({
+      merchant_id: MERCHANT,
+      actor: manager(),
+      subject_id: otherSubject,
+      purpose: "customer_memory",
+      resource_scope_id: "other-scope",
+      grant_ttl_seconds: 24 * 60 * 60,
+    });
+    grantRequests.confirmGrant({
+      merchant_id: MERCHANT,
+      actor: customer(),
+      grant_request_id: otherGrantRequest.grant_request.grant_request_id,
+      confirmation_phrase: otherGrantRequest.confirmation_phrase,
+    });
+    const candidate = memory.proposeMemory({
+      merchant_id: MERCHANT,
+      actor: manager(),
+      subject_id: otherSubject,
+      resource_scope_id: "other-scope",
+      namespace: "preference",
+      key: "unit",
+      value_ref: "箱",
+      value_type: "enum",
+      source_kind: "explicit",
+    });
+    bindCustomer(subjectId);
+    expectError(
+      () =>
+        memory.confirmMemory({
+          merchant_id: MERCHANT,
+          actor: customer(),
+          memory_id: candidate.memory_id,
+          expected_version: 1,
+        }),
+      "access_denied",
+      "subject_not_bound",
+    );
+    expect(memory.listMine(MERCHANT, subjectId)).toEqual([]);
+    expect(memory.listMine(MERCHANT, otherSubject)).toHaveLength(0);
   });
 });

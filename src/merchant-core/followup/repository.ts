@@ -132,16 +132,22 @@ export class FollowUpRepository {
     if (input.idempotencyKey !== undefined) {
       const existing = this.findByKey(input.merchantId, input.idempotencyKey);
       if (existing !== undefined) {
+        // X07：幂等摘要覆盖全部业务含义字段（目标、due、重试预算、载荷），
+        // 不能只比较触发/动作，否则改时间或重试参数会静默复用旧任务。
         const expectedDigest = contentDigest({
           trigger_event: input.triggerEvent,
           action_type: input.actionType,
           target_version: input.targetVersion ?? null,
+          due_at: input.dueAt ?? null,
+          max_attempts: input.maxAttempts,
           payload: input.payload,
         });
         const storedDigest = contentDigest({
           trigger_event: existing.trigger_event,
           action_type: existing.action_type,
           target_version: existing.target_version,
+          due_at: existing.due_at ?? null,
+          max_attempts: existing.max_attempts,
           payload: existing.payload,
         });
         if (expectedDigest !== storedDigest) {

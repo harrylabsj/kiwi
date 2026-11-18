@@ -91,7 +91,7 @@ describe("接待客户记忆工具（M3-6）", () => {
     const source = new SourceGovernanceService({ db, now });
     identity = new CustomerIdentityService({ db, now });
     grants = new GrantRequestService({ db, now });
-    memory = new CustomerMemoryService({ db, now, sourceGovernance: source });
+    memory = new CustomerMemoryService({ db, now, sourceGovernance: source, identity });
     history = new HistorySearchService({ db, now });
     subjectId = identity.createSubject({
       merchant_id: MERCHANT,
