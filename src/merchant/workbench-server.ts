@@ -242,7 +242,11 @@ export async function startStandaloneMerchantWorkbench(
   }
   // P1 邮件投递循环：仅在显式开关且 SMTP/收件人配置齐全时启动。
   let deliveryDispatcher: DeliveryDispatcherLoop | undefined;
-  if (governance !== undefined && process.env.KIWI_DELIVERY_DISPATCHER === "1") {
+  const deliveryFlagEnabled =
+    governance !== undefined &&
+    (governance.flags as unknown as { customer_delivery_enabled: boolean })
+      .customer_delivery_enabled === true;
+  if (deliveryFlagEnabled && process.env.KIWI_DELIVERY_DISPATCHER === "1") {
     const smtp = {
       host: String(process.env.KIWI_DELIVERY_EMAIL_SMTP_HOST ?? "").trim(),
       port: Number(process.env.KIWI_DELIVERY_EMAIL_SMTP_PORT ?? "587"),
