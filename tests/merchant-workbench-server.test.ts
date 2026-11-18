@@ -148,8 +148,7 @@ describe("standalone merchant workbench", () => {
     const rules = await fetch(new URL("/merchant/api/v1/automation/rules", handle.url), {
       headers: { cookie },
     });
-    expect(rules.status).toBe(200);
-    expect(await rules.json()).toEqual({ rules: [] });
+    expect(rules.status).toBe(404);
   });
 
   it("does not mount TOP1-3 routes when governance flags are off", async () => {

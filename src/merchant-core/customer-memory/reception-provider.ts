@@ -40,18 +40,21 @@ import type {
 import { CustomerIdentityService } from "./identity.js";
 import { CustomerMemoryService } from "./memory.js";
 import { HistorySearchService } from "./history.js";
+import { requestMemoryProposal } from "./private-transport.js";
 
 export class SqliteCustomerMemoryProvider implements CustomerMemoryToolProvider {
   private readonly dbPath: string;
   private readonly now: () => string;
   /** 接待进程是否允许写候选记忆；单写者部署下 a2a 只读。 */
   private readonly allowWrites: boolean;
+  private readonly socketPath: string | undefined;
   private handle: DatabaseSync | undefined;
 
-  constructor(options: { dbPath: string; now?: () => string; allowWrites?: boolean }) {
+  constructor(options: { dbPath: string; now?: () => string; allowWrites?: boolean; socketPath?: string }) {
     this.dbPath = options.dbPath;
     this.now = options.now ?? (() => new Date().toISOString());
     this.allowWrites = options.allowWrites ?? true;
+    this.socketPath = options.socketPath;
   }
 
   private db(): DatabaseSync | undefined {
@@ -118,6 +121,8 @@ export class SqliteCustomerMemoryProvider implements CustomerMemoryToolProvider 
         grants.find((grant) => grant.purpose === "history_recall")?.resource_scope_id ??
         grants.find((grant) => grant.purpose === "customer_memory")?.resource_scope_id;
       if (scope === undefined) return undefined;
+      const memoryScope = grants.find((grant) => grant.purpose === "customer_memory")?.resource_scope_id;
+      const memoryDataScope = memoryScope === undefined ? undefined : source.getDataScope(merchantId, memoryScope);
       const dataScope = source.getDataScope(merchantId, scope);
       if (dataScope === undefined || dataScope.state !== "ACTIVE") return undefined;
       const grantVersions: Record<string, number> = {};
@@ -126,12 +131,14 @@ export class SqliteCustomerMemoryProvider implements CustomerMemoryToolProvider 
         this.services(db).memory.currentMemorySetVersion(merchantId, binding.subject_id) ?? 0;
       return {
         merchant_id: merchantId,
+        actor_id: actorId,
         subject_id: binding.subject_id,
         binding_epoch: binding.binding_epoch,
         resource_scope_id: scope,
+        ...(memoryScope !== undefined && memoryDataScope?.state === "ACTIVE" ? { memory_scope_id: memoryScope } : {}),
         grant_versions: grantVersions,
         memory_set_version: setVersion,
-        data_scope_epochs: { [scope]: dataScope.data_epoch },
+        data_scope_epochs: { [scope]: dataScope.data_epoch, ...(memoryScope !== undefined && memoryDataScope?.state === "ACTIVE" ? { [memoryScope]: memoryDataScope.data_epoch } : {}) },
       };
     } catch {
       return undefined;
@@ -240,6 +247,10 @@ export class SqliteCustomerMemoryProvider implements CustomerMemoryToolProvider 
     }
   }
 
+  canPropose(context: CustomerRecallContext): boolean {
+    return context.memory_scope_id !== undefined && (this.allowWrites || this.socketPath !== undefined);
+  }
+
   propose(
     context: CustomerRecallContext,
     input: {
@@ -250,7 +261,8 @@ export class SqliteCustomerMemoryProvider implements CustomerMemoryToolProvider 
       source_kind: MemorySourceKind;
       confidence?: number;
     },
-  ): { memory_id: string; state: string } {
+  ): { memory_id: string; state: string } | Promise<{ memory_id: string; state: string }> {
+    if (!this.allowWrites && this.socketPath !== undefined) return requestMemoryProposal(this.socketPath, context, input);
     if (!this.allowWrites) {
       throw new Error("customer memory writes are handled by the standalone workbench");
     }

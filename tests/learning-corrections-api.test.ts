@@ -19,6 +19,9 @@ import type {
   EvaluationSuite,
 } from "../src/merchant-core/learning/evaluation.js";
 
+import { parseGovernanceFeatureFlags } from "../src/merchant-core/context-governance/feature-flags.js";
+import { initializeGovernanceRuntime } from "../src/merchant-core/ownership/runtime.js";
+
 const MERCHANT = "merchant-learning";
 const ORIGIN = "https://merchant.example";
 const NOW = "2026-11-17T00:00:00.000Z";
@@ -33,8 +36,10 @@ const merchantOperations = new MerchantOperationsSurface({ facade, now: () => NO
 
 let server: Server;
 let base: string;
-/** 模拟运行期失去治理所有权：学习写入必须逐次核验并 fail-closed。 */
-let ownershipHeld = true;
+const flags = parseGovernanceFeatureFlags({ learning_enabled: true });
+const runtime = initializeGovernanceRuntime({
+  db, merchantId: MERCHANT, ownerId: "workbench-test", flags, now: () => NOW,
+});
 
 beforeAll(async () => {
   server = createServer(
@@ -51,9 +56,7 @@ beforeAll(async () => {
       operations,
       serviceState,
       merchantOperations,
-      assertGovernanceOwner: () => {
-        if (!ownershipHeld) throw new Error("ownership lost");
-      },
+      governance: { flags, write: (work) => runtime.writeUnderOwnership(work) },
       readiness: async () => ({ ready: true, checks: {} }),
       now: () => new Date(NOW),
     }),
@@ -64,6 +67,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  runtime.stop();
   server.closeAllConnections();
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
@@ -406,19 +410,16 @@ describe("商家纠正入口（Workbench v1）", () => {
 
   it("运行期失去治理所有权：学习写 409，读仍可用", async () => {
     const operator = await login("operator");
-    ownershipHeld = false;
-    try {
-      const write = await call("POST", "/merchant/api/v1/learning/corrections", {
-        ...operator,
-        body: {
-          correction_text: "失去所有权后不应落库。",
-          idempotency_key: "corr-lost-owner",
-        },
-      });
-      expect(write.status).toBe(409);
-    } finally {
-      ownershipHeld = true;
-    }
+    db.prepare("UPDATE instance_ownership SET lease_expires_at = ? WHERE merchant_id = ?")
+      .run(NOW, MERCHANT);
+    const write = await call("POST", "/merchant/api/v1/learning/corrections", {
+      ...operator,
+      body: {
+        correction_text: "失去所有权后不应落库。",
+        idempotency_key: "corr-lost-owner",
+      },
+    });
+    expect(write.status).toBe(409);
     const list = await call("GET", "/merchant/api/v1/learning/corrections", operator);
     expect(list.status).toBe(200);
   });

@@ -24,6 +24,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { inImmediateTransaction } from "../storage/transaction.js";
+import { LearningError } from "./types.js";
 import type {
   CandidateState,
   CaseStatus,
@@ -265,6 +266,64 @@ export class LearningRepository {
 
   transaction<T>(work: () => T): T {
     return inImmediateTransaction(this.db, work);
+  }
+
+  claimEvaluation(keys: readonly string[], owner: string, digest: string, now: number, ttl: number): void {
+    for (const key of keys) {
+      const row = this.db.prepare("SELECT owner, request_digest, expires_at FROM learning_evaluation_claims WHERE claim_key = ?")
+        .get(key) as { owner: string; request_digest: string; expires_at: number } | undefined;
+      if (row !== undefined && key.startsWith("command:") && row.request_digest !== digest) {
+        throw new LearningError("idempotency_conflict", "command_replay_conflict", "同一 command_id 已用于不同评测请求");
+      }
+      if (row !== undefined && row.expires_at > now) {
+        throw new LearningError("version_conflict", "evaluation_in_progress", "评测正在执行，请稍后重试");
+      }
+      this.db.prepare(`INSERT INTO learning_evaluation_claims (claim_key, owner, request_digest, expires_at)
+        VALUES (?, ?, ?, ?) ON CONFLICT(claim_key) DO UPDATE SET owner = excluded.owner,
+        request_digest = excluded.request_digest, expires_at = excluded.expires_at`)
+        .run(key, owner, digest, now + ttl);
+    }
+  }
+
+  assertEvaluationClaim(keys: readonly string[], owner: string, now: number): void {
+    for (const key of keys) {
+      const row = this.db.prepare("SELECT owner, expires_at FROM learning_evaluation_claims WHERE claim_key = ?")
+        .get(key) as { owner: string; expires_at: number } | undefined;
+      if (row === undefined || row.owner !== owner || row.expires_at <= now) {
+        throw new LearningError("version_conflict", "evaluation_claim_lost", "评测执行权已失效，请重试");
+      }
+    }
+  }
+
+  renewEvaluationClaim(keys: readonly string[], owner: string, now: number, ttl: number): void {
+    this.transaction(() => {
+      this.assertEvaluationClaim(keys, owner, now);
+      for (const key of keys) this.db.prepare("UPDATE learning_evaluation_claims SET expires_at = ? WHERE claim_key = ? AND owner = ?").run(now + ttl, key, owner);
+    });
+  }
+
+  checkEvaluationConfig(key: string, digest: string, legacyRuns: number): void {
+    const row = this.db.prepare("SELECT config_digest, pending_attempt FROM learning_evaluation_config WHERE evaluation_key = ?")
+      .get(key) as { config_digest: string; pending_attempt: string | null } | undefined;
+    if (row === undefined) {
+      if (legacyRuns > 0) throw new LearningError("version_conflict", "evaluation_legacy_unverified", "旧评测缺少配置和基线校验，不能安全续跑");
+      this.db.prepare("INSERT INTO learning_evaluation_config (evaluation_key, config_digest) VALUES (?, ?)").run(key, digest);
+    } else if (row.config_digest !== digest) {
+      throw new LearningError("version_conflict", "evaluation_config_mismatch", "评测配置与已有记录不一致");
+    } else if (row.pending_attempt !== null) {
+      throw new LearningError("version_conflict", "evaluation_attempt_uncertain", "上次模型调用结果不确定，不能自动重跑");
+    }
+  }
+
+  setEvaluationAttempt(key: string, attempt: string | null): void {
+    this.db.prepare("UPDATE learning_evaluation_config SET pending_attempt = ? WHERE evaluation_key = ?").run(attempt, key);
+  }
+
+  releaseEvaluationClaim(keys: readonly string[], owner: string): void {
+    for (const key of keys) {
+      if (key.startsWith("command:")) this.db.prepare("UPDATE learning_evaluation_claims SET expires_at = 0 WHERE claim_key = ? AND owner = ?").run(key, owner);
+      else this.db.prepare("DELETE FROM learning_evaluation_claims WHERE claim_key = ? AND owner = ?").run(key, owner);
+    }
   }
 
   readCorrection(merchantId: string, correctionId: string): LearningCorrection | undefined {

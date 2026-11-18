@@ -118,6 +118,18 @@ export class FollowUpRepository {
     return inImmediateTransaction(this.db, work);
   }
 
+  /** 不缓存 schema：同一连接在构造后可能升级。旧表上的回退谓词在执行时再次核对列。 */
+  private legacyTaskPredicate(): string {
+    const columns = this.db.prepare("PRAGMA table_info(followup_tasks)").all() as Array<{ name: string }>;
+    if (columns.some((column) => column.name === "rule_id")) return "rule_id IS NULL";
+    const version = this.db.prepare("SELECT MAX(version) AS version FROM merchant_ops_schema_migrations")
+      .get() as { version: number | null };
+    if (version.version === null || version.version >= 3) {
+      throw new FollowUpError("invalid_transition", "跟进任务表缺少规则隔离列");
+    }
+    return "NOT EXISTS (SELECT 1 FROM pragma_table_info('followup_tasks') WHERE name = 'rule_id')";
+  }
+
   createTask(input: {
     merchantId: string;
     opportunityId?: string;
@@ -185,14 +197,14 @@ export class FollowUpRepository {
 
   findByKey(merchantId: string, key: string): FollowUpTask | undefined {
     const row = this.db
-      .prepare("SELECT * FROM followup_tasks WHERE merchant_id = ? AND idempotency_key = ?")
+      .prepare(`SELECT * FROM followup_tasks WHERE merchant_id = ? AND idempotency_key = ? AND ${this.legacyTaskPredicate()}`)
       .get(merchantId, key) as unknown as TaskRow | undefined;
     return row === undefined ? undefined : rowToTask(row);
   }
 
   getTask(merchantId: string, taskId: string): FollowUpTask | undefined {
     const row = this.db
-      .prepare("SELECT * FROM followup_tasks WHERE merchant_id = ? AND task_id = ?")
+      .prepare(`SELECT * FROM followup_tasks WHERE merchant_id = ? AND task_id = ? AND ${this.legacyTaskPredicate()}`)
       .get(merchantId, taskId) as unknown as TaskRow | undefined;
     return row === undefined ? undefined : rowToTask(row);
   }
@@ -218,7 +230,7 @@ export class FollowUpRepository {
     const rows = this.db
       .prepare(
         `SELECT * FROM followup_tasks
-          WHERE merchant_id = ? AND status = 'PENDING'
+          WHERE merchant_id = ? AND status = 'PENDING' AND ${this.legacyTaskPredicate()}
             AND due_at IS NOT NULL AND due_at <= ?
           ORDER BY due_at ASC LIMIT ?`,
       )
@@ -243,7 +255,7 @@ export class FollowUpRepository {
         `UPDATE followup_tasks
             SET status = 'RUNNING', lease_owner = ?, lease_expires_at = ?,
                 fencing_token = fencing_token + 1, attempts = attempts + 1, updated_at = ?
-          WHERE merchant_id = ? AND task_id = ? AND status = 'READY'
+          WHERE merchant_id = ? AND task_id = ? AND status = 'READY' AND ${this.legacyTaskPredicate()}
             AND (lease_expires_at IS NULL OR lease_expires_at <= ?)`,
       )
       .run(
@@ -262,7 +274,7 @@ export class FollowUpRepository {
       .prepare(
         `UPDATE followup_tasks
             SET external_call_started = 1, updated_at = ?
-          WHERE merchant_id = ? AND task_id = ? AND status = 'RUNNING' AND fencing_token = ?`,
+          WHERE merchant_id = ? AND task_id = ? AND status = 'RUNNING' AND fencing_token = ? AND ${this.legacyTaskPredicate()}`,
       )
       .run(this.now(), merchantId, taskId, fencingToken);
     if (Number(result.changes) !== 1) {
@@ -280,7 +292,7 @@ export class FollowUpRepository {
     lastError?: string | null;
     stopRequested?: boolean;
   }): FollowUpTask {
-    const conditions = ["merchant_id = ?", "task_id = ?", "status = ?"];
+    const conditions = ["merchant_id = ?", "task_id = ?", "status = ?", this.legacyTaskPredicate()];
     const params: Array<string | number> = [input.merchantId, input.taskId, input.from];
     if (input.from === "RUNNING") {
       if (input.fencingToken === undefined) {
@@ -436,7 +448,7 @@ export class FollowUpRepository {
     const rows = this.db
       .prepare(
         `SELECT * FROM followup_tasks
-          WHERE merchant_id = ? AND status = 'RUNNING'
+          WHERE merchant_id = ? AND status = 'RUNNING' AND ${this.legacyTaskPredicate()}
             AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?`,
       )
       .all(merchantId, at) as unknown as TaskRow[];

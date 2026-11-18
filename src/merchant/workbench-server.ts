@@ -11,6 +11,7 @@
  * 一致，独立部署暴露公网时可被 `/portal/account` 直接链接。
  */
 
+import { startMemoryProposalServer } from "../merchant-core/customer-memory/private-transport.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import type { AgentProfile } from "../config/profile.js";
@@ -21,8 +22,6 @@ import { MerchantImportDraftStore } from "../http/merchant-management/draft-stor
 import { MerchantManagementOperationStore } from "../http/merchant-management/operation-store.js";
 import { renderMerchantManagementPage } from "../http/merchant-management/page.js";
 import { MutableServiceState } from "../http/merchant-management/service-state.js";
-import { openMerchantOperationsFacade } from "../merchant-core/ops/facade.js";
-import { MerchantOperationsSurface } from "../merchant-core/ops/surface.js";
 import { createTrustedWorkbenchPageHandler } from "../http/merchant-management/trusted-page.js";
 import { WorkbenchConfirmationStore } from "../http/merchant-management/webauthn-confirmation.js";
 import { ManagementError, type MerchantProductPage, type PageQuery } from "../merchant/application/service.js";
@@ -197,19 +196,8 @@ export async function startStandaloneMerchantWorkbench(
   serviceState.attachPersistence(db, profile.owner_id);
   const now = () => new Date().toISOString();
   const drafts = new MerchantImportDraftStore({ db, now });
-  // TOP1-3 管理路由：学习/记忆/经营任务统一经运营门面；只有 workbench
-  // 持有治理所有权时，公共 `/merchant/api/v1/learning/*`、`/automation/*`
-  // 才挂载，避免与 a2a/cloud 写者无栅栏并发。
-  const merchantOperations = assembly.governanceActive
-    ? new MerchantOperationsSurface({
-        facade: openMerchantOperationsFacade({
-          db,
-          merchantId: profile.owner_id,
-          now,
-        }),
-        now,
-      })
-    : undefined;
+  // 治理业务与所有权事务须使用装配持有的同一个 SQLite 连接。
+  const { merchantOperations, governance } = assembly;
   const operations = new MerchantManagementOperationStore({ db });
   const workbenchConfirmations = new WorkbenchConfirmationStore({ db });
   const productReader = buildProductReader(profile);
@@ -254,9 +242,7 @@ export async function startStandaloneMerchantWorkbench(
     readiness,
     workbenchConfirmations,
     ...(merchantOperations !== undefined ? { merchantOperations } : {}),
-    ...(assembly.assertGovernanceOwner !== undefined
-      ? { assertGovernanceOwner: assembly.assertGovernanceOwner }
-      : {}),
+    ...(governance !== undefined ? { governance } : {}),
   });
   const adminHandle = createMerchantHttpHandler(assembly.serverOptions);
   const trustedPage = createTrustedWorkbenchPageHandler();
@@ -285,10 +271,25 @@ export async function startStandaloneMerchantWorkbench(
       });
     });
   });
+  let memoryServer: Awaited<ReturnType<typeof startMemoryProposalServer>> | undefined;
+  try {
+    const socketPath = process.env.KIWI_MEMORY_SOCKET_PATH;
+    if (socketPath) {
+      if (!assembly.proposeReceptionMemory) throw new Error("memory writer unavailable");
+      memoryServer = await startMemoryProposalServer(socketPath, assembly.proposeReceptionMemory);
+    }
+  } catch (error) {
+    await new Promise<void>((resolve) => listening.close(resolve));
+    await adminHandle.close().catch(() => undefined);
+    await assembly.close().catch(() => undefined);
+    db.close();
+    throw error;
+  }
   let closed = false;
   const close = async (): Promise<void> => {
     if (closed) return;
     closed = true;
+    if (memoryServer) await new Promise<void>((resolve) => memoryServer!.close(() => resolve()));
     await new Promise<void>((resolve) => listening.close(resolve));
     await adminHandle.close().catch(() => undefined);
     await assembly.close().catch(() => undefined);

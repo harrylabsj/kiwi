@@ -651,6 +651,7 @@ export function createPiReceptionRuntime(
           receptionGuard.checkPublish(base);
         }
       };
+      const canProposeMemory = customerContext !== undefined && options.customerProvider !== undefined && (options.customerProvider.canPropose?.(customerContext) ?? true);
       const allowedTools: readonly string[] = [
         ...RECEPTION_TOOL_ALLOWLIST,
         ...(skillCatalog !== undefined && skillBindings.length > 0
@@ -660,7 +661,7 @@ export function createPiReceptionRuntime(
           ? [
               TOOL_RECALL_CUSTOMER_CONTEXT,
               TOOL_SEARCH_CUSTOMER_HISTORY,
-              TOOL_PROPOSE_CUSTOMER_MEMORY,
+              ...(canProposeMemory ? [TOOL_PROPOSE_CUSTOMER_MEMORY] : []),
             ]
           : []),
       ];
@@ -1241,6 +1242,10 @@ export function createPiReceptionRuntime(
                   return toolResult(JSON.stringify(result));
                 },
               } as AgentTool<TSchema, unknown>,
+            ]
+          : []),
+        ...(canProposeMemory && customerContext !== undefined && options.customerProvider !== undefined
+          ? [
               {
                 name: TOOL_PROPOSE_CUSTOMER_MEMORY,
                 label: "Propose customer memory",
@@ -1274,7 +1279,7 @@ export function createPiReceptionRuntime(
                     return toolResult(JSON.stringify({ accepted: false, error: "invalid_memory" }));
                   }
                   try {
-                    const proposal = options.customerProvider!.propose(customerContext, {
+                    const proposal = await options.customerProvider!.propose(customerContext, {
                       namespace: args.namespace as MemoryNamespace,
                       key: args.key,
                       value_ref: args.value_ref,
@@ -1285,7 +1290,7 @@ export function createPiReceptionRuntime(
                         : {}),
                     });
                     return toolResult(
-                      JSON.stringify({ accepted: true, ...proposal, state: "candidate" }),
+                      JSON.stringify({ accepted: true, ...proposal }),
                     );
                   } catch {
                     return toolResult(

@@ -135,7 +135,7 @@ export function createReceptionEvaluationRunner(
     });
   }
 
-  return async ({ scenario, variant, attempt, candidate }) => {
+  return async ({ scenario, variant, attempt, candidate, baseline_passed }) => {
     const input = asInput(scenario);
     const criteria = asCriteria(scenario);
     const now = options.now();
@@ -217,7 +217,10 @@ export function createReceptionEvaluationRunner(
       baselineResults.set(`${scenario.scenario_id}:${attempt}`, passed);
       return { passed, hard_gate_failures: hardGateFailures, diagnostics };
     }
-    const baselinePassed = baselineResults.get(`${scenario.scenario_id}:${attempt}`) ?? false;
+    const baselinePassed = baseline_passed ?? baselineResults.get(`${scenario.scenario_id}:${attempt}`);
+    if (baselinePassed === undefined) {
+      throw new Error("evaluation_baseline_missing");
+    }
     return {
       passed,
       hard_gate_failures: hardGateFailures,

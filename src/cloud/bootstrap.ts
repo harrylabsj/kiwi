@@ -1141,12 +1141,12 @@ export async function bootstrapCloudRuntime(
       },
       policyCurrent: () => assembly.currentPolicy(),
       merchantOperations,
-      assertGovernanceOwner: () => {
-        if (governanceRuntime === undefined) {
-          throw new Error("governance runtime is not initialized");
-        }
-        governanceRuntime.assertOwner();
-      },
+      ...(governanceRuntime.active ? {
+        governance: {
+          flags: governanceFlags,
+          write: <T>(work: () => T) => governanceRuntime!.writeUnderOwnership(work),
+        },
+      } : {}),
       ...(productsFilePath !== undefined && config.catalogUrl !== undefined && !config.sample
         ? { fileListingPublication: createFileListingPublicationService({
             dataDir: config.dataDir, productsFile: productsFilePath, profile,

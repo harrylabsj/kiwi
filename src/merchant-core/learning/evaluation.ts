@@ -83,6 +83,8 @@ export type EvaluationRunner = (input: {
   readonly variant: "baseline" | "candidate";
   readonly attempt: number;
   readonly candidate: LearningCandidate;
+  /** 已持久化的同场景基线结果。 */
+  readonly baseline_passed?: boolean;
 }) => Promise<EvaluationAttemptOutcome> | EvaluationAttemptOutcome;
 
 export interface RunEvaluationInput {
@@ -93,6 +95,8 @@ export interface RunEvaluationInput {
   readonly runner: EvaluationRunner;
   readonly budgetCap?: number;
   readonly requireImprovement?: boolean;
+  readonly assertClaim?: () => void;
+  readonly setAttempt?: (attempt: string | null) => void;
 }
 
 const SUITE_VERSION_PATTERN = /^[a-z0-9][a-z0-9._-]{2,63}$/;
@@ -309,18 +313,26 @@ export async function runCandidateEvaluation(
   const requireImprovement = input.requireImprovement ?? true;
   validateEvaluationSuite(suite);
   const planned = plannedRuns(suite);
+  // 必须在每条启动分支的事务内复核；预检后候选可能已被批准或拒绝。
+  const requireCurrentCandidate = (): LearningCandidate => {
+    const current = repository.readCandidate(merchantId, candidate.candidate_id);
+    if (current === undefined || current.revision !== candidate.revision ||
+        current.compiled_artifact_hash !== candidate.compiled_artifact_hash) {
+      throw new LearningError("version_conflict", "candidate_changed", "候选在评测开始前已变化；请重新读取");
+    }
+    if (["APPROVED", "REJECTED", "STALE", "EXPIRED"].includes(current.state)) {
+      throw new LearningError("version_conflict", "candidate_state_locked", `候选状态 ${current.state} 不可评测`);
+    }
+    return current;
+  };
   if (planned > budgetCap) {
     // 额度不足：保留 EVALUATING + paused_budget，不发起任何回放；调用方可
     // 用同一冻结套件/产物续跑（提高显式预算或后续补跑）。
     return repository.transaction(() => {
+      input.assertClaim?.();
       const stamp = now();
-      const current = repository.readCandidate(merchantId, candidate.candidate_id);
-      if (
-        current !== undefined &&
-        current.revision === candidate.revision &&
-        current.compiled_artifact_hash === candidate.compiled_artifact_hash &&
-        current.state !== "EVALUATING"
-      ) {
+      const current = requireCurrentCandidate();
+      if (current.state !== "EVALUATING") {
         repository.updateCandidate({ ...current, state: "EVALUATING", updated_at: stamp });
       }
       const existing = repository.findEvaluation(
@@ -329,7 +341,10 @@ export async function runCandidateEvaluation(
         candidate.compiled_artifact_hash,
         suite.suite_version,
       );
-      if (existing !== undefined) return existing;
+      if (existing !== undefined) {
+        if (existing.candidate_revision !== candidate.revision) throw new LearningError("version_conflict", "evaluation_revision_mismatch", "已有评测属于不同候选版本");
+        return existing;
+      }
       const record: LearningEvaluation = {
         evaluation_id: `eval_${candidate.candidate_id}_${candidate.revision}_${suite.suite_version}`,
         merchant_id: merchantId,
@@ -373,12 +388,15 @@ export async function runCandidateEvaluation(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return repository.transaction(() => {
+      input.assertClaim?.();
+      const current = requireCurrentCandidate();
       const existing = repository.findEvaluation(
         merchantId,
         candidate.candidate_id,
         candidate.compiled_artifact_hash,
         suite.suite_version,
       );
+      if (existing !== undefined && existing.candidate_revision !== candidate.revision) throw new LearningError("version_conflict", "evaluation_revision_mismatch", "已有评测属于不同候选版本");
       const stamp = now();
       const report: EvaluationReport = {
         suite_version: suite.suite_version,
@@ -418,49 +436,31 @@ export async function runCandidateEvaluation(
           : { ...existing, state: "EVALUATION_FAILED", run_status: "completed", report, updated_at: stamp };
       if (existing === undefined) repository.insertEvaluation(record);
       else repository.updateEvaluation(record);
-      const current = repository.readCandidate(merchantId, candidate.candidate_id);
-      if (
-        current !== undefined &&
-        current.revision === candidate.revision &&
-        current.compiled_artifact_hash === candidate.compiled_artifact_hash
-      ) {
-        repository.updateCandidate({
-          ...current,
-          state: "EVALUATION_FAILED",
-          eval_report_id: record.evaluation_id,
-          updated_at: stamp,
-        });
-      }
+      repository.updateCandidate({
+        ...current,
+        state: "EVALUATION_FAILED",
+        eval_report_id: record.evaluation_id,
+        updated_at: stamp,
+      });
       return record;
     });
   }
 
   let evaluation = repository.transaction(() => {
-    const current = repository.readCandidate(merchantId, candidate.candidate_id);
-    if (
-      current === undefined ||
-      current.revision !== candidate.revision ||
-      current.compiled_artifact_hash !== candidate.compiled_artifact_hash
-    ) {
-      throw new LearningError(
-        "version_conflict",
-        "candidate_changed",
-        "候选在评测开始前已变化；请重新读取",
-      );
-    }
-    if (current.state !== "EVALUATING") {
-      repository.updateCandidate({ ...current, state: "EVALUATING", updated_at: now() });
-    }
+    input.assertClaim?.();
+    const current = requireCurrentCandidate();
     const existing = repository.findEvaluation(
       merchantId,
       candidate.candidate_id,
       candidate.compiled_artifact_hash,
       suite.suite_version,
     );
-    if (existing !== undefined) {
-      if (existing.run_status === "completed") return existing;
-      return existing;
+    if (existing !== undefined && existing.candidate_revision !== candidate.revision) throw new LearningError("version_conflict", "evaluation_revision_mismatch", "已有评测属于不同候选版本");
+    if (existing?.run_status === "completed") return existing;
+    if (current.state !== "EVALUATING") {
+      repository.updateCandidate({ ...current, state: "EVALUATING", updated_at: now() });
     }
+    if (existing !== undefined) return existing;
     const stamp = now();
     const record: LearningEvaluation = {
       evaluation_id: `eval_${candidate.candidate_id}_${candidate.revision}_${suite.suite_version}`,
@@ -486,7 +486,11 @@ export async function runCandidateEvaluation(
 
   const persist = (next: LearningEvaluation): LearningEvaluation => {
     const updated = { ...next, updated_at: now() };
-    repository.updateEvaluation(updated);
+    repository.transaction(() => {
+      input.assertClaim?.();
+      repository.updateEvaluation(updated);
+      input.setAttempt?.(null);
+    });
     evaluation = updated;
     return updated;
   };
@@ -530,6 +534,10 @@ export async function runCandidateEvaluation(
           });
         }
         let outcome: EvaluationAttemptOutcome;
+        repository.transaction(() => {
+          input.assertClaim?.();
+          input.setAttempt?.(`${scenario.scenario_id}:${variant}:${attempt}`);
+        });
         try {
           outcome = validateOutcome(
             await runner({
@@ -537,9 +545,14 @@ export async function runCandidateEvaluation(
               variant,
               attempt,
               candidate,
+              ...(variant === "candidate" && attempts.find((item) => item.variant === "baseline" && item.attempt === attempt) !== undefined
+                ? { baseline_passed: attempts.find((item) => item.variant === "baseline" && item.attempt === attempt)!.passed }
+                : {}),
             }),
           );
         } catch (err) {
+          // A dispatched call may have completed remotely; keep its marker for manual reconciliation.
+          if (input.setAttempt !== undefined) throw new LearningError("version_conflict", "evaluation_attempt_uncertain", "模型调用结果不确定，不能自动重跑");
           return persist({
             ...evaluation,
             state: "EVALUATING",
@@ -590,7 +603,8 @@ export async function runCandidateEvaluation(
         if (
           current === undefined ||
           current.revision !== candidate.revision ||
-          current.compiled_artifact_hash !== candidate.compiled_artifact_hash
+          current.compiled_artifact_hash !== candidate.compiled_artifact_hash ||
+          current.state !== "EVALUATING"
         ) {
           return persist({
             ...evaluation,
@@ -612,11 +626,13 @@ export async function runCandidateEvaluation(
     requireImprovement,
   });
   return repository.transaction(() => {
+    input.assertClaim?.();
     const current = repository.readCandidate(merchantId, candidate.candidate_id);
     if (
       current === undefined ||
       current.revision !== candidate.revision ||
-      current.compiled_artifact_hash !== candidate.compiled_artifact_hash
+      current.compiled_artifact_hash !== candidate.compiled_artifact_hash ||
+      current.state !== "EVALUATING"
     ) {
       return persist({
         ...evaluation,

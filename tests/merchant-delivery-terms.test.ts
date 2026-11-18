@@ -16,6 +16,7 @@ import type { NegotiationHandler, NegotiationHandlerResult } from "../src/a2a/se
 import {
   createMerchantHandler,
   resolveDeliveryBefore,
+  requestedDeliveryDaysOf,
 } from "../src/a2a/server/merchant-handler.js";
 import { LedgerStore } from "../src/negotiation/ledger/index.js";
 import type { NegotiationEnvelope } from "../src/negotiation/domain/envelope.js";
@@ -201,6 +202,27 @@ describe("merchant 报价交期（P0-1）", () => {
     const h = makeHandler(10);
     const reply = await rfqReplyOf(h, "2026-09-30T10:00:00Z");
     expect(reply.public_message).toContain("可以满足");
+  });
+
+  it("自然语言绝对日期不会误作相对期限，明确相对期限仍可识别", () => {
+    for (const text of ["11月18日到货", "十一月二十日送达", "18日前到货", "18日到货", "2026-11-18 到货", "11月18日前，7天内送达"]) {
+      expect(requestedDeliveryDaysOf(text)).toBeUndefined();
+    }
+    expect(requestedDeliveryDaysOf("7天到中国")).toBe(7);
+    expect(requestedDeliveryDaysOf("七个工作日送达")).toBe(7);
+    expect(requestedDeliveryDaysOf("18日以内送达")).toBe(18);
+  });
+
+  it("clarification 绝对日期不误报能够满足", async () => {
+    const h = makeHandler(10);
+    await offerTermsOf(h);
+    const result = await runWith(h, env("clarification", {
+      questions: [{ field: "general", reason: "能否9月18日到货？" }],
+    }));
+    const message = String(knpEnvelopeOf(result).public_message);
+    expect(message).not.toContain("18 天");
+    expect(message).not.toContain("可以满足");
+    expect(message).toContain("2026-09-24");
   });
 
   it("clarification 的 general 问题带“7天到中国”时仍按交期作答", async () => {

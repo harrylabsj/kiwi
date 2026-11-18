@@ -129,6 +129,9 @@ import { OperatingPlanError } from "../../merchant-core/operating/types.js";
 import { OpportunityError } from "../../merchant-core/opportunity/types.js";
 import { ProposalError } from "../../merchant-core/proposal/types.js";
 import { FollowUpError } from "../../merchant-core/followup/types.js";
+import type { GovernanceFeatureFlags } from "../../merchant-core/context-governance/feature-flags.js";
+import { GovernanceRuntimeError } from "../../merchant-core/ownership/runtime.js";
+import { InstanceOwnershipError } from "../../merchant-core/ownership/instance-ownership.js";
 import { LearningError } from "../../merchant-core/learning/types.js";
 import { OperationsJobsError } from "../../merchant-core/operations-jobs/service.js";
 import {
@@ -357,11 +360,10 @@ export interface MerchantManagementApiOptions {
   workbenchEvents?: WorkbenchEventProjectionStore;
   /** 商家持续经营（v0.2）：经营计划/机会/方案/跟进；未配置时对应路由 404。 */
   merchantOperations?: MerchantOperationsSurface;
-  /**
-   * TOP1-3 学习/自动化写入口的所有权准入（逐次校验，不只启动时判定）。
-   * 缺省不校验（测试/旧装配）；掌握治理所有权的进程应传入。
-   */
-  assertGovernanceOwner?: () => void;
+  governance?: {
+    flags: GovernanceFeatureFlags;
+    write: <T>(work: () => T) => T;
+  };
   quotePreview?: (sku: string, quantity: number) => Promise<WorkbenchQuoteResult>;
   followerSummary?: () => number;
   engagementSummary?: () => { received: number; presented: number; clicked: number };
@@ -606,6 +608,26 @@ export function createMerchantManagementApiHandler(
   // ── 只读路由（认证即鉴权入口；业务授权在服务层逐次复核）────────────────
 
   /** Workbench v1 读取面复用同一应用服务；未实现路由明确失败，不返回假数据。 */
+  function governanceRouteDisabled(rest: string): boolean {
+    if (rest.startsWith("/learning/")) return options.governance?.flags.learning_enabled !== true;
+    if (rest.startsWith("/automation/")) return options.governance?.flags.jobs_enabled !== true;
+    return false;
+  }
+
+  function writeGoverned<T>(work: () => T): T {
+    if (options.governance === undefined) {
+      throw new ManagementError("conflict", "governance runtime is not initialized");
+    }
+    try {
+      return options.governance.write(work);
+    } catch (error) {
+      if (error instanceof GovernanceRuntimeError || error instanceof InstanceOwnershipError) {
+        throw new ManagementError("conflict", "governance ownership is not held by this process");
+      }
+      throw error;
+    }
+  }
+
   async function routeWorkbenchV1Get(
     req: IncomingMessage,
     res: ServerResponse,
@@ -613,6 +635,10 @@ export function createMerchantManagementApiHandler(
     rest: string,
     requestId: string,
   ): Promise<void> {
+    if (governanceRouteDisabled(rest)) {
+      writeWorkbenchProblem(res, "RESOURCE_NOT_FOUND", requestId, "资源不存在", "Workbench API 路由不存在或尚未实现。");
+      return;
+    }
     if (rest === "/products/publication-status") {
       const auth = requireActor(req);
       authorizeOrThrow(auth.ctx, "products:import");
@@ -1271,19 +1297,9 @@ export function createMerchantManagementApiHandler(
     requestId: string,
     url: URL,
   ): Promise<void> {
-    if (
-      options.assertGovernanceOwner !== undefined &&
-      (rest.startsWith("/learning/") || rest.startsWith("/automation/"))
-    ) {
-      // 写前逐次核验所有权：初始化后被接管/租约过期时 fail-closed，不落无栅栏写入。
-      try {
-        options.assertGovernanceOwner();
-      } catch {
-        throw new ManagementError(
-          "conflict",
-          "governance ownership is not held by this process",
-        );
-      }
+    if (governanceRouteDisabled(rest)) {
+      writeWorkbenchProblem(res, "RESOURCE_NOT_FOUND", requestId, "资源不存在", "Workbench API 路由不存在或尚未实现。");
+      return;
     }
     if (options.merchantOperations !== undefined) {
       const ops = options.merchantOperations;
@@ -1441,7 +1457,7 @@ export function createMerchantManagementApiHandler(
         writeJson(
           res,
           201,
-          ops.submitCorrection(
+          writeGoverned(() => ops.submitCorrection(
             body,
             {
               actor_id: auth.ctx.actorId,
@@ -1450,7 +1466,7 @@ export function createMerchantManagementApiHandler(
               permissions: [...auth.ctx.permissions],
             },
             idempotencyKey,
-          ),
+          )),
           { "x-request-id": requestId },
         );
         return;
@@ -1464,7 +1480,7 @@ export function createMerchantManagementApiHandler(
         writeJson(
           res,
           200,
-          ops.promoteCorrection(
+          writeGoverned(() => ops.promoteCorrection(
             pathSegment(promoteCorrectionMatch[1] ?? ""),
             body,
             {
@@ -1474,7 +1490,7 @@ export function createMerchantManagementApiHandler(
               permissions: [...auth.ctx.permissions],
             },
             idempotencyKey,
-          ),
+          )),
           { "x-request-id": requestId },
         );
         return;
@@ -1487,7 +1503,7 @@ export function createMerchantManagementApiHandler(
         writeJson(
           res,
           201,
-          ops.proposeCandidate(
+          writeGoverned(() => ops.proposeCandidate(
             body,
             {
               actor_id: auth.ctx.actorId,
@@ -1496,7 +1512,7 @@ export function createMerchantManagementApiHandler(
               permissions: [...auth.ctx.permissions],
             },
             idempotencyKey,
-          ),
+          )),
           { "x-request-id": requestId },
         );
         return;
@@ -1510,7 +1526,7 @@ export function createMerchantManagementApiHandler(
         writeJson(
           res,
           200,
-          ops.reviseCandidate(
+          writeGoverned(() => ops.reviseCandidate(
             pathSegment(reviseCandidateMatch[1] ?? ""),
             body,
             {
@@ -1520,7 +1536,7 @@ export function createMerchantManagementApiHandler(
               permissions: [...auth.ctx.permissions],
             },
             idempotencyKey,
-          ),
+          )),
           { "x-request-id": requestId },
         );
         return;
@@ -1534,7 +1550,7 @@ export function createMerchantManagementApiHandler(
         writeJson(
           res,
           200,
-          ops.reviewCandidate(
+          writeGoverned(() => ops.reviewCandidate(
             pathSegment(reviewCandidateMatch[1] ?? ""),
             body,
             {
@@ -1544,7 +1560,7 @@ export function createMerchantManagementApiHandler(
               permissions: [...auth.ctx.permissions],
             },
             idempotencyKey,
-          ),
+          )),
           { "x-request-id": requestId },
         );
         return;
@@ -1557,7 +1573,7 @@ export function createMerchantManagementApiHandler(
         writeJson(
           res,
           201,
-          ops.publishRelease(
+          writeGoverned(() => ops.publishRelease(
             body,
             {
               actor_id: auth.ctx.actorId,
@@ -1566,7 +1582,7 @@ export function createMerchantManagementApiHandler(
               permissions: [...auth.ctx.permissions],
             },
             idempotencyKey,
-          ),
+          )),
           { "x-request-id": requestId },
         );
         return;
@@ -1580,7 +1596,7 @@ export function createMerchantManagementApiHandler(
         writeJson(
           res,
           200,
-          ops.rollbackRelease(
+          writeGoverned(() => ops.rollbackRelease(
             pathSegment(rollbackReleaseMatch[1] ?? ""),
             body,
             {
@@ -1590,7 +1606,7 @@ export function createMerchantManagementApiHandler(
               permissions: [...auth.ctx.permissions],
             },
             idempotencyKey,
-          ),
+          )),
           { "x-request-id": requestId },
         );
         return;
@@ -1604,7 +1620,7 @@ export function createMerchantManagementApiHandler(
         writeJson(
           res,
           200,
-          ops.revokeRelease(
+          writeGoverned(() => ops.revokeRelease(
             pathSegment(revokeReleaseMatch[1] ?? ""),
             body,
             {
@@ -1614,7 +1630,7 @@ export function createMerchantManagementApiHandler(
               permissions: [...auth.ctx.permissions],
             },
             idempotencyKey,
-          ),
+          )),
           { "x-request-id": requestId },
         );
         return;
@@ -1624,7 +1640,7 @@ export function createMerchantManagementApiHandler(
         assertWriteGuards(req, auth.sessionId);
         authorizeOrThrow(auth.ctx, "followups:manage");
         const { body } = await readOpsBody();
-        writeJson(res, 201, ops.prepareRule(body), { "x-request-id": requestId });
+        writeJson(res, 201, writeGoverned(() => ops.prepareRule(body)), { "x-request-id": requestId });
         return;
       }
       if (rest === "/automation/rules/activate") {
@@ -1632,7 +1648,7 @@ export function createMerchantManagementApiHandler(
         assertWriteGuards(req, auth.sessionId);
         authorizeOrThrow(auth.ctx, "followups:manage");
         const { body } = await readOpsBody();
-        writeJson(res, 201, ops.activateRule(body), { "x-request-id": requestId });
+        writeJson(res, 201, writeGoverned(() => ops.activateRule(body)), { "x-request-id": requestId });
         return;
       }
       const pauseRuleMatch = /^\/automation\/rules\/([^/]+)\/pause$/.exec(rest);
@@ -1641,7 +1657,7 @@ export function createMerchantManagementApiHandler(
         assertWriteGuards(req, auth.sessionId);
         authorizeOrThrow(auth.ctx, "followups:manage");
         const { body } = await readOpsBody();
-        writeJson(res, 200, ops.pauseRule(pathSegment(pauseRuleMatch[1] ?? ""), body), {
+        writeJson(res, 200, writeGoverned(() => ops.pauseRule(pathSegment(pauseRuleMatch[1] ?? ""), body)), {
           "x-request-id": requestId,
         });
         return;

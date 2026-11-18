@@ -45,6 +45,7 @@ import {
 import type { ActorContext } from "../context-governance/actor-context.js";
 import {
   runCandidateEvaluation,
+  validateEvaluationSuite,
   type EvaluationRunner,
   type EvaluationSuite,
 } from "./evaluation.js";
@@ -966,28 +967,7 @@ export class LearningService {
     requireActor(merchantId, input.actor);
     const candidateId = requireOpaque(input.candidate_id, "candidate_id");
     const contentHash = requireOpaque(input.content_hash, "content_hash", 128);
-    const candidate = this.repository.readCandidate(merchantId, candidateId);
-    if (candidate === undefined) {
-      throw new LearningError("not_found", "candidate_not_found", "候选不存在或不可见");
-    }
-    if (candidate.compiled_artifact_hash !== contentHash) {
-      throw new LearningError(
-        "version_conflict",
-        "content_hash_mismatch",
-        "content_hash 与当前冻结产物不一致；请重新读取候选",
-      );
-    }
-    if (
-      candidate.state === "APPROVED" ||
-      candidate.state === "STALE" ||
-      candidate.state === "EXPIRED"
-    ) {
-      throw new LearningError(
-        "version_conflict",
-        "candidate_state_locked",
-        `候选状态 ${candidate.state} 不可评测`,
-      );
-    }
+    validateEvaluationSuite(input.suite);
     const commandId =
       command.command_id === undefined
         ? undefined
@@ -997,7 +977,8 @@ export class LearningService {
       request: {
         candidate_id: candidateId,
         content_hash: contentHash,
-        suite_version: input.suite.suite_version,
+        suite: input.suite,
+        require_improvement: input.require_improvement ?? true,
       },
     });
     if (commandId !== undefined) {
@@ -1018,31 +999,77 @@ export class LearningService {
         return JSON.parse(existing.result) as LearningEvaluation;
       }
     }
-    const evaluation = await runCandidateEvaluation({
-      repository: this.repository,
-      now: this.now,
-      candidate,
-      suite: input.suite,
-      runner: input.runner,
-      ...(input.budget_cap !== undefined ? { budgetCap: input.budget_cap } : {}),
-      ...(input.require_improvement !== undefined
-        ? { requireImprovement: input.require_improvement }
-        : {}),
+    const candidate = this.repository.readCandidate(merchantId, candidateId);
+    if (candidate === undefined) {
+      throw new LearningError("not_found", "candidate_not_found", "候选不存在或不可见");
+    }
+    if (candidate.compiled_artifact_hash !== contentHash) {
+      throw new LearningError(
+        "version_conflict",
+        "content_hash_mismatch",
+        "content_hash 与当前冻结产物不一致；请重新读取候选",
+      );
+    }
+    if (
+      candidate.state === "APPROVED" ||
+      candidate.state === "REJECTED" ||
+      candidate.state === "STALE" ||
+      candidate.state === "EXPIRED"
+    ) {
+      throw new LearningError(
+        "version_conflict",
+        "candidate_state_locked",
+        `候选状态 ${candidate.state} 不可评测`,
+      );
+    }
+    const evaluationKey = contentDigest({ merchantId, candidateId,
+      artifact: candidate.compiled_artifact_hash, suite: input.suite.suite_version });
+    const configDigest = contentDigest({ suite: input.suite, require_improvement: input.require_improvement ?? true });
+    const keys = [`evaluation:${evaluationKey}`];
+    if (commandId !== undefined) keys.push(`command:${contentDigest({ merchantId, actor: input.actor.actor_id, commandId })}`);
+    const owner = randomUUID();
+    const ttl = 300_000;
+    const assertClaim = (): void => this.repository.assertEvaluationClaim(keys, owner, Date.now());
+    this.repository.transaction(() => {
+      this.repository.claimEvaluation(keys, owner, requestDigest, Date.now(), ttl);
+      this.repository.checkEvaluationConfig(evaluationKey, configDigest, this.repository.findEvaluation(
+        merchantId, candidateId, candidate.compiled_artifact_hash, input.suite.suite_version,
+      )?.runs_completed ?? 0);
+      if (commandId !== undefined) {
+        const existing = this.repository.readIdempotent(merchantId, input.actor.actor_id, "learning.evaluateCandidate", commandId);
+        if (existing !== undefined && existing.requestDigest !== requestDigest) {
+          throw new LearningError("idempotency_conflict", "command_replay_conflict", "同一 command_id 已用于不同评测请求");
+        }
+      }
     });
-    if (commandId !== undefined) {
+    const heartbeat = setInterval(() => {
+      try { this.repository.renewEvaluationClaim(keys, owner, Date.now(), ttl); } catch { /* The next fenced operation fails closed. */ }
+    }, 30_000);
+    heartbeat.unref();
+    try {
+      if (commandId !== undefined) {
+        const existing = this.repository.readIdempotent(merchantId, input.actor.actor_id, "learning.evaluateCandidate", commandId);
+        if (existing !== undefined) return JSON.parse(existing.result) as LearningEvaluation;
+      }
+      const evaluation = await runCandidateEvaluation({
+        repository: this.repository, now: this.now, candidate, suite: input.suite, runner: input.runner,
+        assertClaim,
+        setAttempt: (attempt) => this.repository.setEvaluationAttempt(evaluationKey, attempt),
+        ...(input.budget_cap !== undefined ? { budgetCap: input.budget_cap } : {}),
+        ...(input.require_improvement !== undefined ? { requireImprovement: input.require_improvement } : {}),
+      });
       this.repository.transaction(() => {
-        this.repository.saveIdempotent({
-          merchantId,
-          actorId: input.actor.actor_id,
-          operation: "learning.evaluateCandidate",
-          commandId,
-          requestDigest,
-          result: evaluation,
-          createdAt: this.now(),
+        assertClaim();
+        if (commandId !== undefined && evaluation.run_status === "completed") this.repository.saveIdempotent({
+          merchantId, actorId: input.actor.actor_id, operation: "learning.evaluateCandidate",
+          commandId, requestDigest, result: evaluation, createdAt: this.now(),
         });
       });
+      return evaluation;
+    } finally {
+      clearInterval(heartbeat);
+      this.repository.transaction(() => this.repository.releaseEvaluationClaim(keys, owner));
     }
-    return evaluation;
   }
 
   getEvaluation(merchantId: string, evaluationId: string): LearningEvaluation | undefined {

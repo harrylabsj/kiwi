@@ -230,6 +230,11 @@ export class BackgroundBudgetStore {
     this.now = options.now;
   }
 
+  /** 调用方须使用同一连接，才能将预算与任务状态置于同一事务。 */
+  usesDatabase(db: DatabaseSync): boolean {
+    return this.db === db;
+  }
+
   private nowUtc(): string {
     const ms = Date.parse(this.now());
     if (!Number.isFinite(ms)) {

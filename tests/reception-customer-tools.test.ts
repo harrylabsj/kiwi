@@ -4,7 +4,8 @@
  * 运行中撤权/删除使快照失效，模型运行回退确定性路径。
  */
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
+import { createConnection } from "node:net";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -16,6 +17,14 @@ import {
   type Model,
 } from "@earendil-works/pi-ai";
 
+import { loadProfile } from "../src/config/profile.js";
+import { writeAdminCredentials } from "../src/auth/merchant-sessions.js";
+import { startStandaloneMerchantWorkbench } from "../src/merchant/workbench-server.js";
+import { startMemoryProposalServer, requestMemoryProposal } from "../src/merchant-core/customer-memory/private-transport.js";
+import { createReceptionMemoryWriter } from "../src/merchant-core/customer-memory/reception-writer.js";
+import { initializeGovernanceRuntime } from "../src/merchant-core/ownership/runtime.js";
+import { parseGovernanceFeatureFlags } from "../src/merchant-core/context-governance/feature-flags.js";
+import { migrateMerchantOpsSchema } from "../src/merchant-core/ops/schema.js";
 import { registerGovernanceLedgers } from "../src/merchant-core/migrations/ledgers.js";
 import { createActorContext } from "../src/merchant-core/context-governance/actor-context.js";
 import { SourceGovernanceService } from "../src/merchant-core/context-governance/source-governance.js";
@@ -163,7 +172,7 @@ describe("接待客户记忆工具（M3-6）", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("contextFor 返回绑定主体/授权版本/记忆版本；无绑定返回 undefined", () => {
+  it("contextFor 返回绑定主体/授权版本/记忆版本；无绑定返回 undefined", async () => {
     const context = provider.contextFor(MERCHANT, IDENTITY);
     expect(context).toMatchObject({
       merchant_id: MERCHANT,
@@ -177,7 +186,7 @@ describe("接待客户记忆工具（M3-6）", () => {
     expect(provider.contextFor(MERCHANT, "unknown-buyer")).toBeUndefined();
     expect(provider.recall(context!)[0]).toMatchObject({ key: "unit", value_ref: "箱" });
     expect(provider.search(context!, { query: "纸箱包装" }).status).toBe("ok");
-    const proposed = provider.propose(context!, {
+    const proposed = await provider.propose(context!, {
       namespace: "constraint",
       key: "delivery",
       value_ref: "上海",
@@ -185,6 +194,124 @@ describe("接待客户记忆工具（M3-6）", () => {
       source_kind: "explicit",
     });
     expect(proposed.state).toBe("candidate");
+  });
+
+  it("私有通道由 fenced 工作台核验并写入；失效快照和失权均拒绝", async () => {
+    migrateMerchantOpsSchema(db);
+    const runtime = initializeGovernanceRuntime({ db, merchantId: MERCHANT, ownerId: "workbench", flags: parseGovernanceFeatureFlags({ memory_enabled: true }), now: () => NOW, heartbeatMs: 3_600_000 });
+    const writer = createReceptionMemoryWriter({ db, merchantId: MERCHANT, now: () => NOW, write: (work) => runtime.writeUnderOwnership(work) });
+    const socketPath = join(dir, "memory.sock");
+    const server = await startMemoryProposalServer(socketPath, writer);
+    const context = provider.contextFor(MERCHANT, IDENTITY)!;
+    const input = { namespace: "constraint" as const, key: "delivery", value_ref: "上海", value_type: "region", source_kind: "inferred" as const };
+    try {
+      const result = await requestMemoryProposal(socketPath, context, input);
+      expect(result.state).toBe("needs_review");
+      expect(db.prepare("SELECT value_ref FROM customer_memories WHERE memory_id = ?").get(result.memory_id)).toMatchObject({ value_ref: "上海" });
+      await expect(startMemoryProposalServer(socketPath, () => { throw new Error("unexpected"); })).rejects.toThrow("already exists");
+      await expect(requestMemoryProposal(socketPath, { ...context, binding_epoch: context.binding_epoch + 1 }, input)).rejects.toThrow();
+      await expect(requestMemoryProposal(socketPath, { ...context, merchant_id: "other" }, input)).rejects.toThrow();
+      await expect(requestMemoryProposal(socketPath, { ...context, grant_versions: {} }, input)).rejects.toThrow();
+      await expect(requestMemoryProposal(socketPath, { ...context, data_scope_epochs: {} }, input)).rejects.toThrow();
+      runtime.stop();
+      await expect(requestMemoryProposal(socketPath, context, input)).rejects.toThrow();
+    } finally {
+      runtime.stop();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("独立工作台接收只读接待进程的提案，关闭后拒绝写入", async () => {
+    const socketPath = join(dir, "memory.sock");
+    const profilePath = join(dir, "profile.yaml");
+    writeFileSync(profilePath, `runtime_version: 0.5.0
+protocol_version: shopping.negotiation/0.1
+agent_id: merchant-agent:m-1
+role: merchant
+owner_id: m-1
+commerce:
+  base_url: http://127.0.0.1:8765
+  token_env: SHOPPING_AGENT_TOKEN
+  backend: local_marketplace
+model:
+  provider: fake
+  model: fake-merchant-model
+runtime:
+  mode: once
+  poll_interval_seconds: 5
+  turn_timeout_seconds: 90
+  max_model_steps: 4
+  max_retries: 2
+merchant_policy:
+  delivery_lead_days: 7
+`);
+    const profile = loadProfile(profilePath);
+    writeAdminCredentials(dir, { principalId: profile.agent_id, merchantId: MERCHANT, password: "strong-pw-123" });
+    process.env.KIWI_GOVERNANCE_MEMORY_ENABLED = "true";
+    process.env.KIWI_MEMORY_SOCKET_PATH = socketPath;
+    let handle: Awaited<ReturnType<typeof startStandaloneMerchantWorkbench>>;
+    try {
+      handle = await startStandaloneMerchantWorkbench({ profile, dataDir: dir, host: "127.0.0.1", port: 0, log: () => undefined });
+    } finally {
+      delete process.env.KIWI_GOVERNANCE_MEMORY_ENABLED;
+      delete process.env.KIWI_MEMORY_SOCKET_PATH;
+    }
+    const readOnly = new SqliteCustomerMemoryProvider({ dbPath, now: () => NOW, allowWrites: false, socketPath });
+    try {
+      const context = readOnly.contextFor(MERCHANT, IDENTITY)!;
+      const input = { namespace: "constraint" as const, key: "region", value_ref: "上海", value_type: "region", source_kind: "explicit" as const };
+      expect(readOnly.canPropose(context)).toBe(true);
+      const result = await readOnly.propose(context, input);
+      expect(db.prepare("SELECT value_ref FROM customer_memories WHERE memory_id = ?").get(result.memory_id)).toMatchObject({ value_ref: "上海" });
+      await handle.close();
+      const before = db.prepare("SELECT count(*) AS n FROM customer_memories").get();
+      await expect(readOnly.propose(context, input)).rejects.toThrow();
+      expect(db.prepare("SELECT count(*) AS n FROM customer_memories").get()).toEqual(before);
+    } finally {
+      readOnly.close();
+      await handle.close();
+    }
+  });
+
+  it("私有通道按字节处理拆分中文并拒绝超大请求", async () => {
+    const socketPath = join(dir, "memory.sock");
+    let calls = 0;
+    let captured = "";
+    const server = await startMemoryProposalServer(socketPath, (_context, input) => {
+      calls += 1;
+      captured = input.value_ref;
+      return { memory_id: "mem-test", state: "candidate" };
+    });
+    async function send(chunks: Buffer[]): Promise<void> {
+      await new Promise<void>((resolve, reject) => {
+        const socket = createConnection(socketPath);
+        socket.on("connect", () => { for (const chunk of chunks) socket.write(chunk); socket.end(); });
+        socket.on("data", () => undefined);
+        socket.on("end", resolve);
+        socket.on("close", () => resolve());
+        socket.on("error", reject);
+      });
+    }
+    try {
+      const body = Buffer.from(JSON.stringify({ context: {}, input: { value_ref: "上海" } }));
+      const start = body.indexOf(Buffer.from("上"));
+      await send([body.subarray(0, start + 1), body.subarray(start + 1)]);
+      expect(captured).toBe("上海");
+      await send([Buffer.alloc(20_000, 32)]);
+      expect(calls).toBe(1);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("无写通道或仅历史授权时禁用提案能力", () => {
+    const readOnly = new SqliteCustomerMemoryProvider({ dbPath, now: () => NOW, allowWrites: false });
+    const socketProvider = new SqliteCustomerMemoryProvider({ dbPath, now: () => NOW, allowWrites: false, socketPath: join(dir, "memory.sock") });
+    try {
+      expect(readOnly.canPropose(readOnly.contextFor(MERCHANT, IDENTITY)!)).toBe(false);
+      db.prepare("UPDATE data_grants SET status = 'REVOKED' WHERE purpose = 'customer_memory'").run();
+      expect(socketProvider.canPropose(socketProvider.contextFor(MERCHANT, IDENTITY)!)).toBe(false);
+    } finally { readOnly.close(); socketProvider.close(); }
   });
 
   it("运行时可 recall/propose；提案保持 candidate；工具计入调用", async () => {

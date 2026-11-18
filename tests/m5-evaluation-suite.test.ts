@@ -159,7 +159,7 @@ describe("真实 provider runner 适配", () => {
       } satisfies ReceptionAcceptanceCriteria,
     };
     const baseline = await runner({ scenario, variant: "baseline", attempt: 1, candidate });
-    const variant = await runner({ scenario, variant: "candidate", attempt: 1, candidate });
+    const variant = await runner({ scenario, variant: "candidate", attempt: 1, candidate, baseline_passed: false });
     expect(baseline).toMatchObject({ passed: false, hard_gate_failures: 0 });
     expect(variant).toMatchObject({
       passed: true,
@@ -197,7 +197,7 @@ describe("真实 provider runner 适配", () => {
         hard_gates: ["customer_delivery_enabled"],
       } satisfies ReceptionAcceptanceCriteria,
     };
-    const outcome = await runner({ scenario, variant: "candidate", attempt: 1, candidate });
+    const outcome = await runner({ scenario, variant: "candidate", attempt: 1, candidate, baseline_passed: false });
     expect(outcome.passed).toBe(false);
     expect(outcome.hard_gate_failures).toBeGreaterThan(0);
   });
