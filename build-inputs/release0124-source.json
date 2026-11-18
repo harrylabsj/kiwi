@@ -6780,7 +6780,7 @@
     },
     {
       "path": "tests/buyer-tool-contract.test.ts",
-      "sha256": "sha256:df5b09a6114e5f2b00beb6416c716ed62b4eba81e24da50bf70617a2edaa5338"
+      "sha256": "sha256:bd96a2dd573cf5a541e3b43d66ccfdcf13f741f0cbf73fba996ca76295c5996d"
     },
     {
       "path": "tests/buyer-turn.test.ts",
@@ -7064,7 +7064,7 @@
     },
     {
       "path": "tests/fixtures/buyer-tool-contract.json",
-      "sha256": "sha256:6a0b520de25e7e5127e3ac7f35afc83d41106a40f5cb2e894bbc5607d9d9df92"
+      "sha256": "sha256:73e52ee78e9df0fd089f60d7906b65aa58607956f5014a9d75312bc675757cc8"
     },
     {
       "path": "tests/fixtures/dual-source-search-cases.json",
@@ -7976,7 +7976,7 @@
     },
     {
       "path": "tests/npm-cloud-leaf-metadata.test.ts",
-      "sha256": "sha256:22fe3c54a4cb1c3442f1e0d6f4ea20219601d22e5b18e81b157866bd41246ff4"
+      "sha256": "sha256:76a3442430bf8ee60bfabdb602815bea5497bfa0d828b118290201535261f0eb"
     },
     {
       "path": "tests/npm-official-binlinks.test.ts",
