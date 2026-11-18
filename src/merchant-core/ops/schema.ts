@@ -24,7 +24,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const MERCHANT_OPS_SCHEMA_VERSION = 3;
+export const MERCHANT_OPS_SCHEMA_VERSION = 4;
 
 const MIGRATION_9 = `
 -- 商家持续经营 M1（设计 v0.2 §5.1/§16/§17.1）：经营计划与命令幂等。
@@ -465,6 +465,35 @@ ALTER TABLE followup_attempts ADD COLUMN outcome_evidence_json TEXT;
 CREATE INDEX idx_followup_rule ON followup_tasks (merchant_id, rule_id, status, due_at);
 `;
 
+/**
+ * M6：P1 客户通知（设计 v1.1 §16.3）。
+ * `followup_outbox` 仍是唯一持久发送真相；扩展列全部可空，旧 PENDING 行
+ * 保持兼容。单流在途由 repository 在事务内校验（SQLite 无部分唯一索引可
+ * 同时覆盖 PENDING/UNKNOWN 且不阻塞排队）。
+ */
+const MIGRATION_OPS_V4 = `
+ALTER TABLE followup_outbox ADD COLUMN stream_key TEXT;
+ALTER TABLE followup_outbox ADD COLUMN seq INTEGER;
+ALTER TABLE followup_outbox ADD COLUMN payload_digest TEXT;
+ALTER TABLE followup_outbox ADD COLUMN valid_until TEXT;
+ALTER TABLE followup_outbox ADD COLUMN binding_id TEXT;
+ALTER TABLE followup_outbox ADD COLUMN binding_epoch INTEGER;
+ALTER TABLE followup_outbox ADD COLUMN subscription_id TEXT;
+ALTER TABLE followup_outbox ADD COLUMN subscription_epoch INTEGER;
+ALTER TABLE followup_outbox ADD COLUMN purpose TEXT;
+ALTER TABLE followup_outbox ADD COLUMN channel TEXT;
+ALTER TABLE followup_outbox ADD COLUMN source_grants_json TEXT;
+ALTER TABLE followup_outbox ADD COLUMN lease_owner TEXT;
+ALTER TABLE followup_outbox ADD COLUMN lease_expires_at TEXT;
+ALTER TABLE followup_outbox ADD COLUMN started_at TEXT;
+ALTER TABLE followup_outbox ADD COLUMN accepted_at TEXT;
+ALTER TABLE followup_outbox ADD COLUMN read_at TEXT;
+ALTER TABLE followup_outbox ADD COLUMN read_evidence_ref TEXT;
+ALTER TABLE followup_outbox ADD COLUMN blocked_reason TEXT;
+CREATE INDEX idx_followup_outbox_stream ON followup_outbox (merchant_id, stream_key, status);
+CREATE INDEX idx_followup_outbox_due ON followup_outbox (merchant_id, status, valid_until);
+`;
+
 const MIGRATIONS: Readonly<Record<number, string>> = {
   1: `${MIGRATION_9}
 ${MIGRATION_10}
@@ -472,6 +501,7 @@ ${MIGRATION_11}
 ${MIGRATION_12}`,
   2: MIGRATION_OWNERSHIP,
   3: MIGRATION_OPS_V3,
+  4: MIGRATION_OPS_V4,
 };
 
 export function migrateMerchantOpsSchema(

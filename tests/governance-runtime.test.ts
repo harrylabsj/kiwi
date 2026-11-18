@@ -277,7 +277,7 @@ describe("governance 运行时接线（M1 收尾）", () => {
         legacy
           .prepare("SELECT version FROM merchant_ops_schema_migrations ORDER BY version")
           .all(),
-      ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
+      ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
       // 随后 facade 打开（完整迁移）幂等，不干扰已持有的所有权。
       migrateMerchantOpsSchema(legacy);
       expect(runtime.assertOwner({ expected_fencing: 1 }).fencing).toBe(1);
