@@ -59,6 +59,8 @@ export interface ReceptionEvaluationRunnerOptions {
   readonly streamFn: StreamFn;
   /** 可选：为基线/候选提供独立脚本（测试/对照夹具）；缺省沿用 streamFn。 */
   readonly streamFnForVariant?: (variant: "baseline" | "candidate") => StreamFn;
+  /** 每个模型流调用可由可信传输适配器绑定调度标识；不代表 HTTP 请求或重试次数。 */
+  readonly streamFnForDispatch?: (binding: { readonly dispatch_id: string; readonly stream_ordinal: number }, streamFn: StreamFn) => StreamFn;
   readonly model: Model<Api>;
   readonly productSource?: ReceptionProductSource;
   readonly policy?: () => MerchantPolicy | undefined;
@@ -111,15 +113,20 @@ export function createReceptionEvaluationRunner(
   const questions = options.questionRegistry ?? DEFAULT_QUESTION_SPEC_REGISTRY;
   const baselineResults = new Map<string, boolean>();
 
-  function runtimeFor(variant: "baseline" | "candidate", candidate: LearningCandidate): ReceptionAgentRuntime {
+  function runtimeFor(variant: "baseline" | "candidate", candidate: LearningCandidate, dispatchId?: string): ReceptionAgentRuntime {
     const catalog =
       variant === "candidate"
         ? createStaticSkillCatalog([candidateBinding(candidate)])
         : createStaticSkillCatalog([]);
-    const streamFn =
+    const selectedStreamFn =
       options.streamFnForVariant !== undefined
         ? options.streamFnForVariant(variant)
         : options.streamFn;
+    let ordinal = 0;
+    const correlate = options.streamFnForDispatch;
+    const streamFn: StreamFn = correlate !== undefined && dispatchId !== undefined && dispatchId.length > 0
+      ? (...args) => correlate({ dispatch_id: dispatchId, stream_ordinal: ++ordinal }, selectedStreamFn)(...args)
+      : selectedStreamFn;
     return createPiReceptionRuntime({
       streamFn,
       model: options.model,
@@ -141,7 +148,7 @@ export function createReceptionEvaluationRunner(
     const criteria = asCriteria(scenario);
     const now = options.now();
     const registry = new InMemoryFactRegistry();
-    const runtime = runtimeFor(variant, candidate);
+    const runtime = runtimeFor(variant, candidate, dispatch_id);
     const outcome = await runtime.run({
       merchantId: options.merchantId,
       identity: `eval:${scenario.scenario_id}:${variant}:${attempt}:${dispatch_id ?? "unbound"}`,

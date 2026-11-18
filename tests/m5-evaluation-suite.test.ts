@@ -3,7 +3,12 @@
  * 套件必须 8/6/6；初始技能通过固定契约编译；runner 同夹具比较基线与候选，
  * 硬门（禁止 block/工具/文本）计入失败。
  */
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { registerGovernanceLedgers } from "../src/merchant-core/migrations/ledgers.js";
+import { LearningRepository } from "../src/merchant-core/learning/repository.js";
+import { LearningService } from "../src/merchant-core/learning/service.js";
+import { createActorContext } from "../src/merchant-core/context-governance/actor-context.js";
 import {
   fauxAssistantMessage,
   fauxToolCall,
@@ -173,6 +178,67 @@ describe("真实 provider runner 适配", () => {
       question_ids: ["q_missing_quantity_v1"],
     });
     expect(baseline.diagnostics).toMatchObject({ question_ids: [] });
+  });
+
+  it("传输适配器按评测调用绑定调度标识和模型流序号", async () => {
+    const bindings: Array<{ dispatch_id: string; stream_ordinal: number }> = [];
+    const makeStream = () => createScriptedFakeStreamFn([
+      fauxAssistantMessage([fauxToolCall("propose_reply", { blocks: [{ kind: "next_step", action: "send_rfq" }] })]),
+      fauxAssistantMessage("完成"),
+    ]).streamFn;
+    const runner = createReceptionEvaluationRunner({
+      merchantId: "m-1", streamFn: makeStream(), streamFnForVariant: () => makeStream(), model, now: () => NOW,
+      streamFnForDispatch: (binding, streamFn) => { bindings.push(binding); return streamFn; },
+    });
+    const scenario = { scenario_id: "correlation", kind: "target" as const, input: { text: "请报价" } };
+    const candidate = candidateFixture();
+    await runner({ scenario, variant: "baseline", attempt: 1, candidate, dispatch_id: "dispatch-first" });
+    await runner({ scenario, variant: "baseline", attempt: 2, candidate, dispatch_id: "dispatch-second" });
+    expect(bindings).toEqual([
+      { dispatch_id: "dispatch-first", stream_ordinal: 1 },
+      { dispatch_id: "dispatch-first", stream_ordinal: 2 },
+      { dispatch_id: "dispatch-second", stream_ordinal: 1 },
+      { dispatch_id: "dispatch-second", stream_ordinal: 2 },
+    ]);
+    await runner({ scenario, variant: "baseline", attempt: 3, candidate });
+    expect(bindings).toHaveLength(4);
+    const unconfigured = createReceptionEvaluationRunner({ merchantId: "m-1", streamFn: makeStream(), model, now: () => NOW });
+    expect(await unconfigured({ scenario, variant: "baseline", attempt: 1, candidate, dispatch_id: "dispatch-opt-out" })).toMatchObject({ passed: true, hard_gate_failures: 0 });
+    expect(bindings).toHaveLength(4);
+  });
+
+  it("适配器收到的标识与账本中已派发记录一致", async () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      registerGovernanceLedgers(db);
+      const repository = new LearningRepository({ db });
+      const service = new LearningService({ repository, now: () => NOW });
+      const actor = createActorContext({ merchant_id: "m-1", actor_id: "admin", auth_strength: "verified", subject_binding: "organization", capabilities: ["learning:manage"] });
+      const correction = service.submitCorrection({ merchant_id: "m-1", actor, correction_text: "单位不明确时先询问" });
+      const promoted = service.promoteCorrection({ merchant_id: "m-1", actor, correction_id: correction.correction_id, expected_revision: 1 });
+      const candidate = service.proposeCandidate({ merchant_id: "m-1", actor, case_ids: [promoted.case_id], skill_key: "trial-unit-clarification", trigger: "单位不明确时询问", proposed_steps: [{ action_ref: "get_commercial_facts" }, { action_ref: "ask_registered_question", question_id: "q_unit_mismatch_v1", guard_ref: "unit_unresolved" }], reason: "避免误换算" });
+      const { streamFn } = createScriptedFakeStreamFn([
+        fauxAssistantMessage([fauxToolCall("propose_reply", { blocks: [{ kind: "next_step", action: "send_rfq" }] })]),
+        fauxAssistantMessage("完成"),
+      ]);
+      const observed: Array<{ binding: { dispatch_id: string; stream_ordinal: number }; persisted: { dispatch_id: string; phase: string } }> = [];
+      const runner = createReceptionEvaluationRunner({ merchantId: "m-1", streamFn, model, now: () => NOW,
+        streamFnForDispatch: (binding, stream) => {
+          const row = db.prepare("SELECT pending_attempt FROM learning_evaluation_config").get() as { pending_attempt: string };
+          observed.push({ binding, persisted: JSON.parse(row.pending_attempt) as { dispatch_id: string; phase: string } });
+          return stream;
+        },
+      });
+      repository.updateEvaluation = () => { throw new Error("injected_after_receipt"); };
+      await expect(service.evaluateCandidate({ merchant_id: "m-1", actor, candidate_id: candidate.candidate_id, content_hash: candidate.compiled_artifact_hash, suite: M5_EVALUATION_SUITE, runner })).rejects.toThrow("injected_after_receipt");
+      expect(observed).toHaveLength(2);
+      expect(observed.map(({ binding }) => binding.stream_ordinal)).toEqual([1, 2]);
+      for (const { binding, persisted } of observed) {
+        expect(persisted.phase).toBe("dispatched");
+        expect(binding.dispatch_id).toBe(persisted.dispatch_id);
+      }
+      expect(observed[0]!.binding.dispatch_id).toBe(observed[1]!.binding.dispatch_id);
+    } finally { db.close(); }
   });
 
   it("模型正常结束但未提出计划时记录质量失败", async () => {
