@@ -32,13 +32,15 @@ describe("功能开关（设计 §20.1 / 收尾决议 §1.2）", () => {
     expect(flags.customer_delivery_enabled).toBe(false);
   });
 
-  it("试图启用 customer_delivery 直接失败（P0 固定关闭，无试开路径）", () => {
-    expect(() => parseGovernanceFeatureFlags({ customer_delivery_enabled: true })).toThrowError(
-      ContextGovernanceError,
-    );
-    expect(() =>
-      loadGovernanceFeatureFlagsFromEnv({ KIWI_GOVERNANCE_CUSTOMER_DELIVERY_ENABLED: "true" }),
-    ).toThrowError(ContextGovernanceError);
+  it("P1 明确授权后可启用 customer_delivery；默认仍关闭", () => {
+    expect(parseGovernanceFeatureFlags({ customer_delivery_enabled: true })).toMatchObject({
+      customer_delivery_enabled: true,
+    });
+    expect(
+      loadGovernanceFeatureFlagsFromEnv({ KIWI_GOVERNANCE_CUSTOMER_DELIVERY_ENABLED: "true" })
+        .customer_delivery_enabled,
+    ).toBe(true);
+    expect(parseGovernanceFeatureFlags(undefined).customer_delivery_enabled).toBe(false);
   });
 
   it("严格 schema：未知字段与非布尔值拒绝", () => {
