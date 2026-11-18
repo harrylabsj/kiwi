@@ -148,14 +148,25 @@ export class SqliteReceptionSkillCatalog implements ReceptionSkillCatalog {
         };
   }
 
+  /**
+   * 加载运行快照中已固定的产物（A10）。
+   *
+   * RETIRED 不再分配给新运行，但已固定且仍兼容的在途运行可完成；REVOKED
+   * 一律拒绝。调用方只在运行快照包含该 release 时才会请求，因此这里不
+   * 依赖当前生效指针。
+   */
   loadArtifact(
     merchantId: string,
     skillKey: string,
     releaseId: string,
   ): ReceptionSkillBinding | undefined {
     const rows = this.rows(
-      `${ACTIVE_BINDINGS_SQL.replace("ORDER BY r.skill_key ASC", "")}
-         AND p.skill_key = ? AND p.release_id = ?`,
+      `SELECT r.release_id, r.skill_key, r.trigger_text, r.generation, r.artifact_hash,
+              r.compiled_artifact_json, r.question_schema_version, r.tool_contract_digest,
+              r.revocation_epoch
+         FROM skill_releases r
+        WHERE r.merchant_id = ? AND r.skill_key = ? AND r.release_id = ?
+          AND r.state IN ('ACTIVE','RETIRED') AND r.revoked_at IS NULL`,
       merchantId,
       skillKey,
       releaseId,

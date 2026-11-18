@@ -140,9 +140,36 @@ describe("接待技能目录（M2-6）", () => {
     expect(
       catalog.loadArtifact(MERCHANT, "trial-unit-clarification", release.release_id),
     ).toBeDefined();
-    expect(catalog.loadArtifact(MERCHANT, "trial-unit-clarification", retired.release_id)).toBeUndefined();
+    // RETIRED 不再分配给新运行，但已固定快照的运行仍可加载（A10）。
+    expect(catalog.loadArtifact(MERCHANT, "price-objection", retired.release_id)).toBeDefined();
     // 跨商家空目录。
     expect(catalog.activeBindings("m-2")).toEqual([]);
+  });
+
+  it("A10：普通升级不混版本；已固定旧版本的运行可继续加载", () => {
+    const first = seed({ skillKey: "trial-unit-clarification" });
+    const second = seed({ skillKey: "trial-unit-clarification" });
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.prepare("UPDATE skill_releases SET state = 'RETIRED' WHERE release_id = ?").run(
+        first.release_id,
+      );
+    } finally {
+      db.close();
+    }
+    const bindings = catalog.activeBindings(MERCHANT);
+    expect(bindings).toHaveLength(1);
+    expect(bindings[0]!.release_id).toBe(second.release_id);
+    expect(catalog.currentBinding(MERCHANT, "trial-unit-clarification")?.release_id).toBe(
+      second.release_id,
+    );
+    // 老运行 pinned 的 release 仍可加载，不因升级中断。
+    expect(
+      catalog.loadArtifact(MERCHANT, "trial-unit-clarification", first.release_id),
+    ).toBeDefined();
+    expect(
+      catalog.loadArtifact(MERCHANT, "trial-unit-clarification", second.release_id),
+    ).toBeDefined();
   });
 
   it("撤回/退役后立即不可见", () => {
@@ -157,9 +184,10 @@ describe("接待技能目录（M2-6）", () => {
       db.close();
     }
     expect(catalog.activeBindings(MERCHANT)).toEqual([]);
+    // 指针清空不影响已固定该 release 的在途运行加载；REVOKED 才阻断。
     expect(
       catalog.loadArtifact(MERCHANT, "trial-unit-clarification", release.release_id),
-    ).toBeUndefined();
+    ).toBeDefined();
   });
 
   it("摘要最多 5 项 / 600 字并标记截断；不含正文", () => {

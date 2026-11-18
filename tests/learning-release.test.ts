@@ -316,6 +316,41 @@ describe("审核/发布/回滚/撤回（M2-5）", () => {
     );
   });
 
+  it("A11：回滚到不兼容/已删除版本被拒绝", async () => {
+    const first = await readyCandidate();
+    const review1 = await approved(first.candidateId, first.contentHash, first.evaluationId);
+    const release1 = service.publishRelease({
+      merchant_id: "m-1",
+      actor: actor(OWNER),
+      approval_ref: review1.approval_ref,
+      expected_generation: 0,
+    });
+    const second = await readyCandidate({ text: "第二个抽象流程" });
+    const review2 = await approved(second.candidateId, second.contentHash, second.evaluationId);
+    const release2 = service.publishRelease({
+      merchant_id: "m-1",
+      actor: actor(OWNER),
+      approval_ref: review2.approval_ref,
+      expected_generation: 1,
+    });
+    // 模拟历史版本产物损坏/不兼容：回滚前必须重新核验冻结产物。
+    db.prepare("UPDATE skill_releases SET artifact_hash = ? WHERE release_id = ?").run(
+      "sha256:incompatible",
+      release1.release_id,
+    );
+    expectLearningError(
+      () =>
+        service.rollbackRelease({
+          merchant_id: "m-1",
+          actor: actor(OWNER),
+          target_release_id: release1.release_id,
+          expected_generation: release2.generation,
+          reason: "回滚到不兼容版本",
+        }),
+      "release_incompatible",
+    );
+  });
+
   it("撤回：当前生效版本 REVOKED、清空指针、revocation_epoch+1；同批准不能重新发布", async () => {
     const { candidateId, contentHash, evaluationId } = await readyCandidate();
     const review = await approved(candidateId, contentHash, evaluationId);

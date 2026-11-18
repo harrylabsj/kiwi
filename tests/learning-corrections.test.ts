@@ -366,4 +366,25 @@ describe("LearningService：纠正与案例（M2-2）", () => {
       "case_refs_too_many",
     );
   });
+
+  it("A15：商家 B 读不到商家 A 的纠正/案例（无存在性泄露）", () => {
+    const correction = submit();
+    const promoted = service.promoteCorrection({
+      merchant_id: "m-1",
+      actor: actor(),
+      correction_id: correction.correction_id,
+      expected_revision: 1,
+    });
+    expect(service.getCorrection("m-2", correction.correction_id)).toBeUndefined();
+    expect(service.listCorrections("m-2")).toEqual([]);
+    expect(service.getCase("m-2", promoted.case_id)).toBeUndefined();
+    expect(() =>
+      service.promoteCorrection({
+        merchant_id: "m-2",
+        actor: actor({ merchantId: "m-2" }),
+        correction_id: correction.correction_id,
+        expected_revision: 1,
+      }),
+    ).toThrowError(LearningError);
+  });
 });
