@@ -453,12 +453,18 @@ export function createQuoteHistoryAccess(options: {
     prune(merchantId) {
       // A separate Workbench writer performs its own maintenance.
       if (remote || !existsSync(options.dbPath)) return;
-      const connection = writable();
-      if (connection.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'published_offers'").get() === undefined) return;
-      inImmediateTransaction(connection, () => {
-        assertLocalWriter(connection, merchantId, options.now(), options.assertOwner);
-        new QuoteHistoryStore({ db: connection, now: options.now }).pruneForMerchant(merchantId);
-      });
+      // Maintenance is periodic and must not keep a writer open on an idle node.
+      const connection = new DatabaseSync(options.dbPath);
+      try {
+        connection.exec("PRAGMA busy_timeout = 3000");
+        if (connection.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'published_offers'").get() === undefined) return;
+        inImmediateTransaction(connection, () => {
+          assertLocalWriter(connection, merchantId, options.now(), options.assertOwner);
+          new QuoteHistoryStore({ db: connection, now: options.now }).pruneForMerchant(merchantId);
+        });
+      } finally {
+        connection.close();
+      }
     },
     close: () => { db?.close(); writeDb?.close(); },
   };
