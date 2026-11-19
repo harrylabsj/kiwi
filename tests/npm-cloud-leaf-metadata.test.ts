@@ -13,8 +13,8 @@ import {assertBundledEdges} from "../scripts/lib/npm-bundled-edges.mjs";
 // runs toolchain() on it, so the checkpoint can only stay valid while its
 // manifest matches the npm CI installs. The checkpoint must be a commit that
 // exists in the published history (a pre-merge local SHA is not fetchable by CI).
-const VERIFIED_SOURCE = "850eeaaa6fb88fbe14bbd1b771f3fe2954d24eb9";
-const VERIFIED_CONTRACT_SHA = "5e43214efe80fc52e46705958ac8eca034d8eac4b9ffb9a00aed9cdc65cda8d8";
+const VERIFIED_SOURCE = "8ce4e0e2531d63bfd7bdd6afd8e2157e309ff00d";
+const VERIFIED_CONTRACT_SHA = "8e49bb10d0cfa160620ce2a09680004ecf0404474386b80365eaa79c438505bc";
 const VERIFIED_GUARD_CLOSURE = {
   "scripts/lib/npm-shipping.mjs": "236a075d447cf1f40d6f97530f03892659135686cdedd227aff5ba4c916e8ffb",
   "scripts/check-install-toolchain.mjs": "ccb86a2707cb23f385f6428eb8c3f28df9ad0c0fe59b584e2b29ffe4eafd9c69",
