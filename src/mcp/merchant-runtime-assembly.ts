@@ -41,6 +41,7 @@ import { DefaultMerchantIntelligenceBackend } from "../agent/merchant/intelligen
 import { HttpMerchantClient } from "../agent/merchant/merchant-client.js";
 import type { MerchantClient } from "../agent/merchant/types.js";
 import { createReceptionMemoryWriter, type ReceptionMemoryWriter } from "../merchant-core/customer-memory/reception-writer.js";
+import { CustomerDeliveryRepository } from "../merchant-core/customer-delivery/repository.js";
 import { createRecoveryGatewayVerifierFromEnv } from "../merchant-core/learning/recovery-gateway.js";
 import { MemoryStore } from "../agent/memory/store.js";
 import { PrivateVault } from "../agent/memory/vault.js";
@@ -173,6 +174,7 @@ export interface MerchantRuntimeAssembly {
   /** 规则任务服务（调度器用；仅治理所有权持有者且已装配时存在）。 */
   operationsJobs: import("../merchant-core/operations-jobs/service.js").OperationsJobsService | undefined;
   governance: Parameters<typeof createMerchantManagementApiHandler>[0]["governance"];
+  customerDeliveries: CustomerDeliveryRepository;
   /** 逐次核验治理所有权（未初始化/未持有时 undefined）。 */
   assertGovernanceOwner: (() => void) | undefined;
   proposeReceptionMemory: ReceptionMemoryWriter | undefined;
@@ -839,6 +841,7 @@ export async function assembleMerchantRuntime(
     merchantOperations,
     operationsJobs: operationsFacade?.operationsJobs,
     governance,
+    customerDeliveries: new CustomerDeliveryRepository({ db, now }),
     assertGovernanceOwner:
       governance === undefined ? undefined : () => governance.write(() => undefined),
     proposeReceptionMemory,

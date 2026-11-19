@@ -110,11 +110,7 @@ export interface BuyerServiceConfig {
    * 规格与报价（范围本店、询报价用途、有效期）。缺省关闭（旧客户端语义）。
    * merchantIds 缺省 = 对全部商家随已签名 RFQ 附带委托声明。
    */
-  historyDelegation?: {
-    merchantIds?: string[];
-    ttlDays?: number;
-    buyerAgentId?: string;
-  };
+  historyDelegation?: import("./a2a-quote-history.js").QuoteHistoryDelegationOptions;
   /**
    * 买家识别与交易回执 · K5/K6：买方向 Catalog 上报意向/入口回执的配置。
    * catalogUrl 缺省关闭；binding 缺省 = 回执签名钥 thumbprint（须与商家

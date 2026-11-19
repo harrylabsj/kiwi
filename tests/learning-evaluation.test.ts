@@ -273,6 +273,27 @@ describe("候选评测（M2-4）", () => {
     expect(completed.runs_completed).toBe(120);
   });
 
+  it("超过恢复窗口后仍先合并已保存的回执，只执行剩下的回放", async () => {
+    let clock = NOW;
+    service = new LearningService({ repository, now: () => clock });
+    const firstRunner = vi.fn(passRunner());
+    const update = vi.spyOn(repository, "updateEvaluation").mockImplementationOnce(() => {
+      throw new Error("injected write failure after recording the receipt");
+    });
+    try {
+      await expect(evaluate(firstRunner)).rejects.toThrow("injected write failure");
+    } finally {
+      update.mockRestore();
+    }
+    expect(firstRunner).toHaveBeenCalledTimes(1);
+
+    clock = new Date(Date.parse(NOW) + 16 * 60 * 1000).toISOString();
+    const nextRunner = vi.fn(passRunner());
+    expect(await evaluate(nextRunner)).toMatchObject({ run_status: "completed", runs_completed: 120 });
+    expect(nextRunner).toHaveBeenCalledTimes(119);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM learning_evaluation_receipts").get()?.n).toBe(0);
+  });
+
   it("持久化基线会传入恢复后的候选回放", async () => {
     let calls = 0;
     await expect(evaluate(() => {

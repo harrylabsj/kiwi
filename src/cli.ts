@@ -1852,7 +1852,7 @@ function merchantCredentialRotationOptions(
       );
     },
     stopServices: async (services) => {
-      for (const name of [...services].reverse()) await manager.stop(name);
+      for (const name of [...services].reverse()) await manager.stopForCredentialRotation(name);
       const deadline = Date.now() + 5_000;
       while (Date.now() < deadline && manager.status().some((entry) => services.includes(entry.name) && entry.running)) {
         await new Promise((resolve) => setTimeout(resolve, 50));

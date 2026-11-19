@@ -53,6 +53,8 @@ export interface StoredTask {
   resumable: boolean;
   /** Opaque owning-session hash; legacy rows use empty string until adopted. */
   owner_hash?: string;
+  /** Original request before any merchant history is resolved. */
+  quote_request_digest?: string;
   /** 完整 task 记录（持久 Task 契约的权威 JSON）。 */
   payload: string;
 }
@@ -329,6 +331,7 @@ export class TaskApprovalStore {
     } finally {
       this.db.exec("PRAGMA foreign_keys = ON");
     }
+    addColumn("mcp_tasks", "quote_request_digest", "ALTER TABLE mcp_tasks ADD COLUMN quote_request_digest TEXT");
     // Repair a marker-present store whose idempotency index was lost.
     this.db.exec(
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_tasks_idem ON mcp_tasks(owner_hash, idempotency_key)",
@@ -392,8 +395,8 @@ export class TaskApprovalStore {
       .prepare(
         `INSERT INTO mcp_tasks
            (task_id, task_kind, status, idempotency_key, intent_id, delegation_policy_id,
-            created_at, updated_at, expires_at, resumable, owner_hash, payload)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            created_at, updated_at, expires_at, resumable, owner_hash, payload, quote_request_digest)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(owner_hash, idempotency_key) DO NOTHING`,
       )
       .run(
@@ -409,17 +412,21 @@ export class TaskApprovalStore {
         task.resumable ? 1 : 0,
         task.owner_hash ?? "",
         task.payload,
+        task.quote_request_digest ?? null,
       );
     if (result.changes === 0) {
-      const owner = task.owner_hash ?? "";
-      const existing = this.db.prepare(
-        "SELECT task_id FROM mcp_tasks WHERE owner_hash = ? AND idempotency_key = ?",
-      ).get(owner, task.idempotency_key) as { task_id: string } | undefined;
-      const canonical = existing === undefined ? undefined : this.getTask(existing.task_id);
+      const canonical = this.findTaskByIdempotencyKey(task.owner_hash ?? "", task.idempotency_key);
       if (canonical === undefined) throw new McpError("invalid_params", "idempotent task disappeared");
       return { task: canonical, created: false };
     }
     return { task, created: true };
+  }
+
+  findTaskByIdempotencyKey(ownerHash: string, idempotencyKey: string): StoredTask | undefined {
+    const existing = this.db.prepare(
+      "SELECT task_id FROM mcp_tasks WHERE owner_hash = ? AND idempotency_key = ?",
+    ).get(ownerHash, idempotencyKey) as { task_id: string } | undefined;
+    return existing === undefined ? undefined : this.getTask(existing.task_id, ownerHash);
   }
 
   /** Explicit, one-time migration of pre-owner tasks in a local database. */
@@ -433,7 +440,7 @@ export class TaskApprovalStore {
   getTask(taskId: string, ownerHash?: string): StoredTask | undefined {
     const row = this.db
       .prepare(
-        "SELECT task_id, task_kind, status, idempotency_key, intent_id, delegation_policy_id, created_at, updated_at, expires_at, resumable, owner_hash, payload FROM mcp_tasks WHERE task_id = ? AND (? IS NULL OR owner_hash = ?)",
+        "SELECT task_id, task_kind, status, idempotency_key, intent_id, delegation_policy_id, created_at, updated_at, expires_at, resumable, owner_hash, payload, quote_request_digest FROM mcp_tasks WHERE task_id = ? AND (? IS NULL OR owner_hash = ?)",
       )
       .get(taskId, ownerHash ?? null, ownerHash ?? null) as
       | {
@@ -449,6 +456,7 @@ export class TaskApprovalStore {
           resumable: number;
           owner_hash: string;
           payload: string;
+          quote_request_digest: string | null;
         }
       | undefined;
     if (row === undefined) return undefined;
@@ -465,6 +473,7 @@ export class TaskApprovalStore {
       resumable: row.resumable === 1,
       owner_hash: row.owner_hash,
       payload: row.payload,
+      ...(row.quote_request_digest !== null ? { quote_request_digest: row.quote_request_digest } : {}),
     };
   }
 

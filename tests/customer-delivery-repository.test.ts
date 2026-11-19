@@ -2,7 +2,7 @@
  * M6-2 持久化：followup_outbox 唯一发送真相；单流在途与回执落库。
  */
 import { DatabaseSync } from "node:sqlite";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { migrateMerchantOpsSchema } from "../src/merchant-core/ops/schema.js";
 import { prepareDelivery } from "../src/merchant-core/customer-delivery/gate.js";
 import {
@@ -11,6 +11,7 @@ import {
   type DeliveryRecord,
 } from "../src/merchant-core/customer-delivery/dispatcher.js";
 import { CustomerDeliveryRepository } from "../src/merchant-core/customer-delivery/repository.js";
+import { DeliveryDispatcherLoop } from "../src/merchant-core/customer-delivery/dispatcher-loop.js";
 import type { PrepareDeliveryInput } from "../src/merchant-core/customer-delivery/types.js";
 import {
   GOVERNANCE_FLAGS_DEFAULT,
@@ -182,5 +183,40 @@ describe("P1 发送持久化", () => {
     ).toThrow(/同一发送流/);
     expect(repository.listDue(MERCHANT, "2026-11-18T00:00:06.000Z")).toHaveLength(1);
     expect(repository.listDue(MERCHANT, "2026-11-18T02:00:00.000Z")).toHaveLength(0);
+  });
+
+  it("恢复中断的派发时保留原通知并阻塞该流，不再次调用渠道", async () => {
+    const first = record();
+    repository.insert(first, "task-1");
+    repository.insert(record({ delivery_id: "dlv-2", seq: 2 }), "task-1");
+    repository.inTransaction(() => claimDelivery({
+      store: repository,
+      merchant_id: MERCHANT,
+      delivery_id: first.delivery_id,
+      worker_id: "old-worker",
+      lease_ms: 10_000,
+      now: NOW,
+    }));
+    expect(repository.recoverExpiredClaims(MERCHANT, "2026-11-18T00:00:09.000Z")).toBe(0);
+
+    const send = vi.fn(async () => ({ outcome: "accepted" as const }));
+    const loop = new DeliveryDispatcherLoop({
+      store: repository,
+      merchant_id: MERCHANT,
+      worker_id: "new-worker",
+      adapterFor: () => ({ send }),
+      now: () => "2026-11-18T00:00:10.000Z",
+    });
+    expect(await loop.tick()).toMatchObject({ unknown: 1, sent: 0 });
+    expect(await loop.tick()).toMatchObject({ unknown: 0, sent: 0 });
+    expect(send).not.toHaveBeenCalled();
+    expect(repository.get(MERCHANT, first.delivery_id)).toMatchObject({
+      status: "UNKNOWN",
+      payload: first.payload,
+      payload_digest: first.payload_digest,
+      started_at: NOW,
+      blocked_reason: "send_lease_expired",
+      attempts: 1,
+    });
   });
 });

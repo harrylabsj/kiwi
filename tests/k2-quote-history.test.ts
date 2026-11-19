@@ -28,7 +28,7 @@ import { LedgerStore } from "../src/negotiation/ledger/index.js";
 import { InboundPipeline } from "../src/a2a/server/pipeline.js";
 import { IdempotencyStore } from "../src/negotiation/idempotency/index.js";
 import { TaskRegistry } from "../src/a2a/server/task-registry.js";
-import { buildHistoryQueryEnvelope, parseHistoryReply } from "../src/buyer-core/a2a-quote-history.js";
+import { buildDelegationMetadata, buildHistoryQueryEnvelope, parseHistoryReply, quoteHistoryDelegationFromEnv } from "../src/buyer-core/a2a-quote-history.js";
 import { envelopeToMessage } from "../src/buyer-core/a2a-knp.js";
 
 const NOW = "2026-11-06T04:00:00.000Z";
@@ -101,6 +101,42 @@ describe("K2 委托校验与授权存取", () => {
       delegation: base as never,
     });
     expect(stale.status).toBe("stale");
+  });
+
+  it("授权到期后，只有买方明确配置的新版本才能续期", () => {
+    let clock = NOW;
+    const now = () => clock;
+    const merchantHistory = new QuoteHistoryStore({ db, now });
+    const subject = ensureVerifiedCustomerIdentity(db, { merchant_id: MERCHANT, verified_actor: OPEN_ACTOR, now: NOW });
+    const submit = (version?: number) => {
+      const metadata = buildDelegationMetadata({ merchantId: MERCHANT, issuedAt: now(), ttlDays: 1, version, now });
+      const result = validateDelegationShape(metadata, MERCHANT, now());
+      if (!result.ok) throw new Error(result.reason);
+      return merchantHistory.applyDelegation({
+        merchant_id: MERCHANT,
+        buyer_actor: OPEN_ACTOR,
+        subject_id: subject.subject_id,
+        delegation: result.delegation,
+      });
+    };
+    const authorized = () => merchantHistory.checkActive({ merchant_id: MERCHANT, buyer_actor: OPEN_ACTOR });
+    expect(submit().status).toBe("active");
+    expect(authorized()).toBeDefined();
+    clock = new Date(Date.parse(NOW) + 2 * 86_400_000).toISOString();
+    expect(submit().status).toBe("active");
+    expect(authorized()).toBeUndefined();
+
+    const renewal = quoteHistoryDelegationFromEnv({
+      KIWI_QUOTE_HISTORY_DELEGATION: "true",
+      KIWI_QUOTE_HISTORY_DELEGATION_VERSION: "2",
+    });
+    expect(submit(renewal?.version).status).toBe("active");
+    expect(authorized()).toBeDefined();
+    expect(submit().status).toBe("stale");
+    expect(() => quoteHistoryDelegationFromEnv({
+      KIWI_QUOTE_HISTORY_DELEGATION: "true",
+      KIWI_QUOTE_HISTORY_DELEGATION_VERSION: "0",
+    })).toThrow(/positive safe integer/);
   });
 
   it("撤销后重放不得恢复授权：同版本/更高版本都被拒绝或按未委托", () => {

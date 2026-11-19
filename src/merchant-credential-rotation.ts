@@ -82,7 +82,7 @@ export async function rotateMerchantCredentialIfDue(
   try {
     if (existsSync(options.pendingPath)) {
       options.beforeRotation?.();
-      return { status: "rotated", expiresAt: "", secondsRemaining: null, result: await performMerchantCredentialRotation(options) };
+      return { status: "rotated", expiresAt: "", secondsRemaining: null, result: await rotateWithRuntimeCleanup(options) };
     }
     const expiry = await inspectMerchantCredentialExpiry(options);
     if (expiry.secondsRemaining === null || expiry.lifetimeSeconds === null) return { status: "no_expiry", expiresAt: "", secondsRemaining: null };
@@ -90,7 +90,7 @@ export async function rotateMerchantCredentialIfDue(
     const effectiveLead = Math.min(options.rotateBeforeSeconds, Math.max(60, Math.floor(expiry.lifetimeSeconds / 5)));
     if (expiry.secondsRemaining > effectiveLead) return { status: "not_due", expiresAt: expiry.expiresAt, secondsRemaining: expiry.secondsRemaining };
     options.beforeRotation?.();
-    return { status: "rotated", expiresAt: expiry.expiresAt, secondsRemaining: expiry.secondsRemaining, result: await performMerchantCredentialRotation(options) };
+    return { status: "rotated", expiresAt: expiry.expiresAt, secondsRemaining: expiry.secondsRemaining, result: await rotateWithRuntimeCleanup(options) };
   } finally {
     release();
   }
@@ -293,7 +293,6 @@ async function performMerchantCredentialRotation(options: MerchantCredentialRota
 
   const finishConfirmed = async (state: PendingRotation) => {
     const restarted = state.restart_services ?? [];
-    options.endRuntimeSwitch?.();
     rmSync(options.pendingPath, { force: true });
     return { rotated: true, recovered, restarted };
   };
@@ -379,15 +378,20 @@ async function performMerchantCredentialRotation(options: MerchantCredentialRota
   return await finishConfirmed(pending);
 }
 
-export async function rotateMerchantCredential(options: MerchantCredentialRotationOptions): Promise<{ rotated: boolean; recovered: boolean; restarted: string[] }> {
-  const release = acquireRotationLock(options.operationLockPath ?? `${options.credentialsPath}.rotation.lock`);
+async function rotateWithRuntimeCleanup(options: MerchantCredentialRotationOptions): ReturnType<typeof performMerchantCredentialRotation> {
   try {
     return await performMerchantCredentialRotation(options);
   } finally {
-    // 切换标记只用于覆盖 stop→start 这段窗口。任何失败路径都必须清掉它，
-    // 否则 supervisor 的 reconcile 会永远拒绝拉起子服务，实例被卡死（只能
-    // 手工删文件），而宁可让子进程带着磁盘上现有的 token 先跑起来。
+    // Both scheduled and operator-triggered rotation must unblock the supervisor.
     options.endRuntimeSwitch?.();
+  }
+}
+
+export async function rotateMerchantCredential(options: MerchantCredentialRotationOptions): ReturnType<typeof performMerchantCredentialRotation> {
+  const release = acquireRotationLock(options.operationLockPath ?? `${options.credentialsPath}.rotation.lock`);
+  try {
+    return await rotateWithRuntimeCleanup(options);
+  } finally {
     release();
   }
 }

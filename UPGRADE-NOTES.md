@@ -143,6 +143,7 @@
 ## 本地接线与复验
 
 - 买方 MCP/HTTP 的历史委托由企业配置显式开启，`KIWI_QUOTE_HISTORY_DELEGATION=true`。WorkBuddy Expert 在声明这项配置后公开 `reuse_history` 工具参数。商家需要保留稳定的工作区，买家需要保留原协议目录和身份。
+- 历史委托版本默认是 `1`。企业重新授权后，在买方设置更大的 `KIWI_QUOTE_HISTORY_DELEGATION_VERSION`，重启买方，再向原商家发起一次带明确商品规格的正常签名询价。商家收到新版本后才建立新授权。同版本重试不会延长有效期或恢复已撤销的授权。
 - 买卖两端各自配置 `KIWI_RECEIPT_CATALOG_URL`。商家使用该店的 `KIWI_RECEIPT_MERCHANT_TOKEN`；买方复用本次磋商的开放询价签名钥。自托管直连需要另行启用受支持的开放询价验签，买方选择 `KIWI_OPEN_INQUIRY_DIRECT=true` 后才以该钥签名直连。
 - 拆分部署中，A2A 使用 `KIWI_CUSTOMER_IDENTITY_WRITER=spooled`，将 `KIWI_CUSTOMER_IDENTITY_FORWARD_URL` 指向持有写权的 Workbench `/merchant/api/internal/customer-identity`。两端共享独立的 `KIWI_CUSTOMER_IDENTITY_CHANNEL_TOKEN`，最少 32 个字符。A2A 对同一库的历史查询使用只读连接。
 - UCP 订单上报由 checkout 适配器的 `orderReceipts` 显式接入。适配器需使用商家凭据或独立限定商家与来源渠道的 Catalog 凭据。Catalog 的 `KIWI_CATALOG_ORDER_ADAPTER_BINDINGS` 接收绑定数组，每项包含 `adapter_id`、`token_digest`、`merchant_id` 和 `order_channel`。普通外链不产生订单事实。

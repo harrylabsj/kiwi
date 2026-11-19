@@ -302,7 +302,12 @@ export class LearningRepository {
     });
   }
 
-  checkEvaluationConfig(key: string, digest: string, legacyRuns: number, nowMs = Date.now()): void {
+  checkEvaluationConfig(
+    key: string,
+    digest: string,
+    legacyRuns: number,
+    nowMs = Date.now(),
+  ): { binding: unknown; outcome: unknown } | undefined {
     const row = this.db.prepare("SELECT config_digest, pending_attempt FROM learning_evaluation_config WHERE evaluation_key = ?")
       .get(key) as { config_digest: string; pending_attempt: string | null } | undefined;
     if (row === undefined) {
@@ -311,20 +316,21 @@ export class LearningRepository {
     } else if (row.config_digest !== digest) {
       throw new LearningError("version_conflict", "evaluation_config_mismatch", "评测配置与已有记录不一致");
     } else if (row.pending_attempt !== null) {
-      // P1-6：dispatched/prepared marker 超过 TTL 视为中断并清除；旧 marker
-      // 没有 expires_at，同样视为中断（旧版没有恢复路径，不能永久阻塞）。
-      let expired = true;
+      let marker: { expires_at?: unknown; dispatch_id?: unknown } | null = null;
       try {
-        const marker = JSON.parse(row.pending_attempt) as { expires_at?: unknown };
-        expired = typeof marker.expires_at !== "string" || Date.parse(marker.expires_at) <= nowMs;
-      } catch {
-        expired = true;
-      }
-      if (!expired) {
+        marker = JSON.parse(row.pending_attempt) as { expires_at?: unknown; dispatch_id?: unknown } | null;
+      } catch { /* An unparseable marker has no verifiable dispatch ID. */ }
+      if (typeof marker?.expires_at === "string" && Date.parse(marker.expires_at) > nowMs) {
         throw new LearningError("version_conflict", "evaluation_attempt_uncertain", "上次模型调用结果不确定，不能自动重跑");
       }
-      this.db.prepare("UPDATE learning_evaluation_config SET pending_attempt = NULL WHERE evaluation_key = ?").run(key);
+      // Keep the dispatch bound to its result until the service commits it.
+      if (typeof marker?.dispatch_id === "string") {
+        const receipt = this.readEvaluationReceipt(`local:${marker.dispatch_id}`);
+        if (receipt !== undefined) return receipt;
+      }
+      this.setEvaluationAttempt(key, null);
     }
+    return undefined;
   }
 
   readEvaluationConfig(key: string): { config_digest: string; pending_attempt: string | null } | undefined {

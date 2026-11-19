@@ -228,18 +228,33 @@ export class CustomerDeliveryRepository implements DeliveryStore {
     }
   }
 
-  /** dispatcher 扫描：PENDING、未过期、无有效租约、已过重试退避。 */
+  /** A vanished worker may have reached the channel before recording the result. */
+  recoverExpiredClaims(merchantId: string, now: string): number {
+    const result = this.db
+      .prepare(
+        `UPDATE followup_outbox
+           SET status = 'UNKNOWN', lease_owner = NULL, lease_expires_at = NULL,
+               blocked_reason = 'send_lease_expired', updated_at = ?
+         WHERE merchant_id = ? AND status = 'PENDING' AND stream_key IS NOT NULL
+           AND (started_at IS NOT NULL OR lease_owner IS NOT NULL)
+           AND (lease_expires_at IS NULL OR lease_expires_at <= ?)`,
+      )
+      .run(now, merchantId, now);
+    return Number(result.changes);
+  }
+
+  /** dispatcher 扫描：PENDING、未过期、尚未领取、已过重试退避。 */
   listDue(merchantId: string, now: string, limit = 20): DeliveryRecord[] {
     const rows = this.db
       .prepare(
         `SELECT * FROM followup_outbox
           WHERE merchant_id = ? AND status = 'PENDING' AND valid_until > ?
-            AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+            AND started_at IS NULL AND lease_owner IS NULL
             AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
           ORDER BY seq ASC, created_at ASC
           LIMIT ?`,
       )
-      .all(merchantId, now, now, now, limit) as unknown as OutboxRow[];
+      .all(merchantId, now, now, limit) as unknown as OutboxRow[];
     return rows.map((row) => rowToRecord(row)).filter((row): row is DeliveryRecord => row !== undefined);
   }
 

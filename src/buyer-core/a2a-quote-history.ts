@@ -48,21 +48,43 @@ export interface DelegationMetadata {
   [key: string]: unknown;
 }
 
+export interface QuoteHistoryDelegationOptions {
+  merchantIds?: string[];
+  ttlDays?: number;
+  buyerAgentId?: string;
+  /** Increase only for a newly authorized delegation. */
+  version?: number;
+}
+
+export function quoteHistoryDelegationFromEnv(env: Record<string, string | undefined>): QuoteHistoryDelegationOptions | undefined {
+  if (env.KIWI_QUOTE_HISTORY_DELEGATION !== "true") return undefined;
+  const configuredVersion = env.KIWI_QUOTE_HISTORY_DELEGATION_VERSION;
+  if (configuredVersion === undefined) return {};
+  const version = Number(configuredVersion);
+  if (!/^[1-9][0-9]*$/.test(configuredVersion) || !Number.isSafeInteger(version)) {
+    throw new Error("KIWI_QUOTE_HISTORY_DELEGATION_VERSION must be a positive safe integer");
+  }
+  return { version };
+}
+
 /** 每任务稳定的委托派生输入（重试恒定；任务变化才变化）。 */
 export function buildDelegationMetadata(input: {
   merchantId: string;
   buyerAgentId?: string;
   issuedAt: string;
   ttlDays?: number;
+  version?: number;
   now: () => string;
 }): DelegationMetadata {
   const ttlDays = input.ttlDays ?? 90;
+  const version = input.version ?? 1;
+  if (!Number.isSafeInteger(version) || version < 1) throw new Error("invalid quote history delegation version");
   const issuedMs = Date.parse(input.issuedAt);
   const issuedAt = Number.isFinite(issuedMs) ? new Date(issuedMs).toISOString() : input.now();
   const expiresMs = (Number.isFinite(issuedMs) ? issuedMs : Date.parse(input.now())) + ttlDays * 86_400_000;
   return {
     type: "kiwi.quote-history-delegation",
-    version: 1,
+    version,
     merchant_id: input.merchantId,
     purpose: "quote_history",
     delegation_id: `deleg-${input.merchantId}`,

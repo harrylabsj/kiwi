@@ -27,6 +27,7 @@ import { dispatchDelivery } from "./channel.js";
 
 export interface CustomerDeliveryRepositoryLike extends DeliveryStore {
   listDue(merchantId: string, now: string, limit?: number): DeliveryRecord[];
+  recoverExpiredClaims?(merchantId: string, now: string): number;
 }
 
 export interface DeliveryDispatcherLoopOptions {
@@ -83,9 +84,12 @@ export class DeliveryDispatcherLoop {
     try {
       this.options.assertOwner?.();
       const worker = this.options.worker_id ?? `delivery:${process.pid}`;
+      const now = this.options.now();
+      const recover = () => this.options.store.recoverExpiredClaims?.(this.options.merchant_id, now) ?? 0;
+      result.unknown += this.options.write === undefined ? recover() : this.options.write(recover);
       const due = this.options.store.listDue(
         this.options.merchant_id,
-        this.options.now(),
+        now,
         this.options.max_per_tick ?? 10,
       );
       for (const record of due) {
@@ -103,14 +107,16 @@ export class DeliveryDispatcherLoop {
             lease_ms: this.options.lease_ms ?? 120_000,
             timeout_ms: this.options.timeout_ms ?? 60_000,
             now: this.options.now(),
+            clock: this.options.now,
             adapter,
+            ...(this.options.write !== undefined ? { write: this.options.write } : {}),
             ...(this.options.authorize !== undefined ? { authorize: this.options.authorize } : {}),
             ...(this.options.resolveRecipient !== undefined
               ? { resolveRecipient: this.options.resolveRecipient }
               : {}),
           });
         try {
-          // 渠道调用不能在 SQLite 事务内；所有权由 assertOwner + 仓库状态守卫。
+          // 渠道调用在领取和结算事务之间执行。
           const sent = await run();
           result.claimed += 1;
           if (sent.status === "UNKNOWN") result.unknown += 1;

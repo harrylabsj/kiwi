@@ -159,16 +159,17 @@ describe("P1 发送领取与回执", () => {
         }),
       ),
     ).toBe("lease_busy");
-    // 租约过期后允许另一 worker 接管，attempts 递增。
-    const retaken = claimDelivery({
-      store,
-      merchant_id: MERCHANT,
-      delivery_id: "dlv-1",
-      worker_id: "w2",
-      lease_ms: 30_000,
-      now: "2026-11-18T00:00:31.000Z",
-    });
-    expect(retaken.attempts).toBe(2);
+    for (const workerId of ["w1", "w2"]) {
+      expect(codeOf(() => claimDelivery({
+        store,
+        merchant_id: MERCHANT,
+        delivery_id: "dlv-1",
+        worker_id: workerId,
+        lease_ms: 30_000,
+        now: "2026-11-18T00:00:31.000Z",
+      }))).toBe("lease_busy");
+    }
+    expect(store.records.get("dlv-1")?.attempts).toBe(1);
   });
 
   it("accepted → SENT；read 必须另有证据", () => {

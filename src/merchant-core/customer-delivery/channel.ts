@@ -63,6 +63,8 @@ export interface DispatchDeliveryInput {
   readonly lease_ms: number;
   readonly timeout_ms: number;
   readonly now: string;
+  readonly clock?: () => string;
+  readonly write?: <T>(work: () => T) => T;
   readonly adapter: DeliveryChannelAdapter;
   /** 与接待回复共用的流门；缺省仅依赖 DeliveryStore 的单流约束。 */
   readonly stream_gate?: StreamGate;
@@ -97,9 +99,8 @@ export async function dispatchDelivery(
     });
   // P1-2/P1-4：持久存储下，租约检查、发送时复核与领取写入必须在同一
   // IMMEDIATE 事务内，跨进程的两个 worker 不能同时领取。
-  const claimed = input.store.transaction !== undefined
-    ? input.store.transaction(claim)
-    : claim();
+  const write = input.write ?? input.store.transaction?.bind(input.store) ?? ((work) => work());
+  const claimed = write(claim);
   const recipient = input.resolveRecipient?.(claimed);
   let result: ChannelSendOutcome;
   try {
@@ -112,39 +113,36 @@ export async function dispatchDelivery(
   } catch {
     result = { outcome: "unknown" };
   }
-  if (result.outcome === "not_sent") {
-    const attempts = claimed.attempts ?? 1;
-    const nextAttemptAt =
-      attempts >= MAX_NOT_SENT_ATTEMPTS
-        ? claimed.valid_until
-        : new Date(Date.parse(input.now) + notSentBackoff(attempts)).toISOString();
-    const released = releaseDelivery({
+  const settled = write(() => {
+    const now = input.clock?.() ?? input.now;
+    const delivery = {
       store: input.store,
       merchant_id: input.merchant_id,
       delivery_id: claimed.delivery_id,
       worker_id: input.worker_id,
-      now: input.now,
-      reason: result.reason,
-      next_attempt_at: nextAttemptAt,
+      now,
+    };
+    if (result.outcome === "not_sent") {
+      const attempts = claimed.attempts ?? 1;
+      return releaseDelivery({
+        ...delivery,
+        reason: result.reason,
+        next_attempt_at: attempts >= MAX_NOT_SENT_ATTEMPTS
+          ? claimed.valid_until
+          : new Date(Date.parse(now) + notSentBackoff(attempts)).toISOString(),
+      });
+    }
+    return completeDelivery({
+      ...delivery,
+      outcome: result.outcome,
+      ...(result.provider_request_id !== undefined ? { provider_request_id: result.provider_request_id } : {}),
+      ...(result.receipt !== undefined ? { receipt: result.receipt } : {}),
     });
-    input.stream_gate?.leave(claimed.stream_key, input.worker_id);
-    return released;
-  }
-  if (result.outcome === "accepted") {
-    input.stream_gate?.leave(claimed.stream_key, input.worker_id);
-  }
-  return completeDelivery({
-    store: input.store,
-    merchant_id: input.merchant_id,
-    delivery_id: input.delivery_id,
-    worker_id: input.worker_id,
-    outcome: result.outcome,
-    now: input.now,
-    ...(result.provider_request_id !== undefined
-      ? { provider_request_id: result.provider_request_id }
-      : {}),
-    ...(result.receipt !== undefined ? { receipt: result.receipt } : {}),
   });
+  if (settled.status !== "UNKNOWN") {
+    input.stream_gate?.leave(claimed.stream_key, input.worker_id);
+  }
+  return settled;
 }
 
 /** 本地/联调用的 HTTP webhook 适配器；生产渠道按同一接口实现。 */

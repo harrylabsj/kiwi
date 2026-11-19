@@ -93,7 +93,7 @@ export interface ClaimDeliveryInput {
 
 /**
  * 领取一条 PENDING 通知；同 stream 已有在途/UNKNOWN 时拒绝。
- * 已有未过期租约（其他 worker）或处于 not_sent 退避期时同样拒绝。
+ * 已开始外发的记录须先核对上一轮结果。
  */
 export function claimDelivery(input: ClaimDeliveryInput): DeliveryRecord {
   const record = requireRecord(input.store, input.merchant_id, input.delivery_id);
@@ -106,13 +106,8 @@ export function claimDelivery(input: ClaimDeliveryInput): DeliveryRecord {
   if (!Number.isSafeInteger(input.lease_ms) || input.lease_ms <= 0) {
     throw new DeliveryDispatchError("invalid_transition", "lease_ms 必须是正整数");
   }
-  if (
-    record.lease_owner !== undefined &&
-    record.lease_owner !== input.worker_id &&
-    record.lease_expires_at !== undefined &&
-    Date.parse(record.lease_expires_at) > Date.parse(input.now)
-  ) {
-    throw new DeliveryDispatchError("lease_busy", "该通知已有未过期的发送租约");
+  if (record.started_at !== undefined || record.lease_owner !== undefined) {
+    throw new DeliveryDispatchError("lease_busy", "该通知已开始派发，须先核对上一轮的发送结果");
   }
   if (record.next_attempt_at !== undefined && Date.parse(record.next_attempt_at) > Date.parse(input.now)) {
     throw new DeliveryDispatchError("backoff", "尚未到重试时间");

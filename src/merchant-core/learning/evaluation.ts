@@ -545,9 +545,7 @@ export async function runCandidateEvaluation(
         }
         let outcome: EvaluationAttemptOutcome;
         const dispatchId = randomUUID();
-        // P1-6：dispatched marker 带 TTL。模型调用超时/中断后不可能永远
-        // 等人工核对；超过 TTL 的 marker 由 checkEvaluationConfig 自动
-        // 视为中断并清除，下一次评测用新 dispatch_id 重新派发。
+        // After the TTL, resume the saved result when present or start a new dispatch.
         const marker = {
           scenario_id: scenario.scenario_id,
           kind: scenario.kind,

@@ -456,6 +456,20 @@ function explicitIntentItemSku(intent: Record<string, unknown>): string | undefi
   return typeof sku === "string" && sku.trim() !== "" ? sku : undefined;
 }
 
+function withHistorySku(intent: Record<string, unknown>, sku: string): Record<string, unknown> {
+  const items = intent.items;
+  if (!Array.isArray(items) || items.length === 0) return intent;
+  return { ...intent, items: [{ ...items[0], sku }, ...items.slice(1)] };
+}
+
+interface QuoteRequestInput {
+  intent: Record<string, unknown>;
+  idempotency_key?: string;
+  merchant_ids?: string[];
+  /** Resolve the previous quote's SKU only when the caller supplies no SKU. */
+  reuse_history?: boolean;
+}
+
 /** 明确 SKU 的报价必须只包含该 SKU；商家换品/混入其他商品时拒绝接纳。 */
 function rejectQuoteForOtherSku(
   result: QuoteCandidateInput,
@@ -770,31 +784,27 @@ export class KiwiBuyerService {
 
   // ---- Northbound：kiwi_request_quotes --------------------------------------
 
-  async requestQuotes(input: {
-    intent: Record<string, unknown>;
-    idempotency_key?: string;
-    merchant_ids?: string[];
-    /**
-     * 买家识别与交易回执 · K3：“沿用上次规格”——正式 RFQ 前按本店授权查
-     * 上次已发报价；唯一匹配则以该 SKU + 本次数量走标准 RFQ。无历史、
-     * 多义或扩展不支持时不创建任务，返回结构化澄清。显式新规格优先
-     * （intent 已带 sku 时本参数被忽略）。
-     */
-    reuse_history?: boolean;
-  }): Promise<{ task: Record<string, unknown>; created: boolean; reused_history?: Record<string, unknown> }> {
+  async requestQuotes(input: QuoteRequestInput): Promise<{ task: Record<string, unknown>; created: boolean; reused_history?: Record<string, unknown> }> {
+    const useHistory = input.reuse_history === true && explicitIntentItemSku(input.intent) === undefined;
+    if (useHistory && input.merchant_ids?.length !== 1) {
+      throw new McpError("clarification_needed", "沿用上次规格需要恰好指定一个商家；请说明要沿用哪家店的报价。", {
+        reason: "history_merchant_required",
+      });
+    }
+    const idempotencyKey = input.idempotency_key ?? `req-${uuidv7()}`;
+    const requestDigest = contentDigest({
+      intent: input.intent,
+      merchant_ids: [...new Set(input.merchant_ids ?? [])].sort(),
+      reuse_history: useHistory,
+    });
+    const existing = this.store.findTaskByIdempotencyKey(this.ownerHash, idempotencyKey);
+    if (existing !== undefined) return this.replayQuoteRequest(existing, input, requestDigest, useHistory);
+
     // K3：历史解析发生在正式 RFQ 之前（A5）。显式新规格优先。
     let effectiveIntent = input.intent;
     let reusedHistory: Record<string, unknown> | undefined;
-    if (input.reuse_history === true && explicitIntentItemSku(input.intent) === undefined) {
-      const reuseMerchants = input.merchant_ids ?? [];
-      if (reuseMerchants.length !== 1) {
-        // K3：结构化澄清（仓库惯例：McpError 携带结构化 data，宿主据此向
-        // 买家澄清）。不创建任务、不猜商品。
-        throw new McpError("clarification_needed", "沿用上次规格需要恰好指定一个商家；请说明要沿用哪家店的报价。", {
-          reason: "history_merchant_required",
-        });
-      }
-      const merchantId = reuseMerchants[0] as string;
+    if (useHistory) {
+      const merchantId = input.merchant_ids![0]!;
       const history = await this.resolveQuoteHistory({ merchant_id: merchantId });
       if (history.status !== "ok" || history.candidates.length === 0) {
         throw new McpError(
@@ -821,16 +831,7 @@ export class KiwiBuyerService {
         });
       }
       const hit = history.candidates[0]!;
-      const intentItems = Array.isArray(input.intent.items)
-        ? (input.intent.items as Array<Record<string, unknown>>)
-        : [];
-      effectiveIntent = {
-        ...input.intent,
-        items:
-          intentItems.length > 0
-            ? [{ ...intentItems[0], sku: hit.sku }, ...intentItems.slice(1)]
-            : intentItems,
-      };
+      effectiveIntent = withHistorySku(input.intent, hit.sku);
       reusedHistory = {
         merchant_id: merchantId,
         sku: hit.sku,
@@ -857,7 +858,6 @@ export class KiwiBuyerService {
     await this.assertInquiryAvailable(input.merchant_ids);
     const policyId = this.policy.policy_id;
     const expiresAt = this.policy.expires_at;
-    const idempotencyKey = input.idempotency_key ?? `req-${uuidv7()}`;
     const taskId = `task-${uuidv7()}`;
     const created = this.now();
 
@@ -878,6 +878,7 @@ export class KiwiBuyerService {
       task_kind: "request_quotes",
       status: "in_progress",
       idempotency_key: idempotencyKey,
+      quote_request_digest: requestDigest,
       intent_id: String(input.intent.intent_id),
       delegation_policy_id: policyId,
       created_at: created,
@@ -905,42 +906,7 @@ export class KiwiBuyerService {
 
     const { task: persisted, created: isCreated } = this.store.createTask(task);
     if (!isCreated) {
-      // idempotency_key is globally unique in the local store. It must never
-      // become a side-channel that lets another session read/revive a task.
-      if (persisted.owner_hash !== this.ownerHash) {
-        throw new McpError("task_not_found", "idempotency key belongs to another session");
-      }
-      if(this.quoteFetcher?.recoverQuotes!==undefined){
-        const original=this.decodeTask(persisted).intent;
-        // K3：重试沿用同一解析路径——同 key 重放按**本次解析后的意图**比对。
-        if(original!==undefined && contentDigest(original)!==contentDigest(effectiveIntent))throw new McpError("idempotency_conflict","same task key has different intent");
-        if(persisted.status!=="in_progress"){
-          const selected=[...new Set(this.store.listCandidates(persisted.task_id).map(c=>String(c.merchant_id)))].sort();
-          const requested=[...new Set(input.merchant_ids??[])].sort();
-          if(contentDigest(selected)!==contentDigest(requested))throw new McpError("idempotency_conflict","same task key has different selected merchants");
-        }
-      }
-      // Recovery can only read previously persisted protocol receipts/results, never send.
-      if(this.quoteFetcher?.recoverQuotes !== undefined && ["in_progress","partial_success"].includes(persisted.status) && !this.store.hasAgreementForTask(persisted.task_id)) {
-        const originalCandidates=this.store.listCandidates(persisted.task_id);
-        const recovered=await this.quoteFetcher.recoverQuotes(this.protocolContext(persisted,input.merchant_ids??[]));
-        const originalIntent = this.decodeTask(persisted).intent;
-        const explicitSku=explicitIntentItemSku(
-          originalIntent !== undefined && typeof originalIntent === "object"
-            ? (originalIntent as Record<string, unknown>)
-            : input.intent,
-        );
-        const results=recovered.map((result)=>rejectQuoteForOtherSku(result,explicitSku));
-        if(results.length>0)return this.store.transaction(()=>{
-          if(this.store.hasAgreementForTask(persisted.task_id) || contentDigest(this.store.listCandidates(persisted.task_id))!==contentDigest(originalCandidates))throw new McpError("idempotency_conflict","task candidates or accepted agreement changed during recovery");
-          for(const result of results)this.store.replaceRecoveredCandidate(persisted.task_id,result);
-          const candidates=this.northboundCandidates(persisted.task_id);
-          const status=candidates.length>0 && candidates.every(c=>c.status==="succeeded")?"succeeded":"partial_success";
-          const updated=this.store.updateTask(persisted.task_id,{status,payload:JSON.stringify({...this.decodeTask(persisted),status,updated_at:this.now(),candidates})},persisted);
-          const decoded=this.decodeTask(updated);assertNorthboundContractValid("persistent-task",decoded,"recovered quotes result");return {task:decoded,created:false};
-        });
-      }
-      return { task: this.decodeTask(persisted), created: false };
+      return this.replayQuoteRequest(persisted, input, requestDigest, useHistory);
     }
     for (const candidate of preCandidates) {
       this.store.addCandidate(taskId, candidate);
@@ -1082,6 +1048,75 @@ export class KiwiBuyerService {
   private protocolContext(task:StoredTask,requestedMerchants?:string[]):ProtocolTaskContext {
     const intent=this.decodeTask(task).intent;
     return {taskId:task.task_id,createdAt:task.created_at,intentBindingDigest:contentDigest({task_id:task.task_id,created_at:task.created_at,intent:intent??null,requested_merchants:requestedMerchants??null,policy:this.policy,principal:this.principal,buyer:this.buyerAgentId})};
+  }
+
+  private async replayQuoteRequest(
+    persisted: StoredTask,
+    input: QuoteRequestInput,
+    requestDigest: string,
+    useHistory: boolean,
+  ): Promise<{ task: Record<string, unknown>; created: false }> {
+    if (persisted.owner_hash !== this.ownerHash || persisted.task_kind !== "request_quotes") {
+      throw new McpError("task_not_found", "quote request does not belong to this session");
+    }
+    const task = this.decodeTask(persisted);
+    const original = task.intent;
+    const originalIntent = original !== null && typeof original === "object"
+      ? original as Record<string, unknown>
+      : undefined;
+    const originalSku = originalIntent === undefined ? undefined : explicitIntentItemSku(originalIntent);
+    const merchantIds = input.merchant_ids ?? [];
+    if (persisted.quote_request_digest !== undefined) {
+      if (persisted.quote_request_digest !== requestDigest) {
+        throw new McpError("idempotency_conflict", "same task key has a different quote request");
+      }
+    } else if (useHistory || this.quoteFetcher?.recoverQuotes !== undefined) {
+      // Older tasks stored only the resolved SKU. Reconstruct it locally for replay.
+      const expectedIntent = useHistory && originalSku !== undefined
+        ? withHistorySku(input.intent, originalSku)
+        : input.intent;
+      if (originalIntent !== undefined && contentDigest(originalIntent) !== contentDigest(expectedIntent)) {
+        throw new McpError("idempotency_conflict", "same task key has different intent");
+      }
+      const selected = [...new Set(this.store.listCandidates(persisted.task_id).map((c) => c.merchant_id))].sort();
+      if (useHistory && selected.length === 0 && persisted.status === "in_progress") {
+        return { task, created: false }; // No saved target to use for legacy protocol recovery.
+      }
+      if ((useHistory || persisted.status !== "in_progress") &&
+          contentDigest(selected) !== contentDigest([...new Set(merchantIds)].sort())) {
+        throw new McpError("idempotency_conflict", "same task key has different selected merchants");
+      }
+    }
+
+    // Recovery reads existing protocol evidence and never dispatches a new RFQ.
+    if (this.quoteFetcher?.recoverQuotes === undefined ||
+        !["in_progress", "partial_success"].includes(persisted.status) ||
+        this.store.hasAgreementForTask(persisted.task_id)) {
+      return { task, created: false };
+    }
+    const originalCandidates = this.store.listCandidates(persisted.task_id);
+    const recovered = await this.quoteFetcher.recoverQuotes(this.protocolContext(persisted, merchantIds));
+    const explicitSku = originalIntent === undefined ? explicitIntentItemSku(input.intent) : originalSku;
+    const results = recovered.map((result) => rejectQuoteForOtherSku(result, explicitSku));
+    if (results.length === 0) return { task, created: false };
+
+    return this.store.transaction(() => {
+      if (this.store.hasAgreementForTask(persisted.task_id) ||
+          contentDigest(this.store.listCandidates(persisted.task_id)) !== contentDigest(originalCandidates)) {
+        throw new McpError("idempotency_conflict", "task candidates or accepted agreement changed during recovery");
+      }
+      for (const result of results) this.store.replaceRecoveredCandidate(persisted.task_id, result);
+      const candidates = this.northboundCandidates(persisted.task_id);
+      const status = candidates.length > 0 && candidates.every((candidate) => candidate.status === "succeeded")
+        ? "succeeded" : "partial_success";
+      const updated = this.store.updateTask(persisted.task_id, {
+        status,
+        payload: JSON.stringify({ ...task, status, updated_at: this.now(), candidates }),
+      }, persisted);
+      const decoded = this.decodeTask(updated);
+      assertNorthboundContractValid("persistent-task", decoded, "recovered quotes result");
+      return { task: decoded, created: false };
+    });
   }
 
   /**

@@ -33,7 +33,6 @@ import { OperationsScheduler } from "../merchant-core/operations-jobs/scheduler.
 import { OperationsProjection } from "../merchant-core/operations-jobs/projection.js";
 import { CustomerDataMaintenance } from "../merchant-core/customer-memory/maintenance.js";
 import { DeliveryConsentRepository } from "../merchant-core/customer-delivery/consent-repository.js";
-import { CustomerDeliveryRepository } from "../merchant-core/customer-delivery/repository.js";
 import { DeliveryDispatcherLoop } from "../merchant-core/customer-delivery/dispatcher-loop.js";
 import { assertDeliveryStillAuthorized } from "../merchant-core/customer-delivery/gate.js";
 import { createSmtpChannelAdapter } from "../merchant-core/customer-delivery/smtp-adapter.js";
@@ -268,7 +267,7 @@ export async function startStandaloneMerchantWorkbench(
   // 收件人只来自 `KIWI_DELIVERY_RECIPIENTS`（address_ref → 地址），不再使用
   // 固定 env 收件人，避免所有绑定共用一个地址（P1-5）。
   let deliveryDispatcher: DeliveryDispatcherLoop | undefined;
-  const deliveryRepository = new CustomerDeliveryRepository({ db, now });
+  const deliveryRepository = assembly.customerDeliveries;
   const deliveryFlagEnabled =
     governance !== undefined &&
     (governance.flags as unknown as { customer_delivery_enabled: boolean })
@@ -360,6 +359,7 @@ export async function startStandaloneMerchantWorkbench(
         },
         now,
         assertOwner: () => governance.write(() => undefined),
+        write: governance.write,
         log: (line) => process.stderr.write(line),
       });
       deliveryDispatcher.start();

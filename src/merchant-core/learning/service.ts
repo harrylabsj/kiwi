@@ -1071,9 +1071,22 @@ export class LearningService {
     const assertClaim = (): void => this.repository.assertEvaluationClaim(keys, owner, Date.now());
     this.repository.transaction(() => {
       this.repository.claimEvaluation(keys, owner, requestDigest, Date.now(), ttl);
-      this.repository.checkEvaluationConfig(evaluationKey, configDigest, this.repository.findEvaluation(
+      const previousEvaluation = this.repository.findEvaluation(
         merchantId, candidateId, candidate.compiled_artifact_hash, input.suite.suite_version,
-      )?.runs_completed ?? 0, Date.parse(this.now()));
+      );
+      const receipt = this.repository.checkEvaluationConfig(
+        evaluationKey, configDigest, previousEvaluation?.runs_completed ?? 0, Date.parse(this.now()),
+      );
+      if (receipt !== undefined) {
+        const binding = previousEvaluation === undefined ? undefined : this.pendingEvaluation(previousEvaluation).binding;
+        if (binding === undefined || contentDigest(receipt.binding) !== contentDigest(binding)) {
+          throw new LearningError("version_conflict", "evaluation_evidence_mismatch", "本机回执与待核对调用不匹配");
+        }
+        const outcome = validateOutcome(receipt.outcome as EvaluationAttemptOutcome);
+        this.recoveryWriteGuard(() =>
+          this.applyRecoveredAttempt(evaluationKey, binding, outcome, input.actor.actor_id, `local:${binding.dispatch_id}`),
+        );
+      }
       if (commandId !== undefined) {
         const existing = this.repository.readIdempotent(merchantId, input.actor.actor_id, "learning.evaluateCandidate", commandId);
         if (existing !== undefined && existing.requestDigest !== requestDigest) {
@@ -1135,13 +1148,18 @@ export class LearningService {
     requireActorCapability(input.merchant_id, input.actor, "learning:review");
     const evaluation = this.repository.readEvaluation(input.merchant_id, requireOpaque(input.evaluation_id, "evaluation_id"));
     if (evaluation === undefined) throw new LearningError("not_found", "evaluation_not_found", "评测不存在或不可见");
-    const key = contentDigest({ merchantId: input.merchant_id, candidateId: evaluation.candidate_id, artifact: evaluation.artifact_hash, suite: evaluation.suite_version });
+    return this.pendingEvaluation(evaluation);
+  }
+
+  private pendingEvaluation(evaluation: LearningEvaluation): { pending: string | null; binding?: EvaluationRecoveryBinding; evidence_ref?: string } {
+    const merchantId = evaluation.merchant_id;
+    const key = contentDigest({ merchantId, candidateId: evaluation.candidate_id, artifact: evaluation.artifact_hash, suite: evaluation.suite_version });
     const config = this.repository.readEvaluationConfig(key);
     if (config === undefined || config.pending_attempt === null) return { pending: null };
     let marker: { scenario_id: string; kind: "target" | "adjacent" | "boundary"; repetitions: number; variant: "baseline" | "candidate"; attempt: number; dispatch_id: string; phase?: string; dispatched_at?: string; expires_at?: string };
     try { marker = JSON.parse(config.pending_attempt) as typeof marker; } catch { return { pending: "legacy_unverifiable" }; }
     if (marker === null || typeof marker !== "object" || typeof marker.dispatch_id !== "string" || typeof marker.scenario_id !== "string" || !["target", "adjacent", "boundary"].includes(marker.kind) || marker.repetitions !== 3 || !["baseline", "candidate"].includes(marker.variant) || !Number.isSafeInteger(marker.attempt) || marker.attempt < 1 || marker.attempt > marker.repetitions) return { pending: "legacy_unverifiable" };
-    const binding: EvaluationRecoveryBinding = { merchant_id: input.merchant_id, candidate_id: evaluation.candidate_id, candidate_revision: evaluation.candidate_revision, artifact_hash: evaluation.artifact_hash, suite_version: evaluation.suite_version, config_digest: config.config_digest, scenario_id: marker.scenario_id, kind: marker.kind, repetitions: marker.repetitions, variant: marker.variant, attempt: marker.attempt, dispatch_id: marker.dispatch_id, ...(typeof marker.dispatched_at === "string" ? { dispatched_at: marker.dispatched_at } : {}), ...(typeof marker.expires_at === "string" ? { expires_at: marker.expires_at } : {}) };
+    const binding: EvaluationRecoveryBinding = { merchant_id: merchantId, candidate_id: evaluation.candidate_id, candidate_revision: evaluation.candidate_revision, artifact_hash: evaluation.artifact_hash, suite_version: evaluation.suite_version, config_digest: config.config_digest, scenario_id: marker.scenario_id, kind: marker.kind, repetitions: marker.repetitions, variant: marker.variant, attempt: marker.attempt, dispatch_id: marker.dispatch_id, ...(typeof marker.dispatched_at === "string" ? { dispatched_at: marker.dispatched_at } : {}), ...(typeof marker.expires_at === "string" ? { expires_at: marker.expires_at } : {}) };
     const evidenceRef = `local:${binding.dispatch_id}`;
     const receipt = this.repository.readEvaluationReceipt(evidenceRef);
     const preparedRef = `local-prepared:${binding.dispatch_id}`;
@@ -1215,20 +1233,8 @@ export class LearningService {
           const current = this.repository.readEvaluationConfig(key);
           if (current?.pending_attempt !== config?.pending_attempt || phase !== "prepared") throw new LearningError("version_conflict", "evaluation_attempt_changed", "待核对调用已变化");
         }
-        const candidate = this.repository.readCandidate(binding.merchant_id, binding.candidate_id);
-        const evaluation = this.repository.findEvaluation(binding.merchant_id, binding.candidate_id, binding.artifact_hash, binding.suite_version);
-        if (candidate?.state !== "EVALUATING" || candidate.revision !== binding.candidate_revision || evaluation === undefined || evaluation.candidate_revision !== binding.candidate_revision || evaluation.state !== "EVALUATING" || evaluation.run_status === "completed") throw new LearningError("version_conflict", "evaluation_attempt_changed", "评测或候选已变化");
-        const previous = evaluation.results.scenarios[binding.scenario_id];
-        const attempts = [...(previous?.attempts ?? [])];
-        if (attempts.some((a) => a.variant === binding.variant && a.attempt === binding.attempt) || (binding.variant === "candidate" && !attempts.some((a) => a.variant === "baseline" && a.attempt === binding.attempt))) throw new LearningError("version_conflict", "evaluation_attempt_changed", "评测结果已变化");
-        if (outcome !== undefined) {
-          attempts.push({ variant: binding.variant, attempt: binding.attempt, passed: outcome.passed, hard_gate_failures: outcome.hard_gate_failures, ...(outcome.improvement_delta !== undefined ? { improvement_delta: outcome.improvement_delta } : {}) });
-          this.repository.updateEvaluation({ ...evaluation, runs_completed: evaluation.runs_completed + 1, results: { scenarios: { ...evaluation.results.scenarios, [binding.scenario_id]: { scenario_id: binding.scenario_id, kind: binding.kind, repetitions: binding.repetitions, attempts } } }, updated_at: this.now() });
-        }
-        this.repository.setEvaluationAttempt(key, null);
-        this.repository.deleteEvaluationReceipt(`local:${binding.dispatch_id}`);
+        this.applyRecoveredAttempt(key, binding, outcome, input.actor.actor_id, evidenceRef);
         const result = { status: verified.status };
-        this.repository.appendEvent({ merchantId: binding.merchant_id, subjectKind: "evaluation", subjectId: evaluation.evaluation_id, event: "evaluation_attempt_reconciled", detail: { actor_id: input.actor.actor_id, status: verified.status, dispatch_id: binding.dispatch_id, evidence_digest: contentDigest({ evidenceRef }) }, createdAt: this.now() });
         this.repository.saveIdempotent({ merchantId: binding.merchant_id, actorId: input.actor.actor_id, operation, commandId: input.command_id, requestDigest: digest, result, createdAt: this.now() });
         return result;
       }));
@@ -1237,6 +1243,62 @@ export class LearningService {
       // 清理失败不能覆盖已提交的结果或原本的核验错误。
       try { this.recoveryWriteGuard(() => this.repository.transaction(() => this.repository.releaseEvaluationClaim([claimKey], owner))); } catch { /* lease expiry permits takeover */ }
     }
+  }
+
+  private applyRecoveredAttempt(
+    key: string,
+    binding: EvaluationRecoveryBinding,
+    outcome: EvaluationAttemptOutcome | undefined,
+    actorId: string,
+    evidenceRef: string,
+  ): void {
+    const candidate = this.repository.readCandidate(binding.merchant_id, binding.candidate_id);
+    const evaluation = this.repository.findEvaluation(
+      binding.merchant_id, binding.candidate_id, binding.artifact_hash, binding.suite_version,
+    );
+    if (candidate?.state !== "EVALUATING" || candidate.revision !== binding.candidate_revision ||
+        evaluation?.candidate_revision !== binding.candidate_revision ||
+        evaluation.state !== "EVALUATING" || evaluation.run_status === "completed") {
+      throw new LearningError("version_conflict", "evaluation_attempt_changed", "评测或候选已变化");
+    }
+    const previous = evaluation.results.scenarios[binding.scenario_id];
+    const attempts = [...(previous?.attempts ?? [])];
+    if (attempts.some((a) => a.variant === binding.variant && a.attempt === binding.attempt) ||
+        (binding.variant === "candidate" && !attempts.some((a) => a.variant === "baseline" && a.attempt === binding.attempt))) {
+      throw new LearningError("version_conflict", "evaluation_attempt_changed", "评测结果已变化");
+    }
+    const now = this.now();
+    if (outcome !== undefined) {
+      attempts.push({
+        variant: binding.variant,
+        attempt: binding.attempt,
+        passed: outcome.passed,
+        hard_gate_failures: outcome.hard_gate_failures,
+        ...(outcome.improvement_delta !== undefined ? { improvement_delta: outcome.improvement_delta } : {}),
+      });
+      const scenario = { scenario_id: binding.scenario_id, kind: binding.kind, repetitions: binding.repetitions, attempts };
+      this.repository.updateEvaluation({
+        ...evaluation,
+        runs_completed: evaluation.runs_completed + 1,
+        results: { scenarios: { ...evaluation.results.scenarios, [scenario.scenario_id]: scenario } },
+        updated_at: now,
+      });
+    }
+    this.repository.setEvaluationAttempt(key, null);
+    this.repository.deleteEvaluationReceipt(`local:${binding.dispatch_id}`);
+    this.repository.appendEvent({
+      merchantId: binding.merchant_id,
+      subjectKind: "evaluation",
+      subjectId: evaluation.evaluation_id,
+      event: "evaluation_attempt_reconciled",
+      detail: {
+        actor_id: actorId,
+        status: outcome === undefined ? "not_executed" : "completed",
+        dispatch_id: binding.dispatch_id,
+        evidence_digest: contentDigest({ evidenceRef }),
+      },
+      createdAt: now,
+    });
   }
 
   getEvaluation(merchantId: string, evaluationId: string): LearningEvaluation | undefined {

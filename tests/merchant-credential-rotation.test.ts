@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, existsSync 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { rotateMerchantCredential } from "../src/merchant-credential-rotation.js";
+import { rotateMerchantCredential, rotateMerchantCredentialIfDue } from "../src/merchant-credential-rotation.js";
 
 const dirs: string[] = [];
 type FetchInit = NonNullable<Parameters<typeof fetch>[1]>;
@@ -117,6 +117,41 @@ describe("credential rotation edge cases", () => {
       }),
     ).rejects.toThrow(/did not confirm/);
     expect(events).toContain("marker-cleared");
+  });
+
+  it("automatically clears the switch marker when a supervised restart fails", async () => {
+    const f = fixture();
+    const marker = path.join(f.dir, "switch.in-progress");
+    const fetchImpl = vi.fn(async (input: URL | string | Request) => {
+      const url = String(input);
+      if (url.endsWith("/status")) return response({
+        merchant_id: "seller-a",
+        active: true,
+        token_prefix: "fixture",
+        created_at: "2026-10-19T00:00:00.000Z",
+        expires_at: "2026-11-19T00:01:00.000Z",
+      });
+      if (url.endsWith("/prepare")) return response({ status: "pending" });
+      if (url.endsWith("/private-config")) return response({ merchant_id: "seller-a" });
+      throw new Error("unexpected request");
+    });
+    await expect(rotateMerchantCredentialIfDue({
+      baseUrl: "https://shopping.example",
+      merchantId: "seller-a",
+      tokenEnv: "SHOPPING_MERCHANT_TOKEN",
+      credentialsPath: f.credentialsPath,
+      pendingPath: f.pendingPath,
+      rotateBeforeSeconds: 7 * 24 * 3600,
+      now: () => new Date("2026-11-19T00:00:00.000Z"),
+      fetchImpl,
+      runningServices: () => ["a2a"],
+      beginRuntimeSwitch: () => writeFileSync(marker, "active"),
+      endRuntimeSwitch: () => rmSync(marker, { force: true }),
+      stopServices: async () => undefined,
+      startRuntime: async () => { throw new Error("restart failed"); },
+    })).rejects.toThrow("restart failed");
+    expect(existsSync(marker)).toBe(false);
+    expect(existsSync(f.pendingPath)).toBe(true);
   });
 });
 

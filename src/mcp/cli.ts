@@ -44,6 +44,7 @@ import path from "node:path";
 
 import { assertNorthboundContractValid } from "../contracts/northbound-schema.js";
 import { buildBuyerService } from "../buyer-core/build-service.js";
+import { quoteHistoryDelegationFromEnv } from "../buyer-core/a2a-quote-history.js";
 import { McpServer } from "./server.js";
 import { resolveSessionOwner } from "./session-owner.js";
 import { buildKiwiTools } from "./tools.js";
@@ -197,7 +198,7 @@ export async function runMcpServe(args: string[]): Promise<number> {
   // 单核心多包装：MCP 与 HTTP 共用同一 buildBuyerService（§6.3）。
   const service = buildBuyerService({
     openInquiryDirect: process.env.KIWI_OPEN_INQUIRY_DIRECT === "true",
-    ...(process.env.KIWI_QUOTE_HISTORY_DELEGATION === "true" ? { historyDelegation: {} } : {}),
+    historyDelegation: quoteHistoryDelegationFromEnv(process.env),
     ...(process.env.KIWI_RECEIPT_CATALOG_URL !== undefined
       ? { commerceReceiptCatalogUrl: process.env.KIWI_RECEIPT_CATALOG_URL }
       : {}),

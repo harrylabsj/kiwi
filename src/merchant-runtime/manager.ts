@@ -374,6 +374,12 @@ export class MerchantRuntimeManager {
     return await this.terminate(name, { persistIntent: true });
   }
 
+  /** Temporarily stop a service while the credential switch marker blocks relaunches. */
+  async stopForCredentialRotation(name: string): Promise<ManagedServiceState> {
+    this.assertMutable();
+    return await this.terminate(name, { persistIntent: false });
+  }
+
   /**
    * 停止服务本体。`persistIntent=false` 用于**优雅关闭**（supervisor 收到
    * SIGTERM 后停全部子进程）：此时不写 `<name>.stopped`，否则下一次

@@ -17,6 +17,37 @@ async function waitFor(assertion: () => boolean, timeoutMs = 5_000): Promise<voi
 }
 
 describe("runtime credential handoff", () => {
+  it("resumes a service after a failed switch clears its temporary marker", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-runtime-credential-retry-"));
+    dirs.push(dir);
+    const marker = path.join(dir, "credential-rotation.lock");
+    const supervisor = new MerchantRuntimeManager({
+      dir,
+      services: [{
+        name: "a2a",
+        command: [process.execPath, "-e", "setInterval(() => {}, 1000)"],
+        credentialSwitchMarker: marker,
+      }],
+      reconcileIntervalMs: 50,
+    });
+    try {
+      await supervisor.supervise();
+      const initialPid = supervisor.status()[0]?.pid;
+      expect(initialPid).toBeDefined();
+      writeFileSync(marker, "switch in progress");
+      await supervisor.stopForCredentialRotation("a2a");
+      expect(supervisor.status()[0]?.running).toBe(false);
+      expect(existsSync(path.join(dir, "runtime", "a2a.stopped"))).toBe(false);
+
+      rmSync(marker);
+      await waitFor(() => supervisor.status()[0]?.running === true);
+      expect(supervisor.status()[0]?.pid).not.toBe(initialPid);
+    } finally {
+      rmSync(marker, { force: true });
+      await supervisor.shutdown();
+    }
+  });
+
   it("reconciles an external switch without racing the old supervisor or relaunching stale env", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "kiwi-runtime-credential-switch-"));
     dirs.push(dir);

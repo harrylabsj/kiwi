@@ -26,6 +26,7 @@ import path from "node:path";
 
 import { DEFAULT_CATALOG_URL, DEFAULT_DELEGATION_POLICY, type McpServeOptions } from "../mcp/cli.js";
 import { buildBuyerService } from "../buyer-core/build-service.js";
+import { quoteHistoryDelegationFromEnv } from "../buyer-core/a2a-quote-history.js";
 import { resolveSessionOwner } from "../mcp/session-owner.js";
 import { MerchantOpsService } from "../merchant/ops.js";
 import { createBuyerHttpServer } from "./server.js";
@@ -106,7 +107,7 @@ export async function runHttpServe(args: string[]): Promise<number> {
   }
   const service = buildBuyerService({
     openInquiryDirect: process.env.KIWI_OPEN_INQUIRY_DIRECT === "true",
-    ...(process.env.KIWI_QUOTE_HISTORY_DELEGATION === "true" ? { historyDelegation: {} } : {}),
+    historyDelegation: quoteHistoryDelegationFromEnv(process.env),
     ...(process.env.KIWI_RECEIPT_CATALOG_URL !== undefined
       ? { commerceReceiptCatalogUrl: process.env.KIWI_RECEIPT_CATALOG_URL }
       : {}),

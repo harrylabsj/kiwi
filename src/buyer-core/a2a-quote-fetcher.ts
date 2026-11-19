@@ -137,11 +137,7 @@ export interface A2AQuoteFetcherOptions {
    * 委托配置。存在即启用；merchantIds 缺省表示对全部商家随已签名 RFQ
    * 附带委托声明（请求体签名覆盖）。声明按任务派生（重试恒定）。
    */
-  historyDelegation?: {
-    merchantIds?: string[];
-    ttlDays?: number;
-    buyerAgentId?: string;
-  };
+  historyDelegation?: import("./a2a-quote-history.js").QuoteHistoryDelegationOptions;
 }
 
 /**
@@ -421,6 +417,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
         ? { buyerAgentId: this.historyDelegation.buyerAgentId }
         : {}),
       issuedAt: context.createdAt,
+      ...(this.historyDelegation.version !== undefined ? { version: this.historyDelegation.version } : {}),
       ...(this.historyDelegation.ttlDays !== undefined
         ? { ttlDays: this.historyDelegation.ttlDays }
         : {}),

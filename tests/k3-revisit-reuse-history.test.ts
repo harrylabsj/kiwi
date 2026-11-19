@@ -11,7 +11,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { generateKeyPairSync } from "node:crypto";
-import { afterEach, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { KiwiBuyerService } from "../src/buyer-core/service.js";
+import { TaskApprovalStore } from "../src/buyer-core/store.js";
+import { DEFAULT_DELEGATION_POLICY } from "../src/mcp/cli.js";
 
 import { startTestA2aStack, type CapturedInbound } from "./helpers.js";
 
@@ -31,10 +35,61 @@ function makeBuyerIdentity() {
 }
 
 describe("K3 沿用上次规格真实回访（A5）", () => {
+  it.each([false, true])("同键重试读取原任务，无需再次查询历史（旧任务=%s）", async (legacyTask) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-quote-replay-"));
+    recoveryDirs.push(dir);
+    const dbPath = path.join(dir, "buyer.sqlite");
+    const store = new TaskApprovalStore({ dbPath });
+    onTestFinished(() => store.close());
+    const service = new KiwiBuyerService({
+      store,
+      principal: "buyer:review",
+      buyerAgentId: "buyer-agent:review",
+      sessionId: "same-owner",
+      delegationPolicy: { ...DEFAULT_DELEGATION_POLICY, principal: "buyer:review" },
+    });
+    const merchant = "merchant-001";
+    const history = vi.spyOn(service, "resolveQuoteHistory").mockResolvedValueOnce({
+      status: "ok",
+      merchant_id: merchant,
+      candidates: [{
+        negotiation_id: "neg-1", offer_id: "offer-1", offer_version: 1, sku: "previous-sku",
+        quantity: 1, unit: "piece", price: { currency: "CNY", amount_minor: 100 },
+        terms_digest: "test", spec: {}, quoted_at: "2026-01-01T00:00:00.000Z",
+      }],
+    }).mockRejectedValue(new Error("history became unavailable"));
+    const input = {
+      intent: {
+        intent_id: "quote-replay", intent_type: "purchase",
+        items: [{ query: "Product", quantity: { value: 2, unit: "piece" } }],
+        context_projection: { disclosure_boundary: "commerce_required", projected_fields: ["items"] },
+      },
+      merchant_ids: [merchant],
+      idempotency_key: "quote-replay-key",
+      reuse_history: true,
+    };
+    const first = await service.requestQuotes(input);
+    expect(first.created).toBe(true);
+    if (legacyTask) {
+      const db = new DatabaseSync(dbPath);
+      try {
+        db.prepare("UPDATE mcp_tasks SET quote_request_digest = NULL WHERE task_id = ?").run(String(first.task.task_id));
+      } finally {
+        db.close();
+      }
+    }
+    expect(await service.requestQuotes(input)).toMatchObject({
+      created: false,
+      task: { task_id: first.task.task_id, intent: { items: [{ sku: "previous-sku" }] } },
+    });
+    await expect(service.requestQuotes({ ...input, merchant_ids: ["other-merchant"] }))
+      .rejects.toMatchObject({ code: "idempotency_conflict" });
+    expect(history).toHaveBeenCalledTimes(1);
+  });
+
   it("两笔任务同 subject；出站 SKU=上次那款；本次数量生效", async () => {
     const { buildBuyerService } = await import("../src/buyer-core/build-service.js");
     const { buildKiwiTools } = await import("../src/mcp/tools.js");
-    const { DEFAULT_DELEGATION_POLICY } = await import("../src/mcp/cli.js");
     // 目录匹配列表第一项是另一 SKU（B 目录缺陷模拟）：历史解析必须覆盖它。
     // authVerifier 模拟开放询价中继的服务端验签语义（identity=会话 keyid、
     // identityVerified=true），使 K1 建档与 K2 委托在直连测试栈上成立。
@@ -205,7 +260,6 @@ describe("K3 沿用上次规格真实回访（A5）", () => {
   it("无授权/无历史 → clarification_needed 且不创建任务（A4/A6 边界）", async () => {
     const { buildBuyerService } = await import("../src/buyer-core/build-service.js");
     const { buildKiwiTools } = await import("../src/mcp/tools.js");
-    const { DEFAULT_DELEGATION_POLICY } = await import("../src/mcp/cli.js");
     const stack = await startTestA2aStack({
       now: () => new Date().toISOString(),
       productSource: {
