@@ -33,7 +33,7 @@
  * `ensureVerifiedCustomerIdentity` 保证——通道重试不会产生重复主体。
  */
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -402,7 +402,7 @@ export function createQuoteHistoryAccess(options: {
   dbPath: string;
   now: () => string;
   assertOwner?: () => void;
-}): { store: QuoteHistoryAccess; close(): void } {
+}): { store: QuoteHistoryAccess; prune(merchantId: string): void; close(): void } {
   const remote = process.env.KIWI_CUSTOMER_IDENTITY_WRITER === "spooled";
   let db: DatabaseSync | undefined;
   const open = (): QuoteHistoryStore | undefined => {
@@ -414,6 +414,13 @@ export function createQuoteHistoryAccess(options: {
     }
   };
   let writeDb: DatabaseSync | undefined;
+  const writable = (): DatabaseSync => {
+    if (writeDb === undefined) {
+      writeDb = new DatabaseSync(options.dbPath);
+      writeDb.exec("PRAGMA busy_timeout = 3000");
+    }
+    return writeDb;
+  };
   const write = async (command: HistoryWrite): Promise<void> => {
     if (remote) {
       const url = process.env.KIWI_CUSTOMER_IDENTITY_FORWARD_URL;
@@ -428,11 +435,7 @@ export function createQuoteHistoryAccess(options: {
       await response.body?.cancel();
       return;
     }
-    if (writeDb === undefined) {
-      writeDb = new DatabaseSync(options.dbPath);
-      writeDb.exec("PRAGMA busy_timeout = 3000");
-    }
-    const connection = writeDb;
+    const connection = writable();
     inImmediateTransaction(connection, () => {
       assertLocalWriter(connection, command.input.merchant_id, options.now(), options.assertOwner);
       const store = new QuoteHistoryStore({ db: connection, now: options.now });
@@ -446,6 +449,16 @@ export function createQuoteHistoryAccess(options: {
       queryHistory: (input) => open()?.queryHistory(input) ?? [],
       applyDelegation: (input) => write({ kind: "delegation", input }),
       indexOffer: (input) => write({ kind: "offer", input }),
+    },
+    prune(merchantId) {
+      // A separate Workbench writer performs its own maintenance.
+      if (remote || !existsSync(options.dbPath)) return;
+      const connection = writable();
+      if (connection.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'published_offers'").get() === undefined) return;
+      inImmediateTransaction(connection, () => {
+        assertLocalWriter(connection, merchantId, options.now(), options.assertOwner);
+        new QuoteHistoryStore({ db: connection, now: options.now }).pruneForMerchant(merchantId);
+      });
     },
     close: () => { db?.close(); writeDb?.close(); },
   };

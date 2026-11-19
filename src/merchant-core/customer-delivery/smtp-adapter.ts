@@ -83,9 +83,16 @@ function statusCode(response: string): number {
   return match === null ? 0 : Number(match[1]);
 }
 
+function validEnvelopeAddress(value: string): boolean {
+  return value.trim() !== "" && !/[<>]/.test(value) && Array.from(value).every((character) => {
+    const code = character.charCodeAt(0);
+    return code >= 32 && code !== 127;
+  });
+}
+
 function escapeData(text: string): string {
   return text
-    .replace(/\r?\n/g, "\r\n")
+    .replace(/\r\n|\r|\n/g, "\r\n")
     .split("\r\n")
     .map((line) => (line.startsWith(".") ? `.${line}` : line))
     .join("\r\n");
@@ -122,6 +129,9 @@ export function createSmtpChannelAdapter(options: SmtpChannelAdapterOptions): De
       const to = recipient ?? options.to;
       if (to === undefined || to.trim() === "") {
         return { outcome: "not_sent", reason: "recipient_unresolved" };
+      }
+      if (!validEnvelopeAddress(options.from) || !validEnvelopeAddress(to)) {
+        return { outcome: "not_sent", reason: "invalid_envelope_address" };
       }
       const timeoutMs = Math.max(1, Math.min(timeout_ms, options.timeout_ms ?? timeout_ms));
       const subject = typeof delivery.payload.title === "string" ? delivery.payload.title : "通知";

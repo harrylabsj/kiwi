@@ -148,15 +148,18 @@ export class MerchantImportDraftStore {
    * 历史已提交行，只保留最新一条；提交回执由 operations 表另行留痕。
    */
   markCommitted(merchantId: string, draftId: string): boolean {
-    const row = this.db
-      .prepare(
-        `SELECT kind, payload_digest FROM merchant_management_import_drafts
-         WHERE draft_id = ? AND merchant_id = ? AND status = 'draft'`,
-      )
-      .get(draftId, merchantId) as { kind: string; payload_digest: string } | undefined;
-    if (row === undefined) return false;
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      const row = this.db
+        .prepare(
+          `SELECT kind, payload_digest FROM merchant_management_import_drafts
+           WHERE draft_id = ? AND merchant_id = ? AND status = 'draft'`,
+        )
+        .get(draftId, merchantId) as { kind: string; payload_digest: string } | undefined;
+      if (row === undefined) {
+        this.db.exec("COMMIT");
+        return false;
+      }
       this.db
         .prepare(
           `DELETE FROM merchant_management_import_drafts

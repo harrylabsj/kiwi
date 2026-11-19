@@ -757,6 +757,13 @@ export function createMerchantHttpHandler(
               principalId: creds.principal_id,
               merchantId: creds.merchant_id,
             });
+            // A standalone password reset can race this login on another process.
+            if (readAdminCredentials(admin.adminDir)?.password_hash !== creds.password_hash) {
+              admin.sessions.revoke(session.sessionId);
+              res.writeHead(303, { location: "/admin/login", ...NO_STORE_HEADERS });
+              res.end();
+              return;
+            }
             const secure = admin.secureCookies === true ? "; Secure" : "";
             res.writeHead(303, {
               location: safeAdminNext(form.next, admin.defaultNext),

@@ -81,6 +81,17 @@ export function createEmailChannelAdapter(
             receipt,
           };
         }
+        if (response.status === 429) {
+          const retryAfter = response.headers.get("retry-after")?.trim() ?? "";
+          const waitMs = /^[0-9]+$/.test(retryAfter)
+            ? Number(retryAfter) * 1_000
+            : Date.parse(retryAfter) - Date.now();
+          return {
+            outcome: "not_sent",
+            reason: "http_429",
+            retry_after_ms: Number.isNaN(waitMs) ? 0 : Math.max(0, waitMs),
+          };
+        }
         if (response.status >= 400 && response.status < 500 && response.status !== 408) {
           return { outcome: "not_sent", reason: `http_${response.status}` };
         }

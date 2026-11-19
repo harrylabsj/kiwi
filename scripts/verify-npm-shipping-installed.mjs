@@ -26,7 +26,7 @@ const remaining = () => {
   if (ms <= 0) throw new Error("SHIPPING_BUILD_TIMEOUT");
   return ms;
 };
-const hostRoot = process.env.KIWI_SHIPPING_HOST_ROOT ?? root;
+const hostRoot = root;
 const budget = () => {
   if (inventory(hostRoot).reduce((n, r) => n + r.size, 0) > MAX_HOST)
     throw new Error("SHIPPING_HOST_BUDGET");

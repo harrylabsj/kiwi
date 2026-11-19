@@ -61,6 +61,12 @@ export class InMemoryFactRegistry implements CommercialFactRegistry {
   resolve(ref: FactRef): CommercialFactSnapshot | undefined {
     return this.snapshots.get(ref.sku);
   }
+
+  candidateSkus(merchantId: string, now: string): string[] {
+    return Array.from(this.snapshots.values())
+      .filter((snapshot) => validateFactRef(snapshot, this, merchantId, now) === undefined)
+      .map((snapshot) => snapshot.sku);
+  }
 }
 
 /** 快照版本：内容 digest——事实或归属变化即版本变化，旧引用自然失效。 */
@@ -249,6 +255,7 @@ export function publishResponsePlan(input: {
   now: string;
   /** 已发布的 QuestionSpec 注册表；缺省使用内置 v1 模板。 */
   questions?: QuestionSpecRegistry;
+  allowedCandidateSkus?: ReadonlySet<string>;
 }): PublishResult {
   const rejected: RejectedBlock[] = [];
   const rendererFallback: RendererFallback[] = [];
@@ -291,7 +298,9 @@ export function publishResponsePlan(input: {
         rejected.push({ block, reason: "question_contract_mismatch" });
         continue;
       }
-      if (block.candidate_refs !== undefined && spec.candidate_type !== "sku_candidates") {
+      if (block.candidate_refs !== undefined &&
+          (spec.candidate_type !== "sku_candidates" ||
+            block.candidate_refs.some((sku) => !input.allowedCandidateSkus?.has(sku)))) {
         rejected.push({ block, reason: "question_contract_mismatch" });
         continue;
       }

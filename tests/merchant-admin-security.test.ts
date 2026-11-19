@@ -66,6 +66,39 @@ afterEach(() => {
 });
 
 describe("BUG-01：OAuth 授权前的商家身份认证", () => {
+  it("撤销一个商家的管理会话时不影响其他商家", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const sessions = new MerchantAdminSessions({ db, now: () => T0 });
+      const owner = sessions.createSession({ merchantId: "merchant-001", principalId: "principal-1" });
+      const other = sessions.createSession({ merchantId: "merchant-002", principalId: "principal-2" });
+      sessions.revokeMerchantSessions("merchant-001");
+      expect(sessions.getSession(owner.sessionId)).toBeUndefined();
+      expect(sessions.getSession(other.sessionId)?.merchant_id).toBe("merchant-002");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("凭据轮换后通过读取凭据拒绝旧会话，即使没有执行撤销写入", () => {
+    const db = new DatabaseSync(":memory:");
+    const adminDir = tmp();
+    try {
+      const credentials = writeAdminCredentials(adminDir, {
+        merchantId: "merchant-001", principalId: "admin", password: ADMIN_PW,
+      });
+      let clock = new Date(Date.parse(credentials.created_at) - 1).toISOString();
+      const sessions = new MerchantAdminSessions({ db, adminDir, now: () => clock });
+      const old = sessions.createSession({ merchantId: "merchant-001", principalId: "admin" });
+      expect(sessions.getSession(old.sessionId)).toBeUndefined();
+      clock = new Date(Date.parse(credentials.created_at) + 1).toISOString();
+      const current = sessions.createSession({ merchantId: "merchant-001", principalId: "admin" });
+      expect(sessions.getSession(current.sessionId)?.merchant_id).toBe("merchant-001");
+    } finally {
+      db.close();
+    }
+  });
+
   it("管理登录页转义不可信 next/error 内容", () => {
     const html = renderAdminLoginPage({
       next: '"><script>alert(1)</script>',

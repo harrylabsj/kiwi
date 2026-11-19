@@ -6,6 +6,8 @@ metadata: {"openclaw":{"emoji":"🥝"}}
 
 # Kiwi Buyer（采购 & 磋商）
 
+本入口尚未支持双来源搜索。
+
 用 `kiwi_buyer_*` 工具完成跨商家发现、询价、比价、磋商、非绑定协议与交易 handoff。
 buyer 只经 catalog 发现、A2A 直连 merchant；**不直连 shopping-cli**（那是服务器上
 merchant 才碰的）。

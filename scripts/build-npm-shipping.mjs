@@ -100,7 +100,6 @@ export function assertLockedPiPackages(root, installedRoot) {
 export function buildShipping({
   root = ROOT,
   out = path.join(root, "build/cloud-artifact"),
-  hostRoot = process.env.KIWI_SHIPPING_HOST_ROOT ?? root,
 } = {}) {
   const source = assertSource(root),
     receipt = assertRootReceipt(root, source),
@@ -111,7 +110,7 @@ export function buildShipping({
     return ms;
   };
   if (existsSync(out)) throw new Error("SHIPPING_NEW_OUTPUT_REQUIRED");
-  if (inventory(hostRoot).reduce((n, r) => n + r.size, 0) > MAX_HOST)
+  if (inventory(root).reduce((n, r) => n + r.size, 0) > MAX_HOST)
     throw new Error("SHIPPING_HOST_BUDGET");
   if (!existsSync(path.join(root, "dist/cloud/main.js")))
     throw new Error("SHIPPING_VERIFIED_ROOT_BUILD_REQUIRED");
@@ -253,7 +252,7 @@ export function buildShipping({
     generatedLock: controlledHiddenNpmLock(out),
   });
   const total = assertBudget(files);
-  if (inventory(hostRoot).reduce((n, r) => n + r.size, 0) > MAX_HOST)
+  if (inventory(root).reduce((n, r) => n + r.size, 0) > MAX_HOST)
     throw new Error("SHIPPING_HOST_BUDGET");
   remaining();
   const manifest = {

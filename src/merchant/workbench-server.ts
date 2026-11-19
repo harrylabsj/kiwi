@@ -31,9 +31,10 @@ import { assembleMerchantRuntime } from "../mcp/merchant-runtime-assembly.js";
 import { createOperationAdviceRunner } from "../merchant-core/operations-jobs/advice-runner.js";
 import { OperationsScheduler } from "../merchant-core/operations-jobs/scheduler.js";
 import { OperationsProjection } from "../merchant-core/operations-jobs/projection.js";
-import { CustomerDataMaintenance } from "../merchant-core/customer-memory/maintenance.js";
 import { DeliveryConsentRepository } from "../merchant-core/customer-delivery/consent-repository.js";
 import { DeliveryDispatcherLoop } from "../merchant-core/customer-delivery/dispatcher-loop.js";
+import { createDeliveryReconciler } from "../merchant-core/customer-delivery/reconciliation.js";
+import { StreamGate } from "../merchant-core/customer-delivery/stream-gate.js";
 import { assertDeliveryStillAuthorized } from "../merchant-core/customer-delivery/gate.js";
 import { createSmtpChannelAdapter } from "../merchant-core/customer-delivery/smtp-adapter.js";
 import { buildModel, realStreamFn } from "../runtime/model.js";
@@ -250,23 +251,13 @@ export async function startStandaloneMerchantWorkbench(
     operationsScheduler.start();
   }
   // 保留期清算：与经营调度并列，只由所有权持有进程每小时执行（P1-7）。
-  let customerDataMaintenance: CustomerDataMaintenance | undefined;
-  if (
-    governance !== undefined &&
-    (governance.flags as unknown as { memory_enabled?: boolean }).memory_enabled === true
-  ) {
-    customerDataMaintenance = new CustomerDataMaintenance({
-      db,
-      now,
-      write: governance.write,
-      log: (line: string) => process.stderr.write(line),
-    });
-    customerDataMaintenance.start();
-  }
+  const customerDataMaintenance = assembly.dataMaintenance;
+  customerDataMaintenance?.start();
   // P1 邮件投递循环：显式开关 + SMTP + 按绑定解析的收件人映射齐全才启动。
   // 收件人只来自 `KIWI_DELIVERY_RECIPIENTS`（address_ref → 地址），不再使用
   // 固定 env 收件人，避免所有绑定共用一个地址（P1-5）。
   let deliveryDispatcher: DeliveryDispatcherLoop | undefined;
+  let deliveryGate: StreamGate | undefined;
   const deliveryRepository = assembly.customerDeliveries;
   const deliveryFlagEnabled =
     governance !== undefined &&
@@ -310,7 +301,11 @@ export async function startStandaloneMerchantWorkbench(
         password: smtp.password,
         from: smtp.from,
       });
+      const reconcile = createDeliveryReconciler(process.env);
+      deliveryGate = StreamGate.forDataDir(dataDir);
       deliveryDispatcher = new DeliveryDispatcherLoop({
+        streamGate: deliveryGate,
+        ...(reconcile !== undefined ? { reconcile } : {}),
         store: deliveryRepository,
         merchant_id: profile.owner_id,
         adapterFor: (delivery) => (delivery.channel === "email" ? emailAdapter : undefined),
@@ -472,6 +467,7 @@ export async function startStandaloneMerchantWorkbench(
     operationsScheduler?.stop();
     customerDataMaintenance?.stop();
     deliveryDispatcher?.stop();
+    deliveryGate?.close();
     if (memoryServer) await new Promise<void>((resolve) => memoryServer!.close(() => resolve()));
     await new Promise<void>((resolve) => listening.close(resolve));
     await adminHandle.close().catch(() => undefined);

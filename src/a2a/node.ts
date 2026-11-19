@@ -88,6 +88,7 @@ import { loadReceptionConfig } from "./reception/config.js";
 import { ReceptionConversationStore } from "./reception/conversation-store.js";
 import { runReceptionRetention } from "./reception/retention.js";
 import { createMerchantReceptionEngine } from "./reception/engine.js";
+import { StreamGate, streamKey } from "../merchant-core/customer-delivery/stream-gate.js";
 import { ReceptionBudget } from "./reception/budget.js";
 import { ReceptionReplyOutbox } from "./reception/reply-outbox.js";
 import { createReceptionResponder } from "./reception/responder.js";
@@ -814,7 +815,15 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
       "⚠️ [kiwi] KIWI_RECEPTION_RUNTIME=pi 需要真实 provider；fake 下保持确定性接待\n",
     );
   }
-  const receptionEngine = receptionEnabled
+  const receptionStreamKey = (input: { merchantId: string; identity: string; contextId: string }) => streamKey({
+    merchant_id: input.merchantId,
+    channel: "a2a",
+    scope: JSON.stringify([input.identity, input.contextId]),
+  });
+  const receptionGate = receptionEnabled
+    ? (options.dataDir === undefined ? new StreamGate() : StreamGate.forDataDir(options.dataDir))
+    : undefined;
+  const baseReceptionEngine = receptionEnabled
     ? createMerchantReceptionEngine({
         store: new ReceptionConversationStore({
           file: path.join(dir, "reception-conversations.json"),
@@ -824,6 +833,7 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
         outbox: new ReceptionReplyOutbox({
           file: path.join(dir, "reception-reply-outbox.json"),
           now,
+          ...(receptionGate === undefined ? {} : { gate: receptionGate, streamKeyFor: receptionStreamKey }),
         }),
         ...(profile.model !== undefined
           ? {
@@ -860,6 +870,23 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
             : (options.merchantPolicy ?? profile.merchant_policy),
       })
     : undefined;
+  const receptionEngine = baseReceptionEngine === undefined || receptionGate === undefined
+    ? undefined
+    : {
+        async respond(input: Parameters<typeof baseReceptionEngine.respond>[0]) {
+          const key = receptionStreamKey(input);
+          const holder = crypto.randomUUID();
+          receptionGate.enter({
+            stream_key: key, holder_id: holder, now: now(),
+            lease_ms: Math.max(120_000, receptionConfig.runDeadlineMs + 60_000),
+          });
+          try {
+            return await baseReceptionEngine.respond(input);
+          } finally {
+            receptionGate.leave(key, holder);
+          }
+        },
+      };
   // 买家识别与交易回执 · K1：验签开放询价自动分配本店客户 ID 的共享 Writer。
   // 临时（ephemeral）节点无持久客户档案，不建档。
   const customerIdentityWriter =
@@ -878,6 +905,16 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
     now,
     assertOwner: options.assertCustomerWriterOwner,
   });
+  const pruneQuoteHistory = () => {
+    try {
+      quoteHistory?.prune(profile.owner_id);
+    } catch {
+      // A separate owner may hold the write fence; its maintenance takes over.
+    }
+  };
+  const quoteHistoryTimer = quoteHistory === undefined ? undefined : setInterval(pruneQuoteHistory, 60 * 60_000);
+  quoteHistoryTimer?.unref();
+  pruneQuoteHistory();
   const retryIdentity = (): void => { void customerIdentityWriter?.drain?.().catch(() => {}); };
   const identityTimer = customerIdentityWriter?.drain === undefined ? undefined : setInterval(retryIdentity, 30_000);
   identityTimer?.unref();
@@ -1104,9 +1141,13 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
     { id: "commerce_receipt_retry", run: () => clearInterval(receiptTimer) },
     { id: "customer_identity_retry", run: () => clearInterval(identityTimer) },
     { id: "customer_identity", run: () => customerIdentityWriter?.close?.() },
-    { id: "quote_history", run: () => quoteHistory?.close() },
+    { id: "quote_history", run: () => {
+      clearInterval(quoteHistoryTimer);
+      quoteHistory?.close();
+    } },
     { id: "statistics", run: () => statsStore?.close() },
     { id: "reception_budget", run: () => receptionBudgetStore?.close() },
+    { id: "reception_stream_gate", run: () => receptionGate?.close() },
     { id: "reception_skill_catalog", run: () => receptionSkillCatalog?.close() },
     { id: "reception_customer_provider", run: () => receptionCustomerProvider?.close() },
     { id: "reception_retention", run: () => { if (retentionTimer !== undefined) clearInterval(retentionTimer); } },

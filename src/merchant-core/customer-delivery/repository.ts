@@ -22,6 +22,7 @@
  * dispatcher 组合，保证同一 stream 的单流在途约束。
  */
 
+import { deliveryAttemptDigest, type DeliveryEvidence } from "./reconciliation.js";
 import type { DatabaseSync } from "node:sqlite";
 
 import { inImmediateTransaction } from "../storage/transaction.js";
@@ -108,6 +109,20 @@ function rowToRecord(row: OutboxRow): DeliveryRecord | undefined {
     ...(row.blocked_reason !== null ? { blocked_reason: row.blocked_reason } : {}),
   };
 }
+
+const DELIVERY_AUDIT_SCHEMA = `
+CREATE TABLE IF NOT EXISTS customer_delivery_reconciliation_audit (
+  id INTEGER PRIMARY KEY,
+  merchant_id TEXT NOT NULL,
+  delivery_id TEXT NOT NULL,
+  attempt_digest TEXT NOT NULL,
+  outcome TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  evidence_ref TEXT NOT NULL,
+  reconciled_at TEXT NOT NULL,
+  UNIQUE (merchant_id, delivery_id, attempt_digest)
+);
+`;
 
 export class CustomerDeliveryRepository implements DeliveryStore {
   private readonly db: DatabaseSync;
@@ -243,6 +258,48 @@ export class CustomerDeliveryRepository implements DeliveryStore {
     return Number(result.changes);
   }
 
+  /** Settle only the exact attempt inspected by the trusted evidence source. */
+  reconcileUnknown(snapshot: DeliveryRecord, evidence: DeliveryEvidence): boolean {
+    return this.inTransaction(() => {
+      const current = this.get(snapshot.merchant_id, snapshot.delivery_id);
+      const digest = deliveryAttemptDigest(snapshot);
+      if (current?.status !== "UNKNOWN" || current.started_at === undefined ||
+          deliveryAttemptDigest(current) !== digest ||
+          !/^[A-Za-z0-9_.:/-]{1,180}$/.test(evidence.evidence_ref)) return false;
+      const now = this.now();
+      if (evidence.outcome === "accepted" &&
+          !(Date.parse(evidence.accepted_at) >= Date.parse(current.started_at) &&
+            Date.parse(evidence.accepted_at) <= Date.parse(now))) return false;
+      if (evidence.outcome === "not_sent" && evidence.future_execution_blocked !== true) return false;
+      this.db.exec(DELIVERY_AUDIT_SCHEMA);
+      this.db.prepare(
+        `INSERT INTO customer_delivery_reconciliation_audit
+         (merchant_id, delivery_id, attempt_digest, outcome, actor_id, evidence_ref, reconciled_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).run(current.merchant_id, current.delivery_id, digest, evidence.outcome, "service:delivery-evidence", evidence.evidence_ref, now);
+      this.save({
+        ...current,
+        lease_owner: undefined, lease_expires_at: undefined,
+        ...(evidence.outcome === "accepted"
+          ? { status: "SENT", accepted_at: evidence.accepted_at, blocked_reason: undefined }
+          // PENDING is a legacy storage enum; the deadline makes this row permanently ineligible.
+          : { status: "PENDING", started_at: undefined, next_attempt_at: current.valid_until,
+            blocked_reason: "reconciled_not_sent_no_retry" }),
+      });
+      return true;
+    });
+  }
+
+  listReconciliationAudit(merchantId: string): Record<string, unknown>[] {
+    if (this.db.prepare(
+      "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'customer_delivery_reconciliation_audit'",
+    ).get() === undefined) return [];
+    return this.db.prepare(
+      `SELECT delivery_id, attempt_digest, outcome, actor_id, evidence_ref, reconciled_at
+       FROM customer_delivery_reconciliation_audit WHERE merchant_id = ? ORDER BY id DESC LIMIT 100`,
+    ).all(merchantId);
+  }
+
   /** dispatcher 扫描：PENDING、未过期、尚未领取、已过重试退避。 */
   listDue(merchantId: string, now: string, limit = 20): DeliveryRecord[] {
     const rows = this.db
@@ -271,15 +328,22 @@ export class CustomerDeliveryRepository implements DeliveryStore {
     return Number(row.n);
   }
 
+  countUnknown(merchantId: string): number {
+    const row = this.db.prepare(
+      "SELECT COUNT(*) AS n FROM followup_outbox WHERE merchant_id = ? AND status = 'UNKNOWN' AND stream_key IS NOT NULL",
+    ).get(merchantId) as { n: number };
+    return row.n;
+  }
+
   /** 运营核对：列出指定状态的投递记录（默认 UNKNOWN）。 */
-  listByStatus(merchantId: string, status: DeliveryStatus, limit = 50): DeliveryRecord[] {
+  listByStatus(merchantId: string, status: DeliveryStatus, limit = 50, offset = 0): DeliveryRecord[] {
     const rows = this.db
       .prepare(
         `SELECT * FROM followup_outbox
-          WHERE merchant_id = ? AND status = ?
-          ORDER BY created_at ASC LIMIT ?`,
+          WHERE merchant_id = ? AND status = ? AND stream_key IS NOT NULL
+          ORDER BY created_at ASC, outbox_id ASC LIMIT ? OFFSET ?`,
       )
-      .all(merchantId, status, limit) as unknown as OutboxRow[];
+      .all(merchantId, status, limit, offset) as unknown as OutboxRow[];
     return rows.map((row) => rowToRecord(row)).filter((row): row is DeliveryRecord => row !== undefined);
   }
 

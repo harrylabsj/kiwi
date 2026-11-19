@@ -22,9 +22,11 @@ function plan(blocks: ReceptionBlock[]): ReceptionResponsePlan {
 }
 
 function publish(blocks: ReceptionBlock[], registry?: QuestionSpecRegistry) {
+  const allowedCandidateSkus = new Set(["SKU-1", "SKU-2"]);
   return publishResponsePlan({
     plan: plan(blocks),
     registry: new InMemoryFactRegistry(),
+    allowedCandidateSkus,
     merchantId: "m-1",
     now: NOW,
     ...(registry !== undefined ? { questions: registry } : {}),
@@ -154,6 +156,14 @@ describe("ask_registered_question", () => {
       },
     ]);
     expect(multiple.text).toContain("您提到了：SKU-1、SKU-2。");
+    const unknownSku = publish([{
+      kind: "ask_registered_question", question_id: "q_multiple_skus_v1",
+      schema_version: QUESTION_SCHEMA_VERSION, slot: "sku", reason_code: "multiple_skus",
+      candidate_refs: ["SKU-not-returned"],
+    }]);
+    expect(unknownSku.text).toBe("");
+    expect(unknownSku.rejected[0]?.reason).toBe("question_contract_mismatch");
+
   });
 
   it("未知 ID / schema / slot / reason 失配 / 非法候选一律拒绝，不回退自由问句", () => {

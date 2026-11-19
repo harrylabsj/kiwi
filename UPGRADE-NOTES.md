@@ -147,3 +147,10 @@
 - 买卖两端各自配置 `KIWI_RECEIPT_CATALOG_URL`。商家使用该店的 `KIWI_RECEIPT_MERCHANT_TOKEN`；买方复用本次磋商的开放询价签名钥。自托管直连需要另行启用受支持的开放询价验签，买方选择 `KIWI_OPEN_INQUIRY_DIRECT=true` 后才以该钥签名直连。
 - 拆分部署中，A2A 使用 `KIWI_CUSTOMER_IDENTITY_WRITER=spooled`，将 `KIWI_CUSTOMER_IDENTITY_FORWARD_URL` 指向持有写权的 Workbench `/merchant/api/internal/customer-identity`。两端共享独立的 `KIWI_CUSTOMER_IDENTITY_CHANNEL_TOKEN`，最少 32 个字符。A2A 对同一库的历史查询使用只读连接。
 - UCP 订单上报由 checkout 适配器的 `orderReceipts` 显式接入。适配器需使用商家凭据或独立限定商家与来源渠道的 Catalog 凭据。Catalog 的 `KIWI_CATALOG_ORDER_ADAPTER_BINDINGS` 接收绑定数组，每项包含 `adapter_id`、`token_digest`、`merchant_id` 和 `order_channel`。普通外链不产生订单事实。
+
+## 投递对账与评测数据保留
+
+- 独立商家工作台与 A2A 接待在同一个运行数据目录下共用 `delivery-streams.sqlite`。协调键包含商家、渠道和会话或收件范围。不同渠道继续独立发送，同一发送流的在途记录遵守共享租约和 outbox 状态。
+- 启用邮件发送循环后，设置 `KIWI_DELIVERY_EVIDENCE_URL` 和 `KIWI_DELIVERY_EVIDENCE_TOKEN` 可启用自动对账。前者是部署方维护的 HTTPS 只读渠道日志查询端点。请求使用 GET 和 Bearer 鉴权，包含 `merchant_id`、`delivery_id`、`attempt` 、`started_at`、`channel`、可用时的 `provider_request_id` 和 `attempt_digest`。渠道端点必须根据已核对的原始投递日志准确回传 `attempt_digest`、不含个人信息的 `evidence_ref`，以及 `outcome: "accepted"` 和 `accepted_at`，或 `outcome: "not_sent"` 和 `future_execution_blocked: true`。无法确认时保持 `UNKNOWN`，查询未命中不构成未发送证明。
+- 对账只结算原尝试，结果与审计同事务持久化。确认未发送会停止原记录，SMTP 不会自动重发。运营端可从 `GET /merchant/api/v1/delivery/unknown` 查看待核对列表和最近审计。未配置渠道日志端点时，发送循环会定期记录待核对数量。
+- 治理所有权持有者定期清理评测。完成且候选已终结的评测保留 90 天逐场景详情，之后保留报告摘要和命令重放绑定。孤立且已过保留期的回执及过期执行租约会清理，待核对回执和未完成命令的幂等依据继续保留。

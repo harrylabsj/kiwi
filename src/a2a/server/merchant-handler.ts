@@ -26,6 +26,7 @@
  * 的确定性 merchant 行为；未来可替换为 LLM 驱动的 Negotiation Engine（同一 handler 接缝）。
  */
 
+import { StreamGateError } from "../../merchant-core/customer-delivery/stream-gate.js";
 import { BoundedMap, BoundedSet } from "../../runtime/bounded-memory.js";
 import { checkedProductStock, checkedSourceEvidence, quoteFactsStillValid, recoverQuoteSourceSnapshot, type ProductSourceEvidence, type QuoteSourceSnapshot, type ResolvedProductFacts } from "./merchant-product-facts.js";
 import type { CommerceDataSource } from "../../commerce/data-source.js";
@@ -1712,7 +1713,10 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
                 ? quoteHistoryNote(history, { merchantId, actor: ctx.senderIdentity, sku: structuredSku })
                 : "";
               return textReply(received.text + historyNote);
-            } catch {
+            } catch (error) {
+              if (error instanceof StreamGateError) {
+                return { kind: "error", protocolCode: "temporarily_unavailable", message: "reception stream busy" };
+              }
               // 接待引擎不可用：回退确定性组装（下述既有路径）。
             }
           }

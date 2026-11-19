@@ -94,6 +94,9 @@ jobs:
       # the dispatch release rehearsal, so packaging/supply-chain regressions
       # reached release day. Keep PR CI aligned with the `verify` contract.
       - run: npm run verify:buyer-skills
+      - run: npm run verify:workbuddy
+      - run: npm run verify:workbuddy-platform
+      - run: npm run verify:workbuddy-assets
       - run: npm run verify:portfolio-products
       - run: npm run verify:supply-chain
       - run: npm run verify:audit-expiry

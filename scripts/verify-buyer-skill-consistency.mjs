@@ -15,7 +15,7 @@
  * 跨仓副本（Hermes 插件仓）在本机存在时一并校验，缺席时跳过并提示——CI 的干净
  * 检出只覆盖仓内副本。telemetry 最小化：本校验不联网、不上报。
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -78,6 +78,7 @@ const BOUNDARY_FILES = [
 /** 尚未支持双来源的副本：必须显式标注，且不得使用新词表。 */
 const PENDING_FILES = [
   "integrations/hosts/deepseek-harness/SKILL.md",
+  "integrations/hosts/openclaw/kiwi-buyer-openclaw/skills/kiwi-buyer/SKILL.md",
   "integrations/plugins/kiwi-dsh-plugin/skills/kiwi-buyer/SKILL.md",
 ];
 
@@ -200,6 +201,37 @@ for (const entry of REFERENCE_ENTRY_FILES) {
     if (text.includes(token)) fail(`${entry.path} 引用了本包不存在的入口：${token}`);
   }
 }
+
+// Host entry points that configure tools but delegate search semantics to the registered skills.
+const hostOnlyFiles = [
+  "integrations/hosts/workbuddy/haina-ecommerce-expert/agents/haina-ecommerce-expert.md",
+  "integrations/hosts/workbuddy/kiwi-sourcing/skills/kiwi-sourcing/SKILL.md",
+];
+const registered = new Set([
+  ...DUAL_SOURCE_FILES.map(descriptionOf),
+  ...BOUNDARY_FILES.map(descriptionOf),
+  ...PENDING_FILES,
+  ...hostOnlyFiles,
+]);
+const excludedDirectories = new Set(["node_modules", "dist", "candidate-source-archives", "out"]);
+
+function scanBuyerSkills(directory) {
+  for (const entry of readdirSync(path.join(root, directory), { withFileTypes: true })) {
+    const relative = path.posix.join(directory, entry.name);
+    if (entry.isDirectory() && !entry.name.startsWith(".") && !excludedDirectories.has(entry.name)) {
+      scanBuyerSkills(relative);
+    } else if (entry.isFile() && !registered.has(relative) &&
+               /(?:\/SKILL(?:\.[^/]+)?\.md|\/agents\/[^/]+\.md)$/i.test(relative)) {
+      const content = read(relative);
+      if (/^name:\s*(?:kiwi-buyer|kiwi-source-and-quote|online-shopping-assistant|kiwi-procurement)\s*$/m.test(content) ||
+          /\b(?:kiwi_(?:buyer_)?(?:search|request_quotes)|kiwi-shopping-buyer|merchant_listed_price|network_search)\b/.test(content)) {
+        fail(`${relative} 是未登记的买方技能副本或入口`);
+      }
+    }
+  }
+}
+
+for (const directory of ["skills", "integrations"]) scanBuyerSkills(directory);
 
 if (failures.length > 0) {
   console.error(`buyer-skill consistency FAILED: ${failures.length} 项`);

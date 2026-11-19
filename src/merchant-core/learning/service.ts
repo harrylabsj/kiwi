@@ -1138,7 +1138,11 @@ export class LearningService {
       return evaluation;
     } finally {
       clearInterval(heartbeat);
-      this.repository.transaction(() => this.repository.releaseEvaluationClaim(keys, owner));
+      this.repository.transaction(() => {
+        const completed = commandId !== undefined &&
+          this.repository.readIdempotent(merchantId, input.actor.actor_id, "learning.evaluateCandidate", commandId)?.requestDigest === requestDigest;
+        this.repository.releaseEvaluationClaim(keys, owner, completed);
+      });
     }
   }
 

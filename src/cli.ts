@@ -98,7 +98,7 @@ import {
   startStandaloneMerchantWorkbench,
 } from "./merchant/workbench-server.js";
 import { MerchantPolicyRuntime } from "./merchant-core/policy-runtime.js";
-import { writeAdminCredentials } from "./auth/merchant-sessions.js";
+import { MerchantAdminSessions, writeAdminCredentials } from "./auth/merchant-sessions.js";
 import { createPairingCode, revokePairedCredential } from "./auth/merchant-pairing.js";
 import {
   assembleMerchantRuntime,
@@ -2217,6 +2217,16 @@ async function cmdMerchantAdminPasswd(args: ParsedArgs): Promise<number> {
       password,
       force: args.force,
     });
+    const sessionPath = path.join(dirs.merchantDataDir, "oauth.sqlite");
+    if (args.force && existsSync(sessionPath)) {
+      const sessionDb = new DatabaseSync(sessionPath);
+      try {
+        sessionDb.exec("PRAGMA busy_timeout = 5000");
+        new MerchantAdminSessions({ db: sessionDb }).revokeMerchantSessions(profile.owner_id);
+      } finally {
+        sessionDb.close();
+      }
+    }
   } catch (err) {
     process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
     return EXIT.CONFIG;

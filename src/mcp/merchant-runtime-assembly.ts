@@ -41,6 +41,7 @@ import { DefaultMerchantIntelligenceBackend } from "../agent/merchant/intelligen
 import { HttpMerchantClient } from "../agent/merchant/merchant-client.js";
 import type { MerchantClient } from "../agent/merchant/types.js";
 import { createReceptionMemoryWriter, type ReceptionMemoryWriter } from "../merchant-core/customer-memory/reception-writer.js";
+import { CustomerDataMaintenance } from "../merchant-core/customer-memory/maintenance.js";
 import { CustomerDeliveryRepository } from "../merchant-core/customer-delivery/repository.js";
 import { createRecoveryGatewayVerifierFromEnv } from "../merchant-core/learning/recovery-gateway.js";
 import { MemoryStore } from "../agent/memory/store.js";
@@ -175,6 +176,7 @@ export interface MerchantRuntimeAssembly {
   operationsJobs: import("../merchant-core/operations-jobs/service.js").OperationsJobsService | undefined;
   governance: Parameters<typeof createMerchantManagementApiHandler>[0]["governance"];
   customerDeliveries: CustomerDeliveryRepository;
+  dataMaintenance?: CustomerDataMaintenance;
   /** 逐次核验治理所有权（未初始化/未持有时 undefined）。 */
   assertGovernanceOwner: (() => void) | undefined;
   proposeReceptionMemory: ReceptionMemoryWriter | undefined;
@@ -687,7 +689,7 @@ export async function assembleMerchantRuntime(
           merchantId: profile.owner_id,
           generation: () => 1,
           runtimeVersion: PRODUCT_VERSION,
-          sessions: new MerchantAdminSessions({ db: oauthDb }),
+          sessions: new MerchantAdminSessions({ db: oauthDb, adminDir: options.dataDir }),
           listPending: () => approvals.listPending(),
           mintCandidateConfirmation: (input) =>
             oauthStore?.createConfirmation(input) ?? "",
@@ -735,7 +737,7 @@ export async function assembleMerchantRuntime(
           admin: {
             merchantName: profile.name ?? profile.owner_id,
             surface: merchantAdminSurface(service),
-            sessions: new MerchantAdminSessions({ db: oauthDb }),
+            sessions: new MerchantAdminSessions({ db: oauthDb, adminDir: options.dataDir }),
             store: oauthStore,
             adminDir: options.dataDir,
             secureCookies: (options.issuer ?? "").startsWith("https://"),
@@ -842,6 +844,12 @@ export async function assembleMerchantRuntime(
     operationsJobs: operationsFacade?.operationsJobs,
     governance,
     customerDeliveries: new CustomerDeliveryRepository({ db, now }),
+    ...(governance !== undefined
+      ? { dataMaintenance: new CustomerDataMaintenance({
+          db, now, write: governance.write, log, merchantId: profile.owner_id,
+          memory: governanceFlags.memory_enabled, learning: governanceFlags.learning_enabled,
+        }) }
+      : {}),
     assertGovernanceOwner:
       governance === undefined ? undefined : () => governance.write(() => undefined),
     proposeReceptionMemory,

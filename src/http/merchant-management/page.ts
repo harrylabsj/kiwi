@@ -643,7 +643,7 @@ function showCatalogPairing() {
   }).catch(function () { bar("无法读取配对信息，请刷新连接状态。", true); });
 }
 
-/** 商品状态文案：过期/暂停统一显示为“已下架”，不再使用“过期”。 */
+/** 商品状态文案：报价有效期不影响上架状态。 */
 function productStatusLabel(it) {
   var status = String((it && it.status) || "").toLowerCase();
   if (status === "paused") return "已下架";
@@ -852,7 +852,7 @@ function renderProducts(items, publication) {
       '<button class="act" id="pub-clear" onclick="clearPublicationPicks()">清空选择</button></div>' +
       '<p class="muted">公开名称、SKU、分类、商品页链接与其余公开字段；价格、库存及私有规则不会发布。' +
       '可发布已导入或已有商品，不涉及下架其他商品。预览后选择会锁定，修改需先「重新选择」。' +
-      '上架/下架与有效期在目录商家后台设置；「过期」统一显示为「已下架」。</p>' +
+      '上架状态和报价有效期在目录商家后台设置。报价过期后商品仍保持上架。</p>' +
       '<button class="act" id="pub-preview" onclick="previewPublication()">预览公开内容</button>' +
       '<div id="publication-result"></div>'
     : (canPublish ? '<p class="muted">暂无商品，请先在下方导入商品后再选择发布。</p>' : "");

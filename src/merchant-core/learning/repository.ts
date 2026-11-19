@@ -23,6 +23,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
+import { contentDigest } from "../../negotiation/jcs.js";
 import { inImmediateTransaction } from "../storage/transaction.js";
 import { LearningError } from "./types.js";
 import type {
@@ -367,11 +368,78 @@ export class LearningRepository {
     this.db.prepare("DELETE FROM learning_evaluation_receipts WHERE evidence_ref = ?").run(ref);
   }
 
-  releaseEvaluationClaim(keys: readonly string[], owner: string): void {
+  releaseEvaluationClaim(keys: readonly string[], owner: string, completed = false): void {
     for (const key of keys) {
-      if (key.startsWith("command:")) this.db.prepare("UPDATE learning_evaluation_claims SET expires_at = 0 WHERE claim_key = ? AND owner = ?").run(key, owner);
+      if (!completed && key.startsWith("command:")) this.db.prepare("UPDATE learning_evaluation_claims SET expires_at = 0 WHERE claim_key = ? AND owner = ?").run(key, owner);
       else this.db.prepare("DELETE FROM learning_evaluation_claims WHERE claim_key = ? AND owner = ?").run(key, owner);
     }
+  }
+
+  /**
+   * Retain terminal decision summaries and replay bindings, while removing
+   * detailed evaluations and detached receipts after their retention window.
+   */
+  pruneEvaluationHistory(now: string): { evaluations: number; receipts: number } {
+    const cutoff = new Date(Date.parse(now) - 90 * 86_400_000).toISOString();
+    const emptyResults = '{"scenarios":{}}';
+    return this.transaction(() => {
+      // Expired evaluation leases carry no replay contract. Command keys still
+      // bind the request digest when an interrupted command retries.
+      this.db.prepare(
+        `DELETE FROM learning_evaluation_claims WHERE claim_key IN (
+           SELECT claim_key FROM learning_evaluation_claims
+            WHERE claim_key GLOB 'evaluation:*' AND expires_at <= ?
+            LIMIT 128
+         )`,
+      ).run(Date.parse(now));
+      // Older builds kept command claims even after committing the replay receipt.
+      this.db.function("learning_eval_command_key", { deterministic: true },
+        (merchantId, actor, commandId) => `command:${contentDigest({ merchantId, actor, commandId })}`);
+      this.db.prepare(
+        `DELETE FROM learning_evaluation_claims WHERE claim_key IN (
+           SELECT claim.claim_key FROM learning_command_idempotency receipt
+             JOIN learning_evaluation_claims claim
+               ON claim.claim_key = learning_eval_command_key(receipt.merchant_id, receipt.actor_id, receipt.command_id)
+              AND claim.request_digest = receipt.request_digest
+           WHERE receipt.operation = 'learning.evaluateCandidate' AND claim.expires_at <= ?
+           LIMIT 128
+         )`,
+      ).run(Date.parse(now));
+      const retired = this.db.prepare(
+        `SELECT e.evaluation_id, e.merchant_id
+         FROM learning_evaluations e JOIN learning_candidates c
+           ON c.merchant_id = e.merchant_id AND c.candidate_id = e.candidate_id
+         WHERE e.updated_at <= ? AND c.updated_at <= ?
+           AND e.run_status = 'completed' AND c.state IN ('APPROVED','REJECTED','STALE','EXPIRED')
+           AND e.results_json <> ?
+         ORDER BY e.updated_at LIMIT 100`,
+      ).all(cutoff, cutoff, emptyResults) as { evaluation_id: string; merchant_id: string }[];
+      for (const row of retired) {
+        this.db.prepare("UPDATE learning_evaluations SET results_json = ? WHERE evaluation_id = ?")
+          .run(emptyResults, row.evaluation_id);
+        this.db.prepare(
+          `UPDATE learning_command_idempotency SET result_json = json_set(result_json, '$.results', json(?))
+           WHERE merchant_id = ? AND operation = 'learning.evaluateCandidate'
+             AND json_extract(result_json, '$.evaluation_id') = ?`,
+        ).run(emptyResults, row.merchant_id, row.evaluation_id);
+      }
+
+      const receipts = this.db.prepare(
+        `DELETE FROM learning_evaluation_receipts WHERE evidence_ref IN (
+           SELECT r.evidence_ref FROM learning_evaluation_receipts r
+           WHERE julianday(json_extract(r.binding_json, '$.dispatched_at')) <= julianday(?)
+             AND NOT EXISTS (
+               SELECT 1 FROM learning_evaluation_config c
+               WHERE c.pending_attempt IS NOT NULL AND
+                 CASE WHEN json_valid(c.pending_attempt)
+                   THEN json_extract(c.pending_attempt, '$.dispatch_id') = json_extract(r.binding_json, '$.dispatch_id')
+                   ELSE 1 END
+             )
+           LIMIT 100
+         )`,
+      ).run(cutoff);
+      return { evaluations: retired.length, receipts: Number(receipts.changes) };
+    });
   }
 
   readCorrection(merchantId: string, correctionId: string): LearningCorrection | undefined {

@@ -919,6 +919,7 @@ export function createMerchantReceptionEngine(
       registry,
       merchantId: input.merchantId,
       now: input.now,
+      allowedCandidateSkus: new Set(registry.candidateSkus(input.merchantId, input.now)),
     });
     const text = published.text === "" ? EMPTY_PUBLISH_FALLBACK : published.text;
     // §16.1：合法回复发布事务内按会话分配严格递增序号；登记出站记录

@@ -11,6 +11,7 @@ import {
   type DeliveryRecord,
 } from "../src/merchant-core/customer-delivery/dispatcher.js";
 import { CustomerDeliveryRepository } from "../src/merchant-core/customer-delivery/repository.js";
+import { createDeliveryReconciler } from "../src/merchant-core/customer-delivery/reconciliation.js";
 import { DeliveryDispatcherLoop } from "../src/merchant-core/customer-delivery/dispatcher-loop.js";
 import type { PrepareDeliveryInput } from "../src/merchant-core/customer-delivery/types.js";
 import {
@@ -79,6 +80,41 @@ describe("P1 发送持久化", () => {
     db = new DatabaseSync(":memory:");
     migrateMerchantOpsSchema(db);
     repository = new CustomerDeliveryRepository({ db, now: () => NOW });
+  });
+
+  it.each(["accepted", "not_sent"] as const)("可信渠道证据结算 UNKNOWN 并保留一次审计：%s", async (outcome) => {
+    const delivery = record();
+    repository.insert(delivery, "task-reconcile");
+    repository.save({ ...delivery, status: "UNKNOWN", started_at: NOW, attempts: 1 });
+    const snapshot = repository.get(MERCHANT, delivery.delivery_id)!;
+    const verify = (echo: boolean) => createDeliveryReconciler({
+      KIWI_DELIVERY_EVIDENCE_URL: "https://evidence.example.test/lookup",
+      KIWI_DELIVERY_EVIDENCE_TOKEN: "fixture-token",
+    }, async (input, init) => {
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fixture-token");
+      const url = new URL(String(input));
+      return Response.json({
+        attempt_digest: echo ? url.searchParams.get("attempt_digest") : "wrong-attempt",
+        outcome, accepted_at: NOW, future_execution_blocked: true, evidence_ref: "relay/fixture",
+      });
+    })!;
+    expect(await verify(false)(snapshot)).toBeUndefined();
+    const evidence = await verify(true)(snapshot);
+    expect(evidence).toBeDefined();
+    expect(repository.reconcileUnknown({ ...snapshot, attempts: 2 }, evidence!)).toBe(false);
+
+    const send = vi.fn(async () => ({ outcome: "accepted" as const }));
+    const loop = new DeliveryDispatcherLoop({
+      store: repository, merchant_id: MERCHANT, reconcile: verify(true),
+      adapterFor: () => ({ send }), now: () => NOW,
+    });
+    await loop.tick();
+    await loop.tick();
+    expect(repository.get(MERCHANT, delivery.delivery_id)?.status).toBe(outcome === "accepted" ? "SENT" : "PENDING");
+    expect(repository.listReconciliationAudit(MERCHANT)).toMatchObject([{ outcome, evidence_ref: "relay/fixture" }]);
+    expect(repository.listReconciliationAudit("other")).toEqual([]);
+    expect(repository.listDue(MERCHANT, NOW)).toEqual([]);
+    expect(send).not.toHaveBeenCalled();
   });
 
   it("插入/读取冻结通知；旧 outbox 行不被当作 P1 通知", () => {
