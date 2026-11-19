@@ -3530,7 +3530,7 @@
     },
     {
       "path": "packages/merchant-cloud/prepare.mjs",
-      "sha256": "sha256:64d0ac255b9489a584cb54db4751fbcb6fac52795fb92e6865a350ac7f080f25"
+      "sha256": "sha256:e46f0951ea9d71eaa994f9aca455d8f1cac3c4e2a6eb5f4a667e9294b5deb11d"
     },
     {
       "path": "portfolio-products.json",
@@ -7208,7 +7208,7 @@
     },
     {
       "path": "tests/cloud-package.test.ts",
-      "sha256": "sha256:f062ce0ace184f754bc1d7321c2d1b6c78cf06b8285b66ac7dcf5570f270b9a9"
+      "sha256": "sha256:88d48d5022108ed0d3cbb948b7988d9bc045a493e2d90a2ab6c093f4c675a508"
     },
     {
       "path": "tests/cloud-product-import-tabular.test.ts",
