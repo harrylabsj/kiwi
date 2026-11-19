@@ -4234,7 +4234,7 @@
     },
     {
       "path": "src/a2a/server/customer-identity-gateway.ts",
-      "sha256": "sha256:3f129b5476d908334ea1ba1b8fa126aa304113e0accf3f42112f203788a6cb9d"
+      "sha256": "sha256:c4481cdcdca53e8e2e6dec78f1f40d1e61a5c7502e29510d92a32c5464d5cc62"
     },
     {
       "path": "src/a2a/server/errors.ts",
@@ -8932,7 +8932,7 @@
     },
     {
       "path": "tests/workflow-refs.test.ts",
-      "sha256": "sha256:8a79d9126a97550def6c0fe958a0eefcf7087b0b3ddb3b23c9c1181914e4bf69"
+      "sha256": "sha256:fa6e99b477f52130f7b929c320f60a84d6943290dae3f48634b80b6c0fa68819"
     },
     {
       "path": "tests/write-approval-candidate-store.test.ts",
