@@ -21,6 +21,7 @@
  * 本循环只做调度与渠道选择。无对应适配器时保留 PENDING，不算失败。
  */
 
+import type { DeliveryEvidence } from "./reconciliation.js";
 import type { DeliveryChannelAdapter } from "./channel.js";
 import type { DeliveryRecord, DeliveryStore } from "./dispatcher.js";
 import { dispatchDelivery } from "./channel.js";
@@ -28,10 +29,15 @@ import { dispatchDelivery } from "./channel.js";
 export interface CustomerDeliveryRepositoryLike extends DeliveryStore {
   listDue(merchantId: string, now: string, limit?: number): DeliveryRecord[];
   recoverExpiredClaims?(merchantId: string, now: string): number;
+  listByStatus?(merchantId: string, status: "UNKNOWN", limit: number, offset?: number): DeliveryRecord[];
+  countUnknown?(merchantId: string): number;
+  reconcileUnknown?(record: DeliveryRecord, evidence: DeliveryEvidence): boolean;
 }
 
 export interface DeliveryDispatcherLoopOptions {
   readonly store: CustomerDeliveryRepositoryLike;
+  readonly reconcile?: (record: DeliveryRecord) => Promise<DeliveryEvidence | undefined>;
+  readonly streamGate?: import("./stream-gate.js").StreamGate;
   readonly merchant_id: string;
   readonly adapterFor: (delivery: DeliveryRecord) => DeliveryChannelAdapter | undefined;
   /** 发送时复核（P1-4）：重读绑定/订阅/频控；抛错则不领取。 */
@@ -54,6 +60,8 @@ export class DeliveryDispatcherLoop {
   private timer: ReturnType<typeof setInterval> | undefined;
   /** 重入互斥：SetInterval tick 不重叠（P1-2）。 */
   private ticking = false;
+  private reconciliationOffset = 0;
+  private nextUnknownReportAt = 0;
 
   constructor(options: DeliveryDispatcherLoopOptions) {
     this.options = options;
@@ -87,6 +95,29 @@ export class DeliveryDispatcherLoop {
       const now = this.options.now();
       const recover = () => this.options.store.recoverExpiredClaims?.(this.options.merchant_id, now) ?? 0;
       result.unknown += this.options.write === undefined ? recover() : this.options.write(recover);
+      if (result.unknown > 0) {
+        this.options.log?.(`[delivery dispatcher] ${result.unknown} interrupted deliveries require reconciliation\n`);
+      }
+      if (this.options.reconcile !== undefined) {
+        const batchSize = 5;
+        const merchantId = this.options.merchant_id;
+        const unknown = this.options.store.listByStatus?.(merchantId, "UNKNOWN", batchSize, this.reconciliationOffset) ?? [];
+        let settled = 0;
+        for (const record of unknown) {
+          const evidence = await this.options.reconcile(record);
+          if (evidence === undefined) continue;
+          const settle = () => this.options.store.reconcileUnknown?.(record, evidence) ?? false;
+          if (this.options.write === undefined ? settle() : this.options.write(settle)) settled += 1;
+        }
+        this.reconciliationOffset = unknown.length < batchSize ? 0 : this.reconciliationOffset + unknown.length - settled;
+      }
+      if (Date.parse(now) >= this.nextUnknownReportAt) {
+        this.nextUnknownReportAt = Date.parse(now) + 60 * 60 * 1000;
+        const unknownCount = this.options.store.countUnknown?.(this.options.merchant_id) ?? 0;
+        if (unknownCount > 0) {
+          this.options.log?.(`[delivery dispatcher] ${unknownCount} deliveries awaiting verification\n`);
+        }
+      }
       const due = this.options.store.listDue(
         this.options.merchant_id,
         now,
@@ -109,6 +140,7 @@ export class DeliveryDispatcherLoop {
             now: this.options.now(),
             clock: this.options.now,
             adapter,
+            ...(this.options.streamGate !== undefined ? { stream_gate: this.options.streamGate } : {}),
             ...(this.options.write !== undefined ? { write: this.options.write } : {}),
             ...(this.options.authorize !== undefined ? { authorize: this.options.authorize } : {}),
             ...(this.options.resolveRecipient !== undefined
@@ -119,8 +151,10 @@ export class DeliveryDispatcherLoop {
           // 渠道调用在领取和结算事务之间执行。
           const sent = await run();
           result.claimed += 1;
-          if (sent.status === "UNKNOWN") result.unknown += 1;
-          else if (sent.status === "SENT") result.sent += 1;
+          if (sent.status === "UNKNOWN") {
+            result.unknown += 1;
+            this.options.log?.(`[delivery dispatcher] ${sent.delivery_id} requires reconciliation\n`);
+          } else if (sent.status === "SENT") result.sent += 1;
         } catch (err) {
           const code = (err as { code?: unknown } | null)?.code;
           if (code === "not_acquired" || code === "feature_disabled") {

@@ -30,7 +30,8 @@
  */
 
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { writeFileAtomic } from "../fs/atomic-write.js";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -99,10 +100,7 @@ export function writeAdminCredentials(
     password_hash: hashAdminPassword(input.password),
     created_at: new Date().toISOString(),
   };
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeFileSync(file, `${JSON.stringify(creds, null, 2)}\n`, { mode: 0o600 });
-  // mode 参数对已存在文件不生效（审查 P2）：重置口令时收紧历史遗留的宽权限。
-  chmodSync(file, 0o600);
+  writeFileAtomic(file, `${JSON.stringify(creds, null, 2)}\n`, { mode: 0o600 });
   return creds;
 }
 
@@ -139,9 +137,11 @@ export interface AdminSession {
 export class MerchantAdminSessions {
   private readonly db: DatabaseSync;
   private readonly now: () => string;
+  private readonly adminDir: string | undefined;
 
-  constructor(options: { db: DatabaseSync; now?: () => string }) {
+  constructor(options: { db: DatabaseSync; now?: () => string; adminDir?: string }) {
     this.db = options.db;
+    this.adminDir = options.adminDir;
     this.now = options.now ?? (() => new Date().toISOString());
     this.db.exec(ADMIN_SESSION_SCHEMA);
     this.migrateRoleColumn();
@@ -187,12 +187,24 @@ export class MerchantAdminSessions {
           principal_id: string;
           merchant_id: string;
           expires_at: string;
+          created_at: string;
           revoked_at: string | null;
           role: string | null;
         }
       | undefined;
     if (row === undefined || row.revoked_at !== null) return undefined;
     if (row.expires_at <= this.now()) return undefined;
+    // Password rotation and session revocation span a file and SQLite. Reject
+    // pre-rotation sessions even if the separate revocation write failed.
+    if (this.adminDir !== undefined) {
+      try {
+        const credentials = readAdminCredentials(this.adminDir);
+        if (credentials === undefined || credentials.merchant_id !== row.merchant_id ||
+            !(Date.parse(row.created_at) > Date.parse(credentials.created_at))) return undefined;
+      } catch {
+        return undefined;
+      }
+    }
     const role = normalizeRole(row.role);
     if (role === undefined) return undefined;
     return {
@@ -204,6 +216,12 @@ export class MerchantAdminSessions {
   }
 
   /** 撤销会话（登出/失效）。 */
+  revokeMerchantSessions(merchantId: string): void {
+    this.db.prepare(
+      "UPDATE admin_sessions SET revoked_at = ? WHERE merchant_id = ? AND revoked_at IS NULL",
+    ).run(this.now(), merchantId);
+  }
+
   revoke(sessionId: string): void {
     this.db
       .prepare(

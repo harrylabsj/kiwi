@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { DataUseGrantStore } from "../src/merchant-core/context-governance/data-use-grant.js";
 import { registerGovernanceLedgers } from "../src/merchant-core/migrations/ledgers.js";
 import {
   ensureVerifiedCustomerIdentity,
@@ -103,6 +104,40 @@ describe("K2 委托校验与授权存取", () => {
     expect(stale.status).toBe("stale");
   });
 
+  it("报价维护清除旧快照和遗留授权，同时保留当前委托", () => {
+    const identity = ensureVerifiedCustomerIdentity(db, {
+      merchant_id: MERCHANT, verified_actor: OPEN_ACTOR, now: NOW,
+    });
+    const { subject_id } = identity;
+    const active = store.applyDelegation({
+      merchant_id: MERCHANT, buyer_actor: OPEN_ACTOR, subject_id,
+      delegation: VALID_DELEGATION as never,
+    });
+    expect(active.status).toBe("active");
+    if (active.status !== "active") throw new Error("fixture delegation failed");
+    const orphan = new DataUseGrantStore({ db, now: () => NOW }).createGrant({
+      merchant_id: MERCHANT, subject_id, purpose: "history_recall",
+      resource_scope_id: `quote-history:${subject_id}`,
+      expires_at: VALID_DELEGATION.expires_at,
+    });
+    expect(store.indexOffer({
+      merchant_id: MERCHANT, subject_id, negotiation_id: "old-neg", offer_id: "old-offer",
+      message_id: "old-message", sku: SKU, quantity: 1, unit: "piece", currency: "CNY",
+      unit_price_minor: 100, terms_digest: "digest", spec: {},
+      quoted_at: new Date(Date.parse(NOW) - 91 * 86_400_000).toISOString(),
+    })).toEqual({ ok: true });
+    store.pruneForMerchant(MERCHANT);
+    expect(db.prepare("SELECT offer_id FROM published_offers").all()).toEqual([]);
+    const status = db.prepare("SELECT status FROM data_grants WHERE grant_id = ?");
+    expect(status.get(orphan.grant_id)?.status).toBe("REVOKED");
+    expect(status.get(active.grant_id)?.status).toBe("ACTIVE");
+    db.prepare("UPDATE quote_history_delegations SET issued_at = ? WHERE grant_id = ?")
+      .run(new Date(Date.parse(NOW) - 91 * 86_400_000).toISOString(), active.grant_id);
+    expect(store.checkActive({ merchant_id: MERCHANT, buyer_actor: OPEN_ACTOR })).toBeUndefined();
+    store.pruneForMerchant(MERCHANT);
+    expect(status.get(active.grant_id)?.status).toBe("REVOKED");
+  });
+
   it("授权到期后，只有买方明确配置的新版本才能续期", () => {
     let clock = NOW;
     const now = () => clock;
@@ -132,6 +167,13 @@ describe("K2 委托校验与授权存取", () => {
     });
     expect(submit(renewal?.version).status).toBe("active");
     expect(authorized()).toBeDefined();
+    expect(db.prepare(
+      "SELECT status FROM data_grants WHERE merchant_id = ? AND purpose = 'history_recall' ORDER BY created_at",
+    ).all(MERCHANT)).toEqual([{ status: "REVOKED" }, { status: "ACTIVE" }]);
+    expect(validateDelegationShape(
+      buildDelegationMetadata({ merchantId: MERCHANT, issuedAt: now(), ttlDays: 91, now }),
+      MERCHANT, now(),
+    )).toMatchObject({ ok: false, reason: "delegation_window_invalid" });
     expect(submit().status).toBe("stale");
     expect(() => quoteHistoryDelegationFromEnv({
       KIWI_QUOTE_HISTORY_DELEGATION: "true",

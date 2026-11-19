@@ -11,6 +11,7 @@ import {
 } from "../src/merchant-core/customer-delivery/channel.js";
 import { createWeixinChannelAdapter } from "../src/merchant-core/customer-delivery/weixin-adapter.js";
 import { createEmailChannelAdapter } from "../src/merchant-core/customer-delivery/email-adapter.js";
+import { StreamGate } from "../src/merchant-core/customer-delivery/stream-gate.js";
 import type { DeliveryRecord, DeliveryStore } from "../src/merchant-core/customer-delivery/dispatcher.js";
 import type { PrepareDeliveryInput } from "../src/merchant-core/customer-delivery/types.js";
 import {
@@ -168,6 +169,34 @@ describe("M6-6 渠道发送", () => {
     });
     expect(received).toBeUndefined();
     expect(released).toMatchObject({ status: "PENDING", blocked_reason: "not_sent:recipient_unresolved" });
+  });
+
+  it("领取失败后释放发送流", async () => {
+    const store = new MemoryStore();
+    const delivery = record();
+    store.save(delivery);
+    const gate = new StreamGate();
+    await expect(dispatchDelivery({
+      store, merchant_id: MERCHANT, delivery_id: delivery.delivery_id, worker_id: "worker",
+      lease_ms: 30_000, timeout_ms: 5_000, now: NOW, adapter: accepted, stream_gate: gate,
+      authorize: () => { throw new Error("consent revoked"); },
+    })).rejects.toThrow("consent revoked");
+    expect(gate.isHeld(delivery.stream_key, NOW)).toBe(false);
+  });
+
+  it("邮件限流按 Retry-After 延后，超过普通失败次数仍可在有效期内重试", async () => {
+    const store = new MemoryStore();
+    const delivery = { ...record(), channel: "email" as const, attempts: 5 };
+    store.save(delivery);
+    const adapter = createEmailChannelAdapter({
+      api_key: "fixture-key", from: "from@example.test", to: "to@example.test",
+      fetchImpl: async () => new Response(null, { status: 429, headers: { "retry-after": "600" } }),
+    });
+    const outcome = await dispatchDelivery({
+      store, merchant_id: MERCHANT, delivery_id: delivery.delivery_id, worker_id: "worker",
+      lease_ms: 30_000, timeout_ms: 5_000, now: NOW, adapter,
+    });
+    expect(outcome).toMatchObject({ status: "PENDING", next_attempt_at: "2026-11-18T00:10:00.000Z" });
   });
 
   it("unknown/异常 → UNKNOWN 并阻塞该流", async () => {

@@ -394,11 +394,41 @@ describe("候选评测（M2-4）", () => {
     const input = { merchant_id: "m-1", actor: actor(), candidate_id: candidateId, content_hash: contentHash,
       suite: suite(), runner: passRunner() };
     const done = await service.evaluateCandidate(input, { command_id: "replay" });
+    expect(db.prepare("SELECT claim_key FROM learning_evaluation_claims WHERE claim_key GLOB 'command:*'").all()).toEqual([]);
+
     const candidate = service.getCandidate("m-1", candidateId)!;
     repository.updateCandidate({ ...candidate, state: "APPROVED" });
     expect(await service.evaluateCandidate(input, { command_id: "replay" })).toEqual(done);
     const changed = { ...input, suite: { ...input.suite, scenarios: input.suite.scenarios.map((scenario, i) => i === 0 ? { ...scenario, input: "changed" } : scenario) } };
     await expect(service.evaluateCandidate(changed, { command_id: "replay" })).rejects.toMatchObject({ reason: "command_replay_conflict" });
+  });
+
+  it("保留期清理已终结评测的详情，同时保留报告、命令重放与待核对回执", async () => {
+    const input = { merchant_id: "m-1", actor: actor(), candidate_id: candidateId, content_hash: contentHash,
+      suite: suite(), runner: passRunner() };
+    const done = await service.evaluateCandidate(input, { command_id: "retention" });
+    const { requestDigest } = repository.readIdempotent("m-1", actor().actor_id, "learning.evaluateCandidate", "retention")!;
+    const legacyClaimKey = `command:${contentDigest({ merchantId: "m-1", actor: actor().actor_id, commandId: "retention" })}`;
+    db.prepare("INSERT INTO learning_evaluation_claims VALUES (?, 'legacy', ?, 0)")
+      .run(legacyClaimKey, requestDigest);
+    db.prepare("INSERT INTO learning_evaluation_claims VALUES ('command:unfinished', 'legacy', 'unfinished', 0)").run();
+
+    const candidate = service.getCandidate("m-1", candidateId)!;
+    repository.updateCandidate({ ...candidate, state: "APPROVED" });
+    const future = new Date(Date.parse(NOW) + 91 * 86_400_000).toISOString();
+    repository.saveEvaluationReceipt("local:abandoned", { dispatch_id: "abandoned", dispatched_at: NOW }, {});
+    repository.saveEvaluationReceipt("local:pending", { dispatch_id: "pending", dispatched_at: NOW }, {});
+    repository.checkEvaluationConfig("foreign", "foreign-digest", 0);
+    repository.setEvaluationAttempt("foreign", JSON.stringify({ dispatch_id: "pending" }));
+    expect(repository.pruneEvaluationHistory(future)).toEqual({ evaluations: 1, receipts: 1 });
+    expect(db.prepare("SELECT claim_key FROM learning_evaluation_claims").all()).toEqual([
+      { claim_key: "command:unfinished" },
+    ]);
+    expect(repository.pruneEvaluationHistory(future)).toEqual({ evaluations: 0, receipts: 0 });
+    expect(repository.readEvaluationReceipt("local:pending")).toBeDefined();
+    expect(repository.readEvaluationReceipt("local:abandoned")).toBeUndefined();
+    const replay = await service.evaluateCandidate(input, { command_id: "retention" });
+    expect(replay).toMatchObject({ evaluation_id: done.evaluation_id, report: done.report, results: { scenarios: {} } });
   });
 
   it("旧完成报告可查询，但缺少冻结配置的旧命令不可重放", async () => {

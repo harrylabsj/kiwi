@@ -130,7 +130,9 @@ export function validateDelegationShape(
   if (Date.parse(delegation.expires_at) <= Date.parse(now)) {
     return { ok: false, reason: "delegation_expired" };
   }
-  if (Date.parse(delegation.issued_at) > Date.parse(delegation.expires_at)) {
+  const issuedAt = Date.parse(delegation.issued_at);
+  const expiresAt = Date.parse(delegation.expires_at);
+  if (issuedAt > Date.parse(now) + 5 * 60_000 || expiresAt - issuedAt > 90 * 86_400_000 || issuedAt >= expiresAt) {
     return { ok: false, reason: "delegation_window_invalid" };
   }
   return { ok: true, delegation };
@@ -163,10 +165,10 @@ export class QuoteHistoryStore {
       return inImmediateTransaction(this.db, () => {
         const existing = this.db
           .prepare(
-            "SELECT version, status, grant_id, grant_epoch FROM quote_history_delegations WHERE merchant_id = ? AND buyer_actor = ?",
+            "SELECT version, status, grant_id, grant_epoch, subject_id FROM quote_history_delegations WHERE merchant_id = ? AND buyer_actor = ?",
           )
           .get(merchantId, buyerActor) as
-          | { version: number; status: string; grant_id: string; grant_epoch: number }
+          | { version: number; status: string; grant_id: string; grant_epoch: number; subject_id: string }
           | undefined;
         if (
           existing !== undefined &&
@@ -193,12 +195,13 @@ export class QuoteHistoryStore {
             status: "active" as const,
             grant_id: existing.grant_id,
             grant_epoch: existing.grant_epoch,
-            subject_id: subjectId,
+            subject_id: existing.subject_id,
           };
         }
 
         // 委托生效 = 建立/续期 history_recall grant（复用既有授权本体）。
         const grants = new DataUseGrantStore({ db: this.db, now: this.now });
+        if (existing?.grant_id) this.revokeUnderlyingGrant(merchantId, existing.grant_id);
         this.db
           .prepare(
             `INSERT INTO data_scopes
@@ -263,16 +266,67 @@ export class QuoteHistoryStore {
     }
   }
 
+  /** Sweep quote snapshots and grants left active by pre-fix delegation versions. */
+  pruneForMerchant(merchantId: string): void {
+    inImmediateTransaction(this.db, () => {
+      const now = this.now();
+      this.db.prepare(
+        "DELETE FROM published_offers WHERE merchant_id = ? AND julianday(quoted_at) <= julianday(?) - 90",
+      ).run(merchantId, now);
+      this.db.prepare(
+        `UPDATE quote_history_delegations SET status = 'REVOKED', updated_at = ?
+          WHERE merchant_id = ? AND status = 'ACTIVE'
+            AND julianday(issued_at) <= julianday(?) - 90
+            AND julianday(expires_at) > julianday(issued_at) + 90`,
+      ).run(now, merchantId, now);
+      const abandoned = this.db.prepare(
+        `SELECT g.grant_id FROM data_grants g
+           WHERE g.merchant_id = ? AND g.purpose = 'history_recall' AND g.status = 'ACTIVE'
+             AND g.resource_scope_id = 'quote-history:' || g.subject_id
+             AND EXISTS (SELECT 1 FROM quote_history_delegations d
+               WHERE d.merchant_id = g.merchant_id AND d.subject_id = g.subject_id)
+             AND NOT EXISTS (SELECT 1 FROM quote_history_delegations d
+               WHERE d.merchant_id = g.merchant_id AND d.grant_id = g.grant_id AND d.status = 'ACTIVE')
+             AND (
+               EXISTS (SELECT 1 FROM quote_history_delegations d
+                 WHERE d.merchant_id = g.merchant_id AND d.grant_id = g.grant_id AND d.status = 'REVOKED')
+               OR NOT EXISTS (SELECT 1 FROM grant_requests r
+                 WHERE r.merchant_id = g.merchant_id AND r.subject_id = g.subject_id
+                   AND r.resource_scope_id = g.resource_scope_id AND r.purpose = g.purpose
+                   AND r.consumed_at IS NOT NULL)
+             )
+           ORDER BY g.created_at, g.grant_id LIMIT 128`,
+      ).all(merchantId) as { grant_id: string }[];
+      for (const grant of abandoned) this.revokeUnderlyingGrant(merchantId, grant.grant_id);
+    });
+  }
+
   /** 撤销当前委托（版本水位保留——旧委托重放不得恢复）。 */
   revokeDelegation(input: { merchant_id: string; buyer_actor: string }): boolean {
-    const stamp = this.now();
-    const result = this.db
-      .prepare(
-        `UPDATE quote_history_delegations SET status = 'REVOKED', updated_at = ?
-          WHERE merchant_id = ? AND buyer_actor = ? AND status = 'ACTIVE'`,
-      )
-      .run(stamp, requireText(input.merchant_id, "merchant_id"), requireText(input.buyer_actor, "buyer_actor", 256));
-    return Number(result.changes) === 1;
+    const merchantId = requireText(input.merchant_id, "merchant_id");
+    const buyerActor = requireText(input.buyer_actor, "buyer_actor", 256);
+    return inImmediateTransaction(this.db, () => {
+      const row = this.db.prepare(
+        "SELECT grant_id FROM quote_history_delegations WHERE merchant_id = ? AND buyer_actor = ? AND status = 'ACTIVE'",
+      ).get(merchantId, buyerActor) as { grant_id: string } | undefined;
+      if (row === undefined) return false;
+      this.revokeUnderlyingGrant(merchantId, row.grant_id);
+      this.db.prepare(
+        "UPDATE quote_history_delegations SET status = 'REVOKED', updated_at = ? WHERE merchant_id = ? AND buyer_actor = ?",
+      ).run(this.now(), merchantId, buyerActor);
+      return true;
+    });
+  }
+
+  private revokeUnderlyingGrant(merchantId: string, grantId: string): void {
+    const grant = this.db.prepare(
+      "SELECT grant_epoch FROM data_grants WHERE merchant_id = ? AND grant_id = ? AND status = 'ACTIVE'",
+    ).get(merchantId, grantId) as { grant_epoch: number } | undefined;
+    if (grant !== undefined) {
+      new DataUseGrantStore({ db: this.db, now: this.now }).revokeGrant({
+        merchant_id: merchantId, grant_id: grantId, expected_epoch: grant.grant_epoch,
+      });
+    }
   }
 
   /**
@@ -286,13 +340,14 @@ export class QuoteHistoryStore {
       const stamp = this.now();
       const row = this.db
         .prepare(
-          `SELECT subject_id, expires_at, grant_id, status FROM quote_history_delegations
+          `SELECT subject_id, issued_at, expires_at, grant_id, status FROM quote_history_delegations
             WHERE merchant_id = ? AND buyer_actor = ?`,
         )
         .get(merchantId, buyerActor) as
-        | { subject_id: string; expires_at: string; grant_id: string; status: string }
+        | { subject_id: string; issued_at: string; expires_at: string; grant_id: string; status: string }
         | undefined;
-      if (row === undefined || row.status !== "ACTIVE" || row.expires_at <= stamp) return undefined;
+      if (row === undefined || row.status !== "ACTIVE" || row.expires_at <= stamp ||
+          !(Date.parse(stamp) < Date.parse(row.issued_at) + 90 * 86_400_000)) return undefined;
       const grant = this.db
         .prepare(
           `SELECT g.status, g.expires_at
@@ -353,7 +408,11 @@ export class QuoteHistoryStore {
             (merchant_id, subject_id, negotiation_id, offer_id, message_id, sku, quantity, unit,
              currency, unit_price_minor, terms_digest, spec_json, offer_version, valid_until,
              quoted_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+           WHERE NOT EXISTS (
+             SELECT 1 FROM data_scopes
+              WHERE merchant_id = ? AND erase_scope_id = ? AND state <> 'ACTIVE'
+           )
            ON CONFLICT(merchant_id, negotiation_id, offer_id) DO NOTHING`,
         )
         .run(
@@ -373,6 +432,8 @@ export class QuoteHistoryStore {
           input.valid_until !== undefined ? isoOf(input.valid_until, "valid_until") : null,
           isoOf(input.quoted_at, "quoted_at"),
           stamp,
+          input.merchant_id,
+          `quote-history:${input.subject_id}`,
         );
       return { ok: true };
     } catch {
@@ -401,10 +462,10 @@ export class QuoteHistoryStore {
       const rows = this.db.prepare(
         `WITH latest AS (
            SELECT *, row_number() OVER (PARTITION BY sku ORDER BY quoted_at DESC, offer_version DESC, offer_id DESC) AS rank
-           FROM published_offers WHERE merchant_id = ? AND subject_id = ?${skuFilter}
+           FROM published_offers WHERE merchant_id = ? AND subject_id = ? AND julianday(quoted_at) > julianday(?) - 90${skuFilter}
          )
          SELECT * FROM latest WHERE rank = 1 ORDER BY quoted_at DESC, sku LIMIT ?`,
-      ).all(merchantId, subjectId, ...skus, limit) as unknown as Array<{
+      ).all(merchantId, subjectId, this.now(), ...skus, limit) as unknown as Array<{
         negotiation_id: string;
         offer_id: string;
         offer_version: number;

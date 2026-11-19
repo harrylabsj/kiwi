@@ -42,7 +42,7 @@ function notSentBackoff(attempts: number): number {
 export type ChannelSendOutcome =
   | { outcome: "accepted"; provider_request_id?: string; receipt?: Record<string, unknown> }
   | { outcome: "unknown"; provider_request_id?: string; receipt?: Record<string, unknown> }
-  | { outcome: "not_sent"; reason: string };
+  | { outcome: "not_sent"; reason: string; retry_after_ms?: number };
 
 export interface DeliveryChannelAdapter {
   /** 同一 delivery_id 必须作为渠道幂等键；不得换 ID 重发。 */
@@ -81,9 +81,11 @@ export interface DispatchDeliveryInput {
 export async function dispatchDelivery(
   input: DispatchDeliveryInput,
 ): Promise<DeliveryRecord> {
+  const streamKey = input.store.get(input.merchant_id, input.delivery_id)?.stream_key ?? input.delivery_id;
+  const holderId = crypto.randomUUID();
   input.stream_gate?.enter({
-    stream_key: input.store.get(input.merchant_id, input.delivery_id)?.stream_key ?? input.delivery_id,
-    holder_id: input.worker_id,
+    stream_key: streamKey,
+    holder_id: holderId,
     lease_ms: input.lease_ms,
     now: input.now,
   });
@@ -100,7 +102,13 @@ export async function dispatchDelivery(
   // P1-2/P1-4：持久存储下，租约检查、发送时复核与领取写入必须在同一
   // IMMEDIATE 事务内，跨进程的两个 worker 不能同时领取。
   const write = input.write ?? input.store.transaction?.bind(input.store) ?? ((work) => work());
-  const claimed = write(claim);
+  let claimed: DeliveryRecord;
+  try {
+    claimed = write(claim);
+  } catch (error) {
+    input.stream_gate?.leave(streamKey, holderId);
+    throw error;
+  }
   const recipient = input.resolveRecipient?.(claimed);
   let result: ChannelSendOutcome;
   try {
@@ -124,12 +132,16 @@ export async function dispatchDelivery(
     };
     if (result.outcome === "not_sent") {
       const attempts = claimed.attempts ?? 1;
+      const nextAttempt = Math.min(
+        Date.parse(claimed.valid_until),
+        Date.parse(now) + Math.max(notSentBackoff(attempts), result.retry_after_ms ?? 0),
+      );
       return releaseDelivery({
         ...delivery,
         reason: result.reason,
-        next_attempt_at: attempts >= MAX_NOT_SENT_ATTEMPTS
+        next_attempt_at: result.retry_after_ms === undefined && attempts >= MAX_NOT_SENT_ATTEMPTS
           ? claimed.valid_until
-          : new Date(Date.parse(now) + notSentBackoff(attempts)).toISOString(),
+          : new Date(nextAttempt).toISOString(),
       });
     }
     return completeDelivery({
@@ -139,9 +151,8 @@ export async function dispatchDelivery(
       ...(result.receipt !== undefined ? { receipt: result.receipt } : {}),
     });
   });
-  if (settled.status !== "UNKNOWN") {
-    input.stream_gate?.leave(claimed.stream_key, input.worker_id);
-  }
+  // The durable outbox blocks UNKNOWN streams after the network lease is released.
+  input.stream_gate?.leave(claimed.stream_key, holderId);
   return settled;
 }
 

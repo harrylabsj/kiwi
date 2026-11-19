@@ -188,7 +188,7 @@ export class CustomerIdentityService {
     const merchantId = id(input.merchant_id, "merchant_id");
     requireActor(input.actor, merchantId, "customer:self");
     const challengeId = id(input.challenge_id, "challenge_id");
-    const sessionId = id(input.source_session_id, "source_session_id");
+    id(input.source_session_id, "source_session_id");
     return inImmediateTransaction(this.db, () => {
       const row = this.db
         .prepare("SELECT * FROM binding_challenges WHERE merchant_id = ? AND challenge_id = ?")
@@ -203,8 +203,9 @@ export class CustomerIdentityService {
             consumed_at: string | null;
           }
         | undefined;
-      if (row === undefined) {
-        throw new CustomerMemoryError("not_found", "challenge_not_found", "绑定挑战不存在或不可见");
+      if (row === undefined ||
+          row.proof_digest !== contentDigest({ purpose: "binding_challenge", proof: input.proof })) {
+        throw new CustomerMemoryError("confirmation_invalid", "proof_mismatch", "绑定证明不匹配");
       }
       if (row.consumed_at !== null) {
         throw new CustomerMemoryError("confirmation_consumed", "challenge_consumed", "挑战已消费");
@@ -224,9 +225,6 @@ export class CustomerIdentityService {
       const subject = this.getSubject(merchantId, row.target_subject_id);
       if (subject === undefined || subject.status !== "ACTIVE") {
         throw new CustomerMemoryError("not_found", "subject_not_found", "主体不存在或不可见");
-      }
-      if (row.proof_digest !== contentDigest({ purpose: "binding_challenge", proof: input.proof })) {
-        throw new CustomerMemoryError("confirmation_invalid", "proof_mismatch", "绑定证明不匹配");
       }
       this.db
         .prepare(
@@ -266,7 +264,12 @@ export class CustomerIdentityService {
           binding.actor_id,
           binding.issuer,
           binding.assurance_class,
-          contentDigest({ purpose: "binding_proof", challenge_id: challengeId, session_id: sessionId }),
+          contentDigest({
+            purpose: "binding_proof",
+            challenge_id: challengeId,
+            issuer_session_id: row.source_session_id,
+            confirming_actor_id: binding.actor_id,
+          }),
           binding.binding_epoch,
           binding.expires_at,
           binding.created_at,
@@ -294,6 +297,14 @@ export class CustomerIdentityService {
     }
     const bindingId = id(input.binding_id, "binding_id");
     return inImmediateTransaction(this.db, () => {
+      if (!hasCapability(input.actor, "memory:write")) {
+        const ownBinding = this.db.prepare(
+          "SELECT 1 FROM subject_bindings WHERE merchant_id = ? AND binding_id = ? AND actor_id = ?",
+        ).get(merchantId, bindingId, input.actor.actor_id);
+        if (ownBinding === undefined) {
+          throw new CustomerMemoryError("access_denied", "subject_not_bound", "绑定不属于当前身份");
+        }
+      }
       const stamp = nowUtc(this.now);
       const result = this.db
         .prepare(
@@ -335,7 +346,17 @@ export class CustomerIdentityService {
     return this.currentSubjectForActor(merchantId, actorId)?.binding_epoch;
   }
 
-  listBindings(merchantId: string, subjectId?: string): SubjectBinding[] {
+  listBindings(merchantId: string, actor: ActorContext, subjectId?: string): SubjectBinding[] {
+    merchantId = id(merchantId, "merchant_id");
+    if (!hasCapability(actor, "memory:write")) {
+      requireActor(actor, merchantId, "customer:self");
+      return this.db.prepare(
+        `SELECT * FROM subject_bindings
+           WHERE merchant_id = ? AND actor_id = ? AND (? IS NULL OR subject_id = ?)
+           ORDER BY binding_epoch ASC`,
+      ).all(merchantId, actor.actor_id, subjectId ?? null, subjectId ?? null) as unknown as SubjectBinding[];
+    }
+    requireActor(actor, merchantId, "memory:write");
     return (
       subjectId === undefined
         ? this.db

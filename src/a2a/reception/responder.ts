@@ -13,6 +13,8 @@ import type {
   GenericResponderInput,
 } from "../server/generic-responder.js";
 import type { ReceptionEngine } from "./engine.js";
+import { StreamGateError } from "../../merchant-core/customer-delivery/stream-gate.js";
+import { rateLimited } from "../server/errors.js";
 
 const FALLBACK_TEXT =
   "抱歉，当前无法处理这条消息，请稍后重试，或直接发送 RFQ（SKU、数量、单位）。";
@@ -85,7 +87,8 @@ export function createReceptionResponder(
         ? hooks?.historyNote?.({ identity: input.identity, text }) ?? ""
         : "";
       return agentMessage(result.text + history);
-    } catch {
+    } catch (error) {
+      if (error instanceof StreamGateError) throw rateLimited(2, "reception_stream_busy");
       return agentMessage(FALLBACK_TEXT);
     }
   };

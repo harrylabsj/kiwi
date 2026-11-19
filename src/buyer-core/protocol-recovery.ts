@@ -80,7 +80,8 @@ function structuredDecline(task: A2ATask): { reasonCode: string; message?: strin
     if (data === null || typeof data !== "object") continue;
     const record = data as Record<string, unknown>;
     if (record["decline"] !== true) continue;
-    const reason = typeof record["reason_code"] === "string" ? record["reason_code"].trim() : "";
+    const code = typeof record["reason_code"] === "string" ? record["reason_code"].trim() : "";
+    const reason = /^[a-zA-Z0-9_.-]{1,64}$/.test(code) ? code : "";
     const textPart = parts.find((p) => p?.kind === "text" && typeof p.text === "string");
     const message = textPart?.kind === "text" && typeof textPart.text === "string"
       ? Array.from(textPart.text, (char) => {

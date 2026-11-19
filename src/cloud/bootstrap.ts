@@ -826,8 +826,11 @@ export async function bootstrapCloudRuntime(
         : {}),
     });
     const merchantOperations = new MerchantOperationsSurface({ facade: cloudOperationsFacade });
-    if (governanceFlags.memory_enabled && governanceRuntime?.active === true) {
+    if (governanceRuntime?.active === true) {
       customerDataMaintenance = new CustomerDataMaintenance({
+        merchantId: profile.owner_id,
+        memory: governanceFlags.memory_enabled,
+        learning: governanceFlags.learning_enabled,
         db: managementDb,
         now: () => new Date().toISOString(),
         write: (work) => governanceRuntime!.writeUnderOwnership(work),

@@ -859,6 +859,49 @@ describe("merchant management api — 商品导入（BD-03）", () => {
     expect(skus).toContain("SKU-2");
   });
 
+  it("仅凭运营人员自报不能重发结果未知的通知", async () => {
+    const { DeliveryConsentRepository } = await import("../src/merchant-core/customer-delivery/consent-repository.js");
+    const { CustomerDeliveryRepository } = await import("../src/merchant-core/customer-delivery/repository.js");
+    const now = () => FIXED_NOW.toISOString();
+    options.deliveryConsent = new DeliveryConsentRepository({ db: operationsDb, now });
+    options.customerDeliveries = new CustomerDeliveryRepository({ db: operationsDb, now });
+    try {
+      const response = await call("POST", "/merchant/api/v1/delivery/unknown/example/retry", {
+        ...await login("owner"),
+        body: { verified_not_executed: true, channel_idempotent: true },
+      });
+      expect(response.status).toBe(409);
+    } finally {
+      delete options.deliveryConsent;
+      delete options.customerDeliveries;
+    }
+  });
+
+  it("拒绝提交基于旧商品表的草稿，保留先前导入", async () => {
+    const auth = await login("owner");
+    const existing = loadProductTableSnapshot(productsFile, MERCHANT).records.map((row) => row.sku);
+    const table = productTable();
+    const rows = table.products as Array<Record<string, unknown>>;
+    const draft = (sku: string) => call("POST", "/merchant/api/products/import-drafts", {
+      ...auth,
+      body: {
+        table: { ...table, products: [{ ...rows[0], sku }] },
+        idempotency_key: `draft-${sku}`,
+      },
+    });
+    const first = await draft("FIRST");
+    const second = await draft("SECOND");
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const commit = (id: unknown, digest: unknown, key: string) => call(
+      "POST", `/merchant/api/products/import-drafts/${String(id)}/commit`,
+      { ...auth, body: { expected_draft_digest: digest, idempotency_key: key } },
+    );
+    expect((await commit(first.json["draft_id"], first.json["digest"], "commit-first")).status).toBe(200);
+    expect((await commit(second.json["draft_id"], second.json["digest"], "commit-second")).status).toBe(409);
+    expect(loadProductTableSnapshot(productsFile, MERCHANT).records.map((row) => row.sku)).toEqual([...existing, "FIRST"]);
+  });
+
   it("同一文件内重复 SKU 整批拒绝（400）", async () => {
     const auth = await login("owner");
     const row = {

@@ -244,8 +244,14 @@ export class GrantRequestService {
             issuer_actor_id: string | null;
           })
         | undefined;
-      if (row === undefined) {
-        throw new CustomerMemoryError("not_found", "grant_request_not_found", "授权请求不存在或不可见");
+      const phraseOk =
+        input.confirmation_phrase !== undefined &&
+        row?.phrase_digest === contentDigest({ purpose: "grant_phrase", phrase: input.confirmation_phrase });
+      const refOk =
+        input.confirmation_ref !== undefined &&
+        row?.confirmation_ref_digest === contentDigest({ purpose: "grant_ref", ref: input.confirmation_ref });
+      if (row === undefined || (!phraseOk && !refOk)) {
+        throw new CustomerMemoryError("confirmation_invalid", "confirmation_mismatch", "确认短语或引用不匹配");
       }
       if (row.consumed_at !== null) {
         throw new CustomerMemoryError("confirmation_consumed", "grant_request_consumed", "授权请求已消费");
@@ -278,15 +284,6 @@ export class GrantRequestService {
         throw new CustomerMemoryError("not_found", "subject_not_found", "主体不存在或不可见");
       }
       this.assertScopeUsable(merchantId, row.resource_scope_id);
-      const phraseOk =
-        input.confirmation_phrase !== undefined &&
-        row.phrase_digest === contentDigest({ purpose: "grant_phrase", phrase: input.confirmation_phrase });
-      const refOk =
-        input.confirmation_ref !== undefined &&
-        row.confirmation_ref_digest === contentDigest({ purpose: "grant_ref", ref: input.confirmation_ref });
-      if (!phraseOk && !refOk) {
-        throw new CustomerMemoryError("confirmation_invalid", "confirmation_mismatch", "确认短语或引用不匹配");
-      }
       this.db
         .prepare(
           "UPDATE grant_requests SET consumed_at = ? WHERE merchant_id = ? AND grant_request_id = ?",

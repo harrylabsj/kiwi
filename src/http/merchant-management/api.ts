@@ -133,7 +133,6 @@ import type { GovernanceFeatureFlags } from "../../merchant-core/context-governa
 import { GovernanceRuntimeError } from "../../merchant-core/ownership/runtime.js";
 import { InstanceOwnershipError } from "../../merchant-core/ownership/instance-ownership.js";
 import { LearningError } from "../../merchant-core/learning/types.js";
-import { retryUnknownDelivery } from "../../merchant-core/customer-delivery/dispatcher.js";
 import { OperationsJobsError } from "../../merchant-core/operations-jobs/service.js";
 import {
   parseExactMoney,
@@ -686,6 +685,7 @@ export function createMerchantManagementApiHandler(
       authorizeOrThrow(auth.ctx, "followups:read");
       writeJson(res, 200, {
         deliveries: options.customerDeliveries.listByStatus(auth.ctx.merchantId, "UNKNOWN"),
+        reconciliation_audit: options.customerDeliveries.listReconciliationAudit(auth.ctx.merchantId),
       }, { "x-request-id": requestId });
       return;
     }
@@ -1399,26 +1399,12 @@ export function createMerchantManagementApiHandler(
           writeWorkbenchProblem(res, "RESOURCE_NOT_FOUND", requestId, "资源不存在", "投递记录不可用。");
           return;
         }
-        if (fields["verified_not_executed"] !== true || fields["channel_idempotent"] !== true) {
-          throw new ManagementError(
-            "invalid_input",
-            "必须同时确认已证实未执行且渠道支持同 ID 幂等",
-          );
-        }
-        const retried = deliveryCall(() =>
-          (options.governance?.write ?? ((work: () => unknown) => work()))(() =>
-            retryUnknownDelivery({
-              store: options.customerDeliveries!,
-              merchant_id: auth.ctx.merchantId,
-              delivery_id: pathSegment(retryMatch[1] ?? ""),
-              now: new Date().toISOString(),
-              verified_not_executed: true,
-              channel_idempotent: true,
-            }),
-          ),
+        // The deployed SMTP adapter cannot prove non-execution or deduplicate a retry.
+        // Keep UNKNOWN available for inspection until a trusted reconciliation adapter exists.
+        throw new ManagementError(
+          "precondition_changed",
+          "渠道尚未提供可验证的未发送回执，结果未知的通知不能重发",
         );
-        writeJson(res, 200, retried, { "x-request-id": requestId });
-        return;
       }
       if (rest === "/delivery/bindings") {
         writeJson(res, 201, deliveryCall(() =>
@@ -4423,6 +4409,11 @@ export function createMerchantManagementApiHandler(
     try {
       // 落盘前再刷一次运营规则：运营新增平台后无需重启实例即可提交。
       await options.marketplacePlatforms?.();
+      if (importChannel.currentTable().digest !== (draft.base_digest ?? "")) {
+        operations.release(begun.operationId);
+        respondError(res, new ManagementError("precondition_changed", "product table changed since draft creation"));
+        return;
+      }
       const written = importChannel.commit(table);
       const marked = options.drafts.markCommitted(auth.ctx.merchantId, draftId);
       if (!marked) {

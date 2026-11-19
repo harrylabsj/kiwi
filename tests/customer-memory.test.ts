@@ -158,6 +158,29 @@ describe("客户记忆 M3", () => {
       "confirmation_consumed",
       "challenge_consumed",
     );
+    const anotherCustomer = { ...customer(), actor_id: "buyer-other" };
+    expect(identity.listBindings(MERCHANT, anotherCustomer, subjectId)).toEqual([]);
+    expect(identity.listBindings(MERCHANT, manager(), subjectId)).toMatchObject([binding]);
+    expectError(
+      () => identity.revokeBinding({
+        merchant_id: MERCHANT,
+        actor: anotherCustomer,
+        binding_id: binding.binding_id,
+        expected_epoch: 1,
+      }),
+      "access_denied",
+      "subject_not_bound",
+    );
+    for (const challenge_id of [challenge.challenge_id, "chl_missing"]) {
+      expectError(
+        () => identity.linkConfirm({
+          merchant_id: MERCHANT, actor: customer(), challenge_id,
+          source_session_id: "session-1", proof: "incorrect-proof",
+        }),
+        "confirmation_invalid",
+        "proof_mismatch",
+      );
+    }
     // 撤销后不再返回绑定。
     identity.revokeBinding({
       merchant_id: MERCHANT,

@@ -25,6 +25,8 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { DataUseGrantStore } from "../context-governance/data-use-grant.js";
+import { LearningRepository } from "../learning/repository.js";
+import { QuoteHistoryStore } from "./quote-history.js";
 import { CustomerMemoryService } from "./memory.js";
 
 export interface CustomerDataMaintenanceOptions {
@@ -33,6 +35,9 @@ export interface CustomerDataMaintenanceOptions {
   /** 所有权栅栏：丢失写权时抛错，tick 只记日志不写库。 */
   readonly write: <T>(work: () => T) => T;
   readonly interval_ms?: number;
+  readonly merchantId?: string;
+  readonly memory?: boolean;
+  readonly learning?: boolean;
   readonly log?: (line: string) => void;
 }
 
@@ -40,6 +45,7 @@ export interface CustomerDataMaintenanceResult {
   readonly memories: number;
   readonly history: number;
   readonly grants: number;
+  readonly learning?: { evaluations: number; receipts: number };
 }
 
 export class CustomerDataMaintenance {
@@ -57,8 +63,18 @@ export class CustomerDataMaintenance {
     });
     const grants = new DataUseGrantStore({ db: this.options.db, now: this.options.now });
     return this.options.write(() => {
-      const expired = memory.expireDue();
-      return { ...expired, grants: grants.expireDue() };
+      if (this.options.merchantId !== undefined) {
+        new QuoteHistoryStore({ db: this.options.db, now: this.options.now }).pruneForMerchant(this.options.merchantId);
+      }
+      const expired = this.options.memory === false
+        ? { memories: 0, history: 0, grants: 0 }
+        : { ...memory.expireDue(), grants: grants.expireDue() };
+      return {
+        ...expired,
+        ...(this.options.learning === true ? {
+          learning: new LearningRepository({ db: this.options.db }).pruneEvaluationHistory(this.options.now()),
+        } : {}),
+      };
     });
   }
 

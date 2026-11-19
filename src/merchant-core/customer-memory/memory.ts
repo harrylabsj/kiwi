@@ -474,9 +474,12 @@ export class CustomerMemoryService {
             WHERE merchant_id = ? AND erase_scope_id = ?
            UNION
            SELECT subject_id FROM history_index
-            WHERE merchant_id = ? AND erase_scope_id = ?`,
+            WHERE merchant_id = ? AND erase_scope_id = ?
+           UNION
+           SELECT subject_id FROM quote_history_delegations
+            WHERE merchant_id = ? AND 'quote-history:' || subject_id = ?`,
         )
-        .all(merchantId, scopeId, merchantId, scopeId) as unknown as Array<{ subject_id: string }>;
+        .all(merchantId, scopeId, merchantId, scopeId, merchantId, scopeId) as unknown as Array<{ subject_id: string }>;
       if (subjects.length === 0 && !hasCapability(input.actor, "memory:write")) {
         throw new CustomerMemoryError(
           "access_denied",
@@ -487,7 +490,10 @@ export class CustomerMemoryService {
       for (const subject of subjects) {
         this.assertActorOwnsSubject(input.actor, subject.subject_id);
       }
-      const job = this.sourceGovernance?.requestDeletion({
+      const source = this.sourceGovernance ?? (scopeId.startsWith("quote-history:")
+        ? new SourceGovernanceService({ db: this.db, now: this.now })
+        : undefined);
+      const job = source?.requestDeletion({
         merchant_id: merchantId,
         erase_scope_id: scopeId,
         requested_by: text(input.requested_by, "requested_by"),
@@ -525,7 +531,9 @@ export class CustomerMemoryService {
           this.bumpSetVersion(merchantId, subject.subject_id, stamp);
         }
       }
-      // 此处只清理记忆与历史索引；跨模块存储面由对应清理方回执。
+      this.db.prepare(
+        "DELETE FROM published_offers WHERE merchant_id = ? AND 'quote-history:' || subject_id = ?",
+      ).run(merchantId, scopeId);
       return job;
     });
   }
@@ -534,6 +542,9 @@ export class CustomerMemoryService {
   expireDue(): { memories: number; history: number } {
     const stamp = nowUtc(this.now);
     return inImmediateTransaction(this.db, () => {
+      this.db.prepare(
+        "DELETE FROM published_offers WHERE julianday(quoted_at) <= julianday(?) - 90",
+      ).run(stamp);
       const subjects = this.db
         .prepare(
           `SELECT DISTINCT merchant_id, subject_id FROM customer_memories
