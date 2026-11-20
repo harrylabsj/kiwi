@@ -242,7 +242,7 @@
     },
     {
       "path": "build-inputs/release-acceptance.json",
-      "sha256": "sha256:04ef94737511dae3392a7cd8b0d0a6b2482384687f89f763252098d7edac19df"
+      "sha256": "sha256:e388b9ac8ab1ae031ed1bfeddb5410ffd2ca7c8a7083cfda3862c096328a94bd"
     },
     {
       "path": "build-inputs/release0124-npm12-payload.json",
@@ -259,6 +259,10 @@
     {
       "path": "build-inputs/shipping-audit-allow.json",
       "sha256": "sha256:1dc8a3ca496d593be452b5b3322cd4e8118be4a65b5d6be756f4ab81c3d3132d"
+    },
+    {
+      "path": "code-review-30d-2026-11-19.md",
+      "sha256": "sha256:88ba38d5533de2c14bd363a4add79b5dff9d275d536640efb043dc38e590ebf3"
     },
     {
       "path": "code-review-48h-2026-11-19.md",
@@ -3538,7 +3542,7 @@
     },
     {
       "path": "portfolio.lock.json",
-      "sha256": "sha256:90856d86e331d312928d19aebc72fcf8f7b9dafc709c59e0816c528c54d3b552"
+      "sha256": "sha256:ac6fe2b35b6646076f700ab4c932ba181666643fe2051201576de69381d50902"
     },
     {
       "path": "scripts/a236-packed-merchant-assembly.mjs",
@@ -8736,7 +8740,7 @@
     },
     {
       "path": "tests/three-party-open-inquiry.e2e.test.ts",
-      "sha256": "sha256:aa7e4a7d20609b95df05479fb35fdfb2dde9693f1755f756103f5052851ae64d"
+      "sha256": "sha256:3392026d1a56b69e69ad0bbd5d3d39648d94e50bcf90d80e7333d18ec73a1b5f"
     },
     {
       "path": "tests/throttle-sweep.test.ts",
