@@ -25,5 +25,12 @@ try{
  if(interrupted)throw new Error('PREPARE_CANCELLED');
  if(result.executionAuthorized!==false||result.authorizationProven!==false)throw new Error('RESULT_INVALID');
  process.stdout.write(JSON.stringify(result)+'\n');
-}catch(error){const code=typeof error?.message==='string'&&/^[A-Z_]{3,80}$/.test(error.message)?error.message:'BUYER_INSPECTION_FAILED';process.stderr.write(`HOLD: ${code}\n`);process.exitCode=1}
+}catch(error){
+ const message=error?.message??'';
+ const code=/^TOOL_SCHEMA_MISMATCH:kiwi_[a-z_]+$/.test(message)
+   ? 'TOOL_SCHEMA_MISMATCH'
+   : /^[A-Z_]{3,80}$/.test(message) ? message : 'BUYER_INSPECTION_FAILED';
+ process.stderr.write(`HOLD: ${code}\n`);
+ process.exitCode=1;
+}
 finally{process.off('SIGTERM',onSignal);process.off('SIGINT',onSignal)}

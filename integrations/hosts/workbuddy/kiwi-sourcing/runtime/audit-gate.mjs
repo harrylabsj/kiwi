@@ -9,19 +9,23 @@ import { verifyTrustedBundle } from './sigstore-gate.mjs';
 
 const exec = promisify(execFile);
 
+export async function readStagedPackageLock(directory) {
+  let file;
+  try {
+    file=await open(`${directory}/package-lock.json`,constants.O_RDONLY|constants.O_NOFOLLOW);
+    const st=await file.stat();
+    if(!st.isFile() || st.size>16*1024*1024 || (st.mode&0o022) || (typeof process.getuid==='function' && st.uid!==process.getuid()))throw new Error();
+    return JSON.parse(await file.readFile('utf8'));
+  } catch {throw new Error('PACKAGE_LOCK_INVALID')}
+  finally {await file?.close()}
+}
+
 // Preflight only: caller must create a private staging directory, install with
 // scripts disabled, and separately secure installed execution bytes and archive
 // paths. This does not make npm install or executing the package safe.
 export async function auditStagedPackage({directory, npmBinary, lock, tarball, env}) {
   verifyBytes(lock, tarball);
-  let file,packageLock;
-  try {
-    file=await open(`${directory}/package-lock.json`,constants.O_RDONLY|constants.O_NOFOLLOW);
-    const st=await file.stat();
-    if(!st.isFile() || st.size>16*1024*1024 || (st.mode&0o022) || (typeof process.getuid==='function' && st.uid!==process.getuid()))throw new Error();
-    packageLock=JSON.parse(await file.readFile('utf8'));
-  } catch {throw new Error('PACKAGE_LOCK_INVALID')}
-  finally {await file?.close()}
+  const packageLock = await readStagedPackageLock(directory);
   const entry = packageLock.packages?.[`node_modules/${lock.name}`];
   if (!entry || entry.version !== lock.version || entry.integrity !== lock.integrity || entry.resolved !== lock.tarball) throw new Error('INSTALLED_LOCK_MISMATCH');
   let stdout;

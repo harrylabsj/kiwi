@@ -17,7 +17,7 @@ const exec=promisify(execFile);
 // Private cache inspection only: no production process is started. A matching
 // artifact and signatures are not a WorkBuddy human approval. Same-user TOCTOU,
 // host integration and cross-platform behavior remain unproven.
-export async function inspectBuyerSession({sessionDirectory,npmBinary,nodeBinary,pythonBinary,baselineFile,baselineZhFile}) {
+export async function inspectBuyerSession({sessionDirectory,npmBinary,nodeBinary,pythonBinary,baselineFile,baselineZhFile,installCacheDirectory}) {
   if (![sessionDirectory,npmBinary,nodeBinary,pythonBinary,baselineFile,baselineZhFile].every(x=>typeof x==='string'&&isAbsolute(x)))throw new Error('ABSOLUTE_PATH_REQUIRED');
   const st=await lstat(sessionDirectory);
   if(!st.isDirectory()||st.isSymbolicLink()||(st.mode&0o077)||(typeof process.getuid==='function'&&st.uid!==process.getuid()))throw new Error('SESSION_DIRECTORY_INVALID');
@@ -33,7 +33,10 @@ export async function inspectBuyerSession({sessionDirectory,npmBinary,nodeBinary
   catch {throw new Error('BUYER_TRANSACTION_INVALID')}
   if(lock.name!=='@harrylabsj/kiwi') throw new Error('PACKAGE_INVALID');
   const env={HOME:sessionDirectory,TMPDIR:sessionDirectory,PATH:[dirname(nodeBinary),'/usr/bin','/bin'].join(delimiter),NPM_CONFIG_USERCONFIG:'/dev/null',NPM_CONFIG_CACHE:join(sessionDirectory,'npm-cache'),NPM_CONFIG_REGISTRY:'https://registry.npmjs.org/',NPM_CONFIG_IGNORE_SCRIPTS:'true',NPM_CONFIG_AUDIT:'false',NPM_CONFIG_FUND:'false',PYTHONDONTWRITEBYTECODE:'1'};
-  const provenance=await auditStagedPackage({directory:sessionDirectory,npmBinary,lock:lock,tarball:bytes,env});
+  const npmEnvironment = installCacheDirectory
+    ? { ...env, NPM_CONFIG_CACHE: installCacheDirectory }
+    : env;
+  const provenance=await auditStagedPackage({directory:sessionDirectory,npmBinary,lock:lock,tarball:bytes,env:npmEnvironment});
   const treeCli=fileURLToPath(new URL('./inspect_tree_cli.py',import.meta.url));
   async function inspect(){try{const r=await exec(pythonBinary,[treeCli,sessionDirectory],{env,cwd:sessionDirectory,timeout:120000,maxBuffer:1024*1024});const x=JSON.parse(r.stdout);if(!Number.isInteger(x.packages)||x.packages<1)throw new Error();return x}catch{throw new Error('TREE_INSPECTION_FAILED')}}
   const before=await inspect();

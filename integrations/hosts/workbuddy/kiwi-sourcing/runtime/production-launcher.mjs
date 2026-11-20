@@ -1,8 +1,8 @@
-import {accessSync,constants,lstatSync,realpathSync,readFileSync,readdirSync} from 'node:fs';
+import {accessSync,constants,lstatSync,realpathSync,readFileSync} from 'node:fs';
 import {delimiter,dirname,join,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {runPreparation} from './stage-runner.mjs';
-import {ensureBuyerCacheDirectory,withBuyerCacheStore as withCacheLock} from './buyer-cache-store-draft.mjs';
+import {withBuyerCacheStore as withCacheLock} from './buyer-cache-store-draft.mjs';
 import {startVerifiedBackend} from './backend-client.mjs';
 import {startBackendWithPreparedLock} from './locked-backend-session.mjs';
 import {startProductionMcpServer} from './mcp-production-server.mjs';
@@ -59,13 +59,6 @@ async function main(){
     quoteTool.inputSchema.properties.reuse_history = {type:'boolean'};
   }
   const cliPath=join(packageRoot,'buyer-session-cli.mjs');
-  async function rejectUnanchoredCache(signal,deadlineEpochMs){
-    ensureBuyerCacheDirectory(store);
-    await withCacheLock(store,state=>{
-      if(state.prepared())return;
-      if(readdirSync(store).some(name=>!['.update-lock','.update-lock.sqlite'].includes(name)&&!/^\.update-lock-data-[a-f0-9]{24}(-journal)?$/.test(name)))throw new Error('CACHE_STATE_INVALID');
-    },{waitForLock:true,signal,deadlineEpochMs});
-  }
   const controller=new AbortController();let server,startupDeadlineEpochMs;
   const shutdown=()=>{controller.abort();server?.shutdown()};
   process.once('SIGTERM',shutdown);process.once('SIGINT',shutdown);
@@ -83,7 +76,6 @@ async function main(){
       prepare:async({signal})=>{
         process.stderr.write('KIWI_STATUS:PREPARING\n');
         const deadlineEpochMs=Date.now()+600_000;startupDeadlineEpochMs=deadlineEpochMs;
-        await rejectUnanchoredCache(signal,deadlineEpochMs);
         const npmBinary=findCompatibleNpm();
         const args=['prepare-managed','--store',store,'--floor','0.12.9','--node',nodeBinary,'--npm',npmBinary,'--python',pythonBinary,
           '--baseline-en',join(packageRoot,'mcp-tools-0.12.12.json'),'--baseline-zh',join(packageRoot,'mcp-tools-0.12.12-zh.json')];

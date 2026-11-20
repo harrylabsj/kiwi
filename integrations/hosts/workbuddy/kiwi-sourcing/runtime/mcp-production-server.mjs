@@ -7,6 +7,15 @@ const READ_ONLY_TOOLS=new Set(['kiwi_search','kiwi_get_task','kiwi_get_agreement
 const out=(output,message)=>{const ok=output.write(JSON.stringify(message)+'\n');return ok};
 const unavailable=text=>({isError:true,content:[{type:'text',text}]});
 const preparationPending=text=>({isError:true,structuredContent:{status:'retryable',code:'PREPARATION_IN_PROGRESS',requestSent:false},content:[{type:'text',text}]});
+const pendingSearchMessage='PREPARATION_IN_PROGRESS: Verification is still running in this connection. The read-only request was not sent. Retry in the same connection after it is ready; reconnecting can interrupt verification.';
+const prepareErrors = new Map([
+  ['PREPARE_FAILED:REGISTRY_UNAVAILABLE','KIWI_PREPARE_REGISTRY_UNAVAILABLE: Cannot reach the official npm registry or its attestation endpoint; verify network access and reconnect.'],
+  ['PREPARE_FAILED:INSTALL_FAILED','KIWI_PREPARE_INSTALL_FAILED: Kiwi dependencies could not be installed. The procurement request was not sent.'],
+  ['PREPARE_FAILED:PROVENANCE_FAILED','KIWI_PREPARE_PROVENANCE_FAILED: Package provenance verification failed; no package was run.'],
+  ['PREPARE_FAILED:CACHE_STATE_INVALID','KIWI_PREPARE_CACHE_STATE_INVALID: Incomplete or invalid cache needs review; no package was run.'],
+  ['PREPARE_FAILED:TOOL_CHECK_FAILED','KIWI_PREPARE_TOOL_CHECK_FAILED: The Kiwi runtime did not pass the MCP tool contract check. Check the expert and runtime versions before retrying. The procurement request was not sent.'],
+  ['NPM_12_UNAVAILABLE','NPM_12_UNAVAILABLE: Kiwi requires npm 12. Install or upgrade npm to version 12, ensure it is on PATH, then reconnect and retry.'],
+]);
 const responseError=(id,code,message)=>({jsonrpc:'2.0',id,error:{code,message}});
 // Transparent MCP transport only. Business policy, scope, approval, and action
 // outcomes belong to the verified Kiwi backend / calling expert. This adapter
@@ -121,7 +130,7 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
       pending.timer=setTimeout(()=>{
         if(!activeToolCalls.has(callKey))return;
         remember(timedOutClientIds,callKey);
-        if(!pending.sent){queuedToolCalls.delete(callKey);answerTool(message.id,preparationPending('PREPARATION_IN_PROGRESS: Verification is still running; this read-only request was not sent. Retry it once the connector is ready.'));return}
+        if(!pending.sent){queuedToolCalls.delete(callKey);answerTool(message.id,preparationPending(pendingSearchMessage));return}
         answerTool(message.id,unavailable('Backend response timed out; outcome is unknown. Do not retry until task status is checked.'));
         fail('TOOL_OUTCOME_UNCERTAIN');
       },toolTimeoutMs);pending.timer.unref?.();activeToolCalls.set(callKey,pending);
@@ -130,7 +139,7 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
           clearTimeout(pending.timer);pending.timer=setTimeout(()=>{
             if(!activeToolCalls.has(callKey)||pending.sent)return;
             remember(timedOutClientIds,callKey);queuedToolCalls.delete(callKey);
-            answerTool(message.id,preparationPending('PREPARATION_IN_PROGRESS: Verification exceeded the bounded wait; this read-only request was not sent. Retry it once the connector is ready.'));
+            answerTool(message.id,preparationPending(pendingSearchMessage));
           },Math.min(prepareWaitTimeoutMs,Math.max(1,pending.deadline-Date.now())));pending.timer.unref?.();queuedToolCalls.set(callKey,pending);
         }else answerTool(message.id,preparationPending('PREPARATION_IN_PROGRESS: Verification is still running; this request was not sent. Retry once the connector is ready.'));
         return;
@@ -194,7 +203,19 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
   async function run(){
     try{
       let prepared;
-      try{prepared=await prepare({signal:abort.signal})}catch(error){if(/^PREPARE_FAILED:(SIGNATURE_VERIFIER_UNAVAILABLE|SIGNER_POLICY_VERIFICATION_FAILED|ATTESTATION_INVALID|PROVENANCE_MISSING)$/.test(error?.message??''))preparationErrorMessage=`KIWI_${error.message}: Package provenance verification failed; no package was run.`;else if(error?.message==='PREPARE_FAILED:REGISTRY_UNAVAILABLE')preparationErrorMessage='KIWI_PREPARE_REGISTRY_UNAVAILABLE: Cannot reach the official npm registry or its attestation endpoint; verify network access and reconnect.';else if(error?.message==='PREPARE_FAILED:PROVENANCE_FAILED')preparationErrorMessage='KIWI_PREPARE_PROVENANCE_FAILED: Package provenance verification failed; no package was run.';else if(error?.message==='PREPARE_FAILED:CACHE_STATE_INVALID'||error?.message==='CACHE_STATE_INVALID')preparationErrorMessage='KIWI_PREPARE_CACHE_STATE_INVALID: Incomplete or invalid cache needs review; no package was run.';else if(error?.message==='NPM_12_UNAVAILABLE')preparationErrorMessage='NPM_12_UNAVAILABLE: Kiwi requires npm 12. Install or upgrade npm to version 12, ensure it is on PATH, then reconnect and retry.';status(error?.message==='PREPARE_TIMEOUT'?'TIMEOUT_PREPARE':'FAILED_PREPARE');throw new Error('PREPARE_FAILED',{cause:error})}
+      try {
+        prepared=await prepare({signal:abort.signal});
+      } catch (error) {
+        const message=error?.message??'';
+        if (/^PREPARE_FAILED:(SIGNATURE_VERIFIER_UNAVAILABLE|SIGNER_POLICY_VERIFICATION_FAILED|ATTESTATION_INVALID|PROVENANCE_MISSING)$/.test(message)) {
+          preparationErrorMessage=`KIWI_${message}: Package provenance verification failed; no package was run.`;
+        } else {
+          const code=message==='CACHE_STATE_INVALID'?'PREPARE_FAILED:CACHE_STATE_INVALID':message;
+          preparationErrorMessage=prepareErrors.get(code)??preparationErrorMessage;
+        }
+        status(message==='PREPARE_TIMEOUT'?'TIMEOUT_PREPARE':'FAILED_PREPARE');
+        throw new Error('PREPARE_FAILED',{cause:error});
+      }
       if(stopped||abort.signal.aborted)return;
       preparedResult=prepared;
       const initialized=await Promise.race([hostReadyPromise,new Promise(resolve=>abort.signal.addEventListener('abort',()=>resolve(false),{once:true}))]);

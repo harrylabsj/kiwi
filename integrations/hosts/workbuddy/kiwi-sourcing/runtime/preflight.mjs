@@ -1,21 +1,46 @@
-import { mkdtemp, writeFile, chmod } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { chmod, copyFile, lstat, mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join, dirname, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveLatest } from './latest-resolver.mjs';
-import { auditStagedPackage } from './audit-gate.mjs';
+import { auditStagedPackage, readStagedPackageLock } from './audit-gate.mjs';
 import {resolveMetadata,verifyBytes} from './artifact.mjs';
 import { verifyPublishedArtifact } from './published-provenance.mjs';
 import {remainingPrepareBudgetMs,runPrepareCommand} from './prepare-budget.mjs';
 
 const exec = promisify(execFile);
 
+// Keep verification evidence in each session so later downloads or cache
+// eviction cannot invalidate a previously prepared runtime.
+export async function snapshotInstallTarballs(directory, installCacheDirectory) {
+  const { packages } = await readStagedPackageLock(directory);
+  if (!packages || typeof packages !== 'object' || Array.isArray(packages)) throw new Error('PACKAGE_LOCK_INVALID');
+  const integrities = new Set();
+  for (const [location, entry] of Object.entries(packages)) {
+    if (location !== '') integrities.add(entry?.integrity);
+  }
+  for (const integrity of integrities) {
+    if (typeof integrity !== 'string' || !/^sha512-[A-Za-z0-9+/]{86}==$/.test(integrity)) throw new Error('PACKAGE_LOCK_INVALID');
+    const hash = Buffer.from(integrity.slice(7), 'base64').toString('hex');
+    const path = join('_cacache', 'content-v2', 'sha512', hash.slice(0, 2), hash.slice(2, 4), hash.slice(4));
+    const source = join(installCacheDirectory, path);
+    const destination = join(directory, 'npm-cache', path);
+    const stat = await lstat(source);
+    if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o022) || await realpath(source) !== source) {
+      throw new Error('CACHE_TARBALL_INVALID');
+    }
+    await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
+    await copyFile(source, destination, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
+  }
+}
+
 // Offline/online inspection prototype. Intentionally does not execute the
 // downloaded package, enable a connector, or touch any cloud application.
 // Installation bytes, archive safety, WorkBuddy integration and runtime
 // authorization remain separate, unfinished requirements.
-export async function preflight({name, stagingParent, npmBinary, nodeBinary, pythonBinary, resolvedLatest}) {
+export async function preflight({name, stagingParent, npmBinary, nodeBinary, pythonBinary, resolvedLatest, installCacheDirectory}) {
   if (!isAbsolute(stagingParent) || !isAbsolute(npmBinary) || !isAbsolute(nodeBinary) || !pythonBinary || !isAbsolute(pythonBinary)) throw new Error('ABSOLUTE_PATH_REQUIRED');
   const resolved=resolvedLatest??await resolveLatest(name);
   const lock=resolveMetadata(name,{name:resolved.lock?.name,version:resolved.lock?.version,dist:{integrity:resolved.lock?.integrity,tarball:resolved.lock?.tarball}});
@@ -29,6 +54,9 @@ export async function preflight({name, stagingParent, npmBinary, nodeBinary, pyt
     NPM_CONFIG_AUDIT:'false', NPM_CONFIG_FUND:'false', PYTHONDONTWRITEBYTECODE:'1',
     KIWI_PREPARE_DEADLINE_EPOCH_MS:process.env.KIWI_PREPARE_DEADLINE_EPOCH_MS??String(Date.now()+600_000),
   };
+  const npmEnvironment = installCacheDirectory
+    ? { ...environment, NPM_CONFIG_CACHE: installCacheDirectory }
+    : environment;
   const project = {name:'kiwi-latest-private-preflight',version:'1.0.0',private:true,dependencies:{[name]:lock.version}};
   await writeFile(join(directory,'package.json'),JSON.stringify(project),{mode:0o600,flag:'wx'});
   const archive=join(directory,'verified-download.tgz');
@@ -43,9 +71,10 @@ export async function preflight({name, stagingParent, npmBinary, nodeBinary, pyt
     if(result.version!==lock.version || (name==='@harrylabsj/kiwi' && result.name!==name) || (name==='@harrylabsj/kiwi-merchant-cloud' && result.sourceCommit!==published.sourceCommit)) throw new Error('ARCHIVE_IDENTITY_MISMATCH');
   } catch(error) {throw new Error('ARCHIVE_INSPECTION_FAILED',{cause:error})}
   try {
-    await runPrepareCommand(npmBinary,['install','--ignore-scripts','--no-audit','--no-fund'],{cwd:directory,env:environment,timeoutMs:remainingPrepareBudgetMs(environment),maxBuffer:4*1024*1024});
-  } catch(error) { if(error?.message==='PREPARE_TIMEOUT'||error?.message==='PREPARE_TERMINATION_UNCONFIRMED')throw error;throw new Error('ISOLATED_INSTALL_FAILED',{cause:error}); }
-  const verified = await auditStagedPackage({directory,npmBinary,lock,tarball:bytes,env:environment});
+    await runPrepareCommand(npmBinary,['install','--ignore-scripts','--no-audit','--no-fund'],{cwd:directory,env:npmEnvironment,timeoutMs:remainingPrepareBudgetMs(environment),maxBuffer:4*1024*1024});
+    if (installCacheDirectory) await snapshotInstallTarballs(directory, installCacheDirectory);
+  } catch(error) { if(error?.message==='PREPARE_TIMEOUT'||error?.message==='PREPARE_CANCELLED'||error?.message==='PREPARE_TERMINATION_UNCONFIRMED')throw error;throw new Error('ISOLATED_INSTALL_FAILED',{cause:error}); }
+  const verified = await auditStagedPackage({directory,npmBinary,lock,tarball:bytes,env:npmEnvironment});
   if(verified.sourceCommit!==published.sourceCommit) throw new Error('SOURCE_COMMIT_MISMATCH');
   let treeInspection = null;
   if (name === '@harrylabsj/kiwi' && pythonBinary) {

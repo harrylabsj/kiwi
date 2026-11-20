@@ -13,13 +13,13 @@ const exec=promisify(execFile);
 
 // Stage and verify only the latest package source, integrity, tree and exact
 // MCP tool schema. Business approval semantics are outside this connector.
-async function stageBuyerCandidateInternal({stagingParent,npmBinary,nodeBinary,pythonBinary,baselineFile,baselineZhFile,previousVersion,resolvedLatest}) {
+async function stageBuyerCandidateInternal({stagingParent,npmBinary,nodeBinary,pythonBinary,baselineFile,baselineZhFile,previousVersion,resolvedLatest,installCacheDirectory}) {
   if (!pythonBinary || !baselineFile || !baselineZhFile) throw new Error('REQUIRED_GATE_MISSING');
   if (typeof previousVersion!=='string' || !previousVersion) throw new Error('PREVIOUS_VERSION_REQUIRED');
   if (previousVersion!=='initial') ensureNoDowngrade(previousVersion,previousVersion);
   const baseline=JSON.parse(await readFile(baselineFile,'utf8'));
   const baselineZh=JSON.parse(await readFile(baselineZhFile,'utf8'));
-  const checked=await preflight({name:'@harrylabsj/kiwi',stagingParent,npmBinary,nodeBinary,pythonBinary,resolvedLatest});
+  const checked=await preflight({name:'@harrylabsj/kiwi',stagingParent,npmBinary,nodeBinary,pythonBinary,resolvedLatest,installCacheDirectory});
   if (!checked.treeInspection || checked.executionAuthorized !== false) throw new Error('PREFLIGHT_INVALID');
   if(previousVersion!=='initial')ensureNoDowngrade(checked.lock.version,previousVersion);
   const packageRoot=join(checked.directory,'node_modules','@harrylabsj','kiwi');

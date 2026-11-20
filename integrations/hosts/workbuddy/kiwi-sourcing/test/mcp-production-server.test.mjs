@@ -142,3 +142,25 @@ test('missing npm 12 gives actionable guidance to the user',async()=>{
  const h=harness({deferPreparation:true,prepare:async()=>{throw new Error('NPM_12_UNAVAILABLE')}});
  try{await initialize(h);await h.send({jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'kiwi_search',arguments:{query:'test'}}});const reply=await until(h.messages,m=>m.id===3);assert.equal(reply.result.isError,true);assert.match(reply.result.content[0].text,/NPM_12_UNAVAILABLE.*npm 12/)}finally{await close(h)}
 });
+
+test('a terminal tool contract failure never appears as pending or reaches the backend',async()=>{
+ const h=harness({
+  deferPreparation:true,
+  prepare:async()=>{throw new Error('PREPARE_FAILED:TOOL_CHECK_FAILED')},
+  activate:async()=>assert.fail('invalid tool contract cannot activate'),
+ });
+ try {
+  await initialize(h);
+  const request={jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'kiwi_search',arguments:{query:'test'}}};
+  await h.send(request);
+  await h.send({...request,id:4});
+  for(const id of [3,4]){
+   const {result}=await until(h.messages,m=>m.id===id);
+   assert.equal(result.isError,true);
+   assert.match(result.content[0].text,/KIWI_PREPARE_TOOL_CHECK_FAILED.*request was not sent/);
+  }
+  assert.deepEqual(h.statuses,['FAILED_PREPARE']);
+ } finally {
+  await close(h);
+ }
+});

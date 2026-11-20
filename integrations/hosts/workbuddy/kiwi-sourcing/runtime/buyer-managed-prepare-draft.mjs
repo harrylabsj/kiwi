@@ -1,4 +1,4 @@
-import {withBuyerCacheStore,ensureBuyerCacheDirectory} from './buyer-cache-store-draft.mjs';
+import {assertRecoverableBuyerCache,withBuyerCacheStore,ensureBuyerCacheDirectory} from './buyer-cache-store-draft.mjs';
 import {stageBuyerCandidate} from './candidate-check.mjs';
 import {prepareLatestBuyer} from './buyer-session.mjs';
 import {ensureNoDowngrade} from './transaction.mjs';
@@ -27,7 +27,11 @@ export async function prepareManagedBuyer({storeDirectory,floorVersion,signal,..
  return withBuyerCacheStore(storeDirectory,async store=>{
   const active=store.prepared();
   if(active)ensureNoDowngrade(active.version,floorVersion);
-  const result=active?await prepareLatestBuyer({...options,sessionDirectory:active.sessionDirectory,stagingParent:storeDirectory}):await stageBuyerCandidate({...options,stagingParent:storeDirectory,previousVersion:floorVersion});
+  else assertRecoverableBuyerCache(storeDirectory);
+  const installCacheDirectory = join(dirname(storeDirectory), 'kiwi-buyer-npm-downloads');
+  ensureBuyerCacheDirectory(installCacheDirectory);
+  const stageOptions = { ...options, stagingParent: storeDirectory, installCacheDirectory };
+  const result=active?await prepareLatestBuyer({...stageOptions,sessionDirectory:active.sessionDirectory}):await stageBuyerCandidate({...stageOptions,previousVersion:floorVersion});
   if(result.name!=='@harrylabsj/kiwi'||result.authorizationProven!==false||result.executionAuthorized!==false||typeof result.sessionDirectory!=='string')throw new Error('PREPARE_RESULT_INVALID');
   await recheckTree(result,{...options,signal,deadlineEpochMs});
   const selected=store.recordPrepared(result.sessionDirectory,floorVersion,{version:result.version,integrity:result.integrity,treeLockSha256:result.tree?.lock_sha256,contentTreeSha256:result.tree?.content_tree_sha256});
