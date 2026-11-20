@@ -9,7 +9,7 @@
 | npm | `@harrylabsj/kiwi` | 0.12.32 | 2026-11-20 portfolio run [44714849898](https://github.com/harrylabsj/kiwi/actions/runs/44714849898) 发布，发布后手工回读确认 npm latest 为 0.12.32（部分渠道发布时 `verify-registry` 不运行）。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi/v/0.12.32)。 |
 | npm | `@harrylabsj/kiwi-merchant-cloud` | 0.12.32 | 2026-11-20 同一 portfolio run 发布，手工回读确认 npm latest 为 0.12.32。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-merchant-cloud/v/0.12.32)。 |
 | npm | `@harrylabsj/kiwi-dsh-plugin` | 0.1.4 | 2026-11-11 同一 portfolio run 发布并回读核验；npm 可查 0.1.4。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-dsh-plugin/v/0.1.4)。 |
-| PyPI | `kiwi-catalog` | 0.5.28 | 2026-11-20 portfolio run [44714849898](https://github.com/harrylabsj/kiwi/actions/runs/44714849898) 发布，发布后手工回读 PyPI latest=0.5.28；**生产 kiwi-hk 仍是 0.5.20，未部署 0.5.28**。[PyPI 版本页](https://pypi.org/project/kiwi-catalog/0.5.28/)。 |
+| PyPI | `kiwi-catalog` | 0.5.28 | 2026-11-20 portfolio run [44714849898](https://github.com/harrylabsj/kiwi/actions/runs/44714849898) 发布，发布后手工回读 PyPI latest=0.5.28；**生产 kiwi-hk 已于同日部署 0.5.28 + admin 0.2.28，schema user_version=59**。[PyPI 版本页](https://pypi.org/project/kiwi-catalog/0.5.28/)。 |
 | PyPI | `shopping-cli` | 3.2.11 | 2026-11-11 同一 portfolio run 发布并回读核验；PyPI 可查 3.2.11。[PyPI 版本页](https://pypi.org/project/shopping-cli/3.2.11/)。 |
 
 上表确认指定版本可查，不声称它们必然是 registry 当前 latest（2026-11-20 已确认 `@harrylabsj/kiwi` latest=0.12.32、`@harrylabsj/kiwi-merchant-cloud` latest=0.12.32、`kiwi-catalog` latest=0.5.28）。`kiwi-catalog-admin` 0.2.18 已推送私有 tag `v0.2.18`，并作为生产 catalog 的扩展安装；它不是公开 registry 制品。
@@ -21,14 +21,19 @@
 - 生产 catalog：`/opt/kiwi-catalog-0.5.20-admin-0.2.18`，schema `54`，`integrity_check=ok`，`/v1/marketplace-platforms` 返回 jd/taobao/tmall，四个 dashboard tab 均为 200。部署前 DB 快照为 `/opt/kiwi-catalog-backups/catalog.sqlite.bak-20261111-181719`。
 - 生产网关：`/opt/kiwi-gateway/app` 已升级到 npm 包 `@harrylabsj/kiwi@0.12.28`；`node dist/cli.js --version` 输出 `kiwi 0.12.28`，`https://merchant.kiwi.harrylabsj.com/health` 与 OAuth metadata 正常。旧应用保留在 `/opt/kiwi-gateway/app.prev-20261111-190520`。
 
-## 2026-11-20 kiwi 0.12.32 / kiwi-catalog 0.5.28 registry 发布
+## 2026-11-20 kiwi 0.12.32 / kiwi-catalog 0.5.28 registry 发布与生产部署
 
 - 发布源：kiwi `477c62d6`（同一提交链上另有验收回执刷新 `c49c074a`、清单对齐 `477c62d6`），catalog `d2d237a5`，shopping-cli `5ee21630`（未变，未重发）。
 - 真实端到端验收：2026-11-20T09:39Z 对生产目录 `https://catalog.kiwi.harrylabsj.com` 与真实商家 Veyquo（`mkt_veyquo_A0UPvj7XuYk` / `VQ-001` / 2 个）跑通 search → quote → agreement → handoff，回执写入 `build-inputs/release-acceptance.json`（非约束、标注【测试，请勿履约】，不下单/不付款/不锁库存）。
 - GitHub run：[44714849898](https://github.com/harrylabsj/kiwi/actions/runs/44714849898)，`publish=true`，channels=`npm,merchant-cloud,kiwi-catalog`，经 `kiwi-release` 环境保护环境人工审批；发布前签名 dry-run 为 [44713120769](https://github.com/harrylabsj/kiwi/actions/runs/44713120769)。
 - registry 回读（发布后手工执行）：npm `@harrylabsj/kiwi` latest=0.12.32、`@harrylabsj/kiwi-merchant-cloud` latest=0.12.32；PyPI `kiwi-catalog` latest=0.5.28。部分渠道发布时工作流跳过 fail-closed `verify-registry`，以上为本地 `npm view` / PyPI JSON 回读结果，不是 CI 证据。
 - 未重发：`@harrylabsj/kiwi-dsh-plugin` 0.1.4、`shopping-cli` 3.2.11 版本未变。
-- **未部署**：生产 catalog（kiwi-hk）仍为 0.5.20 + admin 0.2.18，生产网关仍为 `@harrylabsj/kiwi@0.12.28`；本次只完成 registry 发布，不含生产部署或 WorkBuddy/商城平台更新。
+- 生产部署（kiwi-hk，2026-11-20 19:20–19:40 北京时间）：
+  - catalog：`/opt/kiwi-catalog-0.5.28-admin-0.2.28`，schema `56 → 59`，`integrity_check=ok`；部署前 DB 快照 `/opt/kiwi-catalog-backups/catalog.sqlite.bak-20261120-1920-pre0.5.28`（user_version 56）；旧 drop-in 已置 `.disabled-20261120`，keepalive 环境独立 drop-in 未动。健康检查本地/公网均 200，dashboard 三个子页 200，公开搜索命中 Veyquo。
+  - 网关：`/opt/kiwi-gateway/app` 切换到 `@harrylabsj/kiwi@0.12.32`，备份保留在 `app.prev-20261120-1920` 与 `app.old-20261120-1920`；`/health` 与 OAuth metadata（`/.well-known/oauth-authorization-server`、`/.well-known/oauth-protected-resource`）均 200。
+  - Veyquo 商家实例：runtime 切到 `releases/kiwi-0.12.32-20261120-1920`，workbench 切到 `releases/kiwi-0.12.32-workbench-20261120-1920`，均 0.12.32；状态快照 `backups/pre-0.12.32-20261120-1920.tgz`。A2A `https://veyquo.com/.well-known/agent-card.json` 200、`/a2a` 正常（GET 405 为预期），workbench `/merchant/` 公网 200，`merchant runtime health` 无 alert，shopping-cli 3.2.11 未动。
+  - 部署后端到端复验：对生产目录 + Veyquo 重新跑通 search → quote → negotiation → preaccept → agreement → handoff（非约束，新 agreement `agreement-01a1f8b4-fd75-75e8-8ffa-78312f2ea864`），未下单/未付款/未锁库存。
+- 未做：WorkBuddy / 商城平台资产更新与审核；本次不含平台侧发布。
 
 ## WorkBuddy 开放平台
 
