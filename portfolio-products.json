@@ -1,6 +1,6 @@
 {
   "schema": "kiwi.portfolio.products.v1",
-  "snapshot_date": "2026-11-19",
+  "snapshot_date": "2026-11-20",
   "version_policy": "Versions remain independent by product. The portfolio release bundle binds each available source commit, package version, candidate artifact hash, and external approval state.",
   "products": [
     {
@@ -49,7 +49,7 @@
     {
       "id": "kiwi-catalog",
       "name": "Kiwi Catalog",
-      "version": "0.5.23",
+      "version": "0.5.28",
       "version_source": {
         "type": "toml",
         "scope": "consumer",
