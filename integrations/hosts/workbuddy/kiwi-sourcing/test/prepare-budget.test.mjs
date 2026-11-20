@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import {mkdir,mkdtemp,readFile,realpath,rm,symlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {remainingPrepareBudgetMs,runPrepareCommand} from '../runtime/prepare-budget.mjs';
+import {snapshotInstallTarballs} from '../runtime/preflight.mjs';
 
 test('nested install budget is the remaining part of the outer deadline',()=>{
   const now=Date.now();
@@ -23,4 +25,34 @@ test('prepare command timeout uses the remaining outer budget and kills its proc
     await new Promise(resolve=>setTimeout(resolve,100));
     assert.throws(()=>process.kill(pid,0),{code:'ESRCH'});
   }finally{await rm(dir,{recursive:true,force:true})}
+});
+
+test('shared downloads are copied into per-install verification evidence without following links',async()=>{
+  const root=await realpath(await mkdtemp(join(tmpdir(),'kiwi-install-cache-')));
+  const shared=join(root,'shared');
+  const stage=join(root,'stage');
+  const data=Buffer.from('dependency archive fixture');
+  const digest=createHash('sha512').update(data).digest();
+  const hex=digest.toString('hex');
+  const cachePath=join('_cacache','content-v2','sha512',hex.slice(0,2),hex.slice(2,4));
+  const archive=join(shared,cachePath,hex.slice(4));
+  const lock={packages:{
+    '':{},
+    'node_modules/one':{integrity:`sha512-${digest.toString('base64')}`},
+    'node_modules/two':{integrity:`sha512-${digest.toString('base64')}`},
+  }};
+  try {
+    await mkdir(join(shared,cachePath),{recursive:true});
+    await mkdir(stage);
+    await writeFile(join(stage,'package-lock.json'),JSON.stringify(lock));
+    await writeFile(archive,data);
+    await snapshotInstallTarballs(stage,shared);
+    const copied=join(stage,'npm-cache',cachePath,hex.slice(4));
+    await rm(archive);
+    assert.deepEqual(await readFile(copied),data);
+    await symlink(copied,archive);
+    await assert.rejects(()=>snapshotInstallTarballs(stage,shared),/CACHE_TARBALL_INVALID/);
+  } finally {
+    await rm(root,{recursive:true,force:true});
+  }
 });

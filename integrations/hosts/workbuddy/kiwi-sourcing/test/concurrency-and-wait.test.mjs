@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {mkdtempSync,mkdirSync,writeFileSync,existsSync,readFileSync,rmSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,existsSync,readFileSync,rmSync,symlinkSync} from 'node:fs';
 import {join} from 'node:path';
 import {PassThrough} from 'node:stream';
 import {readFileSync as read} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {createTransaction} from '../runtime/transaction.mjs';
-import {withBuyerCacheStore} from '../runtime/buyer-cache-store-draft.mjs';
+import {assertRecoverableBuyerCache,withBuyerCacheStore} from '../runtime/buyer-cache-store-draft.mjs';
 import {startBackendWithPreparedLock} from '../runtime/locked-backend-session.mjs';
 import {startProductionMcpServer} from '../runtime/mcp-production-server.mjs';
 
@@ -38,6 +38,30 @@ test('two live instances start without lifetime update lock; latest pointer chan
     await assert.rejects(()=>withBuyerCacheStore(a.store,async()=>{throw new Error('synthetic update contention')}),/synthetic update contention/);
     resolutions.forEach(resolve=>resolve());await Promise.all([first.done,second.done]);
   } finally {rmSync(root,{recursive:true,force:true})}
+});
+
+test('an interrupted first install can retry, but a finalized or symlinked stage cannot replace a lost pointer',async()=>{
+  const root=mkdtempSync('/private/tmp/kiwi-recover-install-');
+  const store=join(root,'store');
+  const interrupted=join(store,'kiwi-preflight-cancel');
+  mkdirSync(store,{mode:0o700});
+  mkdirSync(interrupted,{mode:0o700});
+  writeFileSync(join(interrupted,'package.json'),'{}');
+  try {
+    const check=()=>withBuyerCacheStore(store,state=>{
+      assert.equal(state.prepared(),null);
+      assertRecoverableBuyerCache(store);
+    });
+    await check();
+    const linked=join(store,'kiwi-preflight-linked');
+    symlinkSync(interrupted,linked);
+    await assert.rejects(check,/CACHE_DIRECTORY_INVALID/);
+    rmSync(linked);
+    fixture(root);
+    await assert.rejects(check,/CACHE_STATE_INVALID/);
+  } finally {
+    rmSync(root,{recursive:true,force:true});
+  }
 });
 
 const here=fileURLToPath(new URL('.',import.meta.url));
@@ -73,7 +97,7 @@ test('bounded prepare wait expires safely; canceled queued read-only call is nev
     await init(h);await h.send({jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'kiwi_search',arguments:{query:'synthetic'}}});
     await h.send({jsonrpc:'2.0',method:'notifications/cancelled',params:{requestId:3}});
     await h.send({jsonrpc:'2.0',id:4,method:'tools/call',params:{name:'kiwi_get_task',arguments:{task_id:'synthetic'}}});
-    assert.match((await until(h.messages,m=>m.id===4)).result.content[0].text,/PREPARATION_IN_PROGRESS/);
+    assert.match((await until(h.messages,m=>m.id===4)).result.content[0].text,/PREPARATION_IN_PROGRESS.*same connection/);
     resolvePrepare({});await until(h.messages,()=>h.server.status==='ready');await new Promise(resolve=>setTimeout(resolve,30));
     assert.deepEqual(backend.calls.filter(m=>m.method==='tools/call'),[]);
   } finally {await close(h)}

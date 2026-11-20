@@ -1,4 +1,4 @@
-import {constants,openSync,closeSync,fstatSync,readFileSync,writeFileSync,fsyncSync,lstatSync,mkdirSync,renameSync,unlinkSync,realpathSync,symlinkSync,readlinkSync} from 'node:fs';
+import {constants,openSync,closeSync,fstatSync,readFileSync,writeFileSync,fsyncSync,lstatSync,mkdirSync,readdirSync,renameSync,unlinkSync,realpathSync,symlinkSync,readlinkSync} from 'node:fs';
 import {isAbsolute,join,resolve,dirname} from 'node:path';
 import {randomBytes,createHash} from 'node:crypto';
 import {resumeTransaction,ensureNoDowngrade} from './transaction.mjs';
@@ -20,6 +20,23 @@ export function ensureBuyerCacheDirectory(root){
 function readPrivate(p,max){let fd;try{fd=openSync(p,constants.O_RDONLY|constants.O_NOFOLLOW);const s=fstatSync(fd);if(!s.isFile()||s.nlink!==1||(s.mode&0o077)||(typeof process.getuid==='function'&&s.uid!==process.getuid())||s.size>max)throw new Error();return readFileSync(fd)}catch(e){if(e.code==='ENOENT')throw e;throw new Error('CACHE_FILE_INVALID',{cause:e})}finally{if(fd!==undefined)closeSync(fd)}}
 function lockDigest(p){let fd;try{fd=openSync(p,constants.O_RDONLY|constants.O_NOFOLLOW);const s=fstatSync(fd);if(!s.isFile()||s.nlink!==1||(s.mode&0o022)||(typeof process.getuid==='function'&&s.uid!==process.getuid())||s.size>16*1024*1024)throw new Error();return createHash('sha256').update(readFileSync(fd)).digest('hex')}catch{throw new Error('CACHE_TREE_LOCK_INVALID')}finally{if(fd!==undefined)closeSync(fd)}}
 function validName(name){return typeof name==='string'&&/^kiwi-preflight-[A-Za-z0-9]{6}$/.test(name)}
+// Call with the store locked and no prepared pointer. WorkBuddy may stop a
+// first install midway. An unfinished stage can be left in place and ignored,
+// but a finalized stage with no pointer could indicate a lost version anchor.
+export function assertRecoverableBuyerCache(root) {
+ for (const name of readdirSync(root)) {
+  if (['.update-lock', '.update-lock.sqlite'].includes(name) || /^\.update-lock-data-[a-f0-9]{24}(-journal)?$/.test(name)) continue;
+  if (!validName(name)) throw new Error('CACHE_STATE_INVALID');
+  const session = join(root, name);
+  privateDirectory(session);
+  try {
+   lstatSync(join(session, 'transaction.json'));
+   throw new Error('CACHE_STATE_INVALID');
+  } catch (error) {
+   if (error.code !== 'ENOENT') throw error;
+  }
+ }
+}
 function sessionLock(root,name){if(!validName(name))throw new Error('CACHE_SESSION_INVALID');const dir=join(root,name);privateDirectory(dir);const bytes=readPrivate(join(dir,'verified-download.tgz'),128*1024*1024);const lock=resumeTransaction(join(dir,'transaction.json'),bytes);if(lock.name!=='@harrylabsj/kiwi')throw new Error('PACKAGE_INVALID');return {dir,lock,treeLockSha256:lockDigest(join(dir,'package-lock.json'))}}
 async function acquireGuard(path,options){
  const wait=options?.waitForLock===true,signal=options?.signal,deadline=options?.deadlineEpochMs;

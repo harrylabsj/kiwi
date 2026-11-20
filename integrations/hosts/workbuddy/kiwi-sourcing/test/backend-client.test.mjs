@@ -4,6 +4,7 @@ import {mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs';
 import {join,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {startVerifiedBackend} from '../runtime/backend-client.mjs';
+import {checkToolContract} from '../runtime/tool-contract.mjs';
 
 const here=dirname(fileURLToPath(import.meta.url));
 const packageRoot=dirname(here);
@@ -32,4 +33,14 @@ test('a backend schema mismatch stops before any tool becomes available',async()
   try{
     await assert.rejects(()=>startVerifiedBackend({nodeBinary:process.execPath,sessionDirectory:session,baseline,sourceRoot:packageRoot,environment:{HOME:root,TMPDIR:root,PATH:'/usr/bin:/bin'}}),/TOOL_SET_MISMATCH/);
   }finally{rmSync(root,{recursive:true,force:true})}
+});
+
+test('the latest search schema accepts region deprecation without accepting structural changes',()=>{
+  const candidate=structuredClone(baseline);
+  const search=candidate.find(tool=>tool.name==='kiwi_search').inputSchema;
+  search.properties.region.deprecated=true;
+  search.properties.region.description='Deprecated. Region does not filter Kiwi Network.';
+  assert.equal(checkToolContract(baseline,candidate),true);
+  search.required.push('region');
+  assert.throws(()=>checkToolContract(baseline,candidate),/TOOL_SCHEMA_MISMATCH:kiwi_search/);
 });
