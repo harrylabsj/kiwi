@@ -7,7 +7,10 @@ import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
-import { checkEmbeddedExpertRuntime, embeddedExpertLauncher, packageEmbeddedExpert } from "./package-embedded-expert.mjs";
+import {
+  checkEmbeddedExpertRuntime, embeddedExpertLauncher, packageEmbeddedExpert,
+  validateExpertAvatar, validateExpertDisplay, validateExpertToolReferences,
+} from "./package-embedded-expert.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../../..");
@@ -34,27 +37,8 @@ function frontmatter(relative) {
   return { meta, text };
 }
 
-function bilingual(value) {
-  for (const lang of ["zh", "en"]) assert(typeof value?.[lang] === "string" && value[lang].trim());
-}
-
 const manifest = JSON.parse(read(manifestPath));
-assert.equal(manifest.expertType, "agent");
-assert.equal(manifest.plugin, manifest.name);
-assert(/^\d+\.\d+\.\d+$/.test(manifest.version));
-for (const field of ["displayName", "profession", "displayDescription", "defaultInitPrompt"]) {
-  bilingual(manifest[field]);
-}
-const descriptionLength = [...manifest.displayDescription.zh].length;
-assert(
-  descriptionLength >= 40 && descriptionLength <= 50,
-  `Chinese description: ${descriptionLength} chars, expected 40–50`,
-);
-assert.equal(manifest.quickPrompts.length, 3);
-assert.equal(manifest.tags.length, 3);
-manifest.quickPrompts.forEach(bilingual);
-manifest.tags.forEach(bilingual);
-assert.deepEqual(manifest.defaultInitPrompt, manifest.quickPrompts[0]);
+validateExpertDisplay(manifest);
 assert.equal(manifest.dependencies.mcpServers, "./.mcp.json");
 assert(!manifest.dependencies.connectors?.length, "Expert must not depend on a marketplace connector");
 const mcp = JSON.parse(read(".mcp.json"));
@@ -87,11 +71,7 @@ for (const directory of manifest.skills) {
 assert.equal(new Set(skillNames).size, skillNames.length);
 assert.deepEqual([...agent.meta.skills].sort(), skillNames.sort());
 
-const toolSource = readFileSync(path.join(root, "src/mcp/tools.ts"), "utf8");
-const toolNames = new Set([...toolSource.matchAll(/name: "(kiwi_[a-z_]+)"/g)].map((m) => m[1]));
-const usedTools = new Set(instructions.match(/\bkiwi_[a-z_]+\b/g));
-for (const name of usedTools) assert(toolNames.has(name), `Unknown tool: ${name}`);
-for (const name of toolNames) assert(usedTools.has(name), `Missing workflow for tool: ${name}`);
+const toolCount = validateExpertToolReferences(instructions);
 
 const examplePath = "skills/kiwi-source-and-quote/references/rfq-example.json";
 const example = JSON.parse(read(examplePath));
@@ -105,14 +85,10 @@ assert(validate(example.intent), JSON.stringify(validate.errors));
 assert(example.merchant_ids.length > 0 && example.idempotency_key);
 files.push(examplePath);
 
-const avatar = read(manifest.avatar);
-assert.equal(avatar.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
-assert.equal(avatar.readUInt32BE(16), 512);
-assert.equal(avatar.readUInt32BE(20), 512);
-assert(avatar.length <= 500 * 1024, "Avatar exceeds 500 KB");
+validateExpertAvatar(read(manifest.avatar));
 files.push(manifest.avatar);
 console.log(
-  `Validated ${manifest.profession.zh} | ${manifest.displayName.zh} v${manifest.version}: ${skillNames.length} skills, ${toolNames.size} tools, CommerceIntent and avatar.`,
+  `Validated ${manifest.profession.zh} | ${manifest.displayName.zh} v${manifest.version}: ${skillNames.length} skills, ${toolCount} tools, CommerceIntent and avatar.`,
 );
 
 const args = process.argv.slice(2);

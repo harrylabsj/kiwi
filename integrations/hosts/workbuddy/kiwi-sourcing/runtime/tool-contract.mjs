@@ -14,6 +14,14 @@ function normalize(tools) {
   }
   return map;
 }
+export function enableQuoteHistory(baseline) {
+  const properties = baseline.find(tool => tool?.name === 'kiwi_request_quotes')?.inputSchema?.properties;
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
+    throw new Error('TOOL_BASELINE_INVALID');
+  }
+  properties.reuse_history = { type: 'boolean' };
+}
+
 export function checkToolContract(baseline, candidate) {
   if (!Array.isArray(baseline) || !Array.isArray(candidate)) throw new Error('TOOL_SET_MISMATCH');
   const normalizedCandidate = structuredClone(candidate);

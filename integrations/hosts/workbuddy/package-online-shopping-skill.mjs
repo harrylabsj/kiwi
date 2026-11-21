@@ -1,21 +1,90 @@
 import assert from 'node:assert/strict';
-import {cpSync,existsSync,lstatSync,mkdirSync,mkdtempSync,readFileSync,realpathSync,rmSync} from 'node:fs';
-import {tmpdir} from 'node:os';
-import {dirname,join,resolve,sep} from 'node:path';
-import {fileURLToPath} from 'node:url';
-import {spawnSync} from 'node:child_process';
-import {runtimeFiles} from './kiwi-sourcing/scripts/package-manifest.mjs';
-const here=dirname(fileURLToPath(import.meta.url));const root=join(here,'online-shopping-assistant');const runtime=join(here,'kiwi-sourcing/runtime');const expert=join(here,'kiwi-procurement-expert/runtime');
-const local=['SKILL.md','scripts/kiwi-tool.mjs',...['comparison-rules.md','kiwi-inquiry-and-negotiation.md','output-format.md','platform-research.md'].map(x=>`references/${x}`)];
-function safe(base,rel){const p=resolve(base,rel);assert(p.startsWith(base+sep));assert(lstatSync(p).isFile()&&!lstatSync(p).isSymbolicLink());assert(realpathSync(p).startsWith(realpathSync(base)+sep));return p}
-for(const x of local)safe(root,x);for(const x of runtimeFiles)safe(runtime,x);for(const x of ['expert-data.mjs','expert-launcher.mjs'])safe(expert,x);
-const skill=readFileSync(join(root,'SKILL.md'),'utf8');assert.match(skill,/^name: online-shopping-assistant$/m);assert.match(skill,/^version: 1\.3\.0$/m);assert(skill.includes('scripts/kiwi-tool.mjs'));assert(!skill.includes('`kiwi-sourcing` 连接器'));const reference=readFileSync(join(root,'references/kiwi-inquiry-and-negotiation.md'),'utf8');assert(reference.includes('scripts/kiwi-tool.mjs'));
-console.log(`Validated 网上购物助手 1.3.0 with bundled Kiwi runtime (${runtimeFiles.length+2} files).`);
-const args=process.argv.slice(2);if(args.length===1&&args[0]==='--check')process.exit(0);assert(args.length===2&&args[0]==='--out');const output=resolve(args[1]);assert(output.endsWith('.zip')&&!existsSync(output));mkdirSync(dirname(output),{recursive:true});
-const stage=mkdtempSync(join(tmpdir(),'kiwi-skill-'));const dir=join(stage,'online-shopping-assistant');const entries=[];
-try{
- for(const x of local){const dest=join(dir,x);mkdirSync(dirname(dest),{recursive:true});cpSync(safe(root,x),dest);entries.push(`online-shopping-assistant/${x}`)}
- for(const x of runtimeFiles){const dest=join(dir,'scripts/runtime',x);mkdirSync(dirname(dest),{recursive:true});cpSync(safe(runtime,x),dest);entries.push(`online-shopping-assistant/scripts/runtime/${x}`)}
- for(const x of ['expert-data.mjs','expert-launcher.mjs']){const dest=join(dir,'scripts/runtime',x);cpSync(safe(expert,x),dest);entries.push(`online-shopping-assistant/scripts/runtime/${x}`)}
- const z=spawnSync('zip',['-X',output,...entries],{cwd:stage,encoding:'utf8'});assert.equal(z.status,0,z.stderr);const list=spawnSync('unzip',['-Z1',output],{encoding:'utf8'});assert.equal(list.status,0,list.stderr);assert.deepEqual(list.stdout.trim().split('\n').sort(),entries.sort());const check=spawnSync('unzip',['-t',output],{encoding:'utf8'});assert.equal(check.status,0,check.stdout);console.log(`Created ${output}`);
-}finally{rmSync(stage,{recursive:true,force:true})}
+import { createHash } from 'node:crypto';
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { runtimeFiles } from './kiwi-sourcing/scripts/package-manifest.mjs';
+import { verifyFiles } from './kiwi-procurement-expert/runtime/bundle-verify.mjs';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const root = join(here, 'online-shopping-assistant');
+const runtime = join(here, 'kiwi-sourcing/runtime');
+const expert = join(here, 'kiwi-procurement-expert/runtime');
+const local = [
+  'SKILL.md',
+  'scripts/kiwi-tool.mjs',
+  ...['comparison-rules.md', 'kiwi-inquiry-and-negotiation.md', 'output-format.md', 'platform-research.md']
+    .map(file => `references/${file}`),
+];
+
+function safe(base, file) {
+  const target = resolve(base, file);
+  assert(target.startsWith(base + sep));
+  assert(lstatSync(target).isFile());
+  assert(realpathSync(target).startsWith(realpathSync(base) + sep));
+  return target;
+}
+
+const runtimeSources = new Map(runtimeFiles.map(file => [file, safe(runtime, file)]));
+runtimeSources.set('expert-data.mjs', safe(expert, 'expert-data.mjs'));
+
+const sources = new Map(local.map(file => [file, safe(root, file)]));
+sources.set('scripts/bundle-verify.mjs', safe(expert, 'bundle-verify.mjs'));
+
+const skill = readFileSync(sources.get('SKILL.md'), 'utf8');
+assert.match(skill, /^name: online-shopping-assistant$/m);
+assert.match(skill, /^version: 1\.3\.0$/m);
+assert(skill.includes('scripts/kiwi-tool.mjs'));
+assert(!skill.includes('`kiwi-sourcing` 连接器'));
+const reference = readFileSync(sources.get('references/kiwi-inquiry-and-negotiation.md'), 'utf8');
+assert(reference.includes('scripts/kiwi-tool.mjs'));
+console.log(`Validated 网上购物助手 1.3.0 with bundled Kiwi runtime (${runtimeSources.size} files).`);
+
+const args = process.argv.slice(2);
+if (args.length === 1 && args[0] === '--check') process.exit(0);
+assert(args.length === 2 && args[0] === '--out', 'Usage: node package-online-shopping-skill.mjs --check | --out /path/package.zip');
+const output = resolve(args[1]);
+assert(output.endsWith('.zip') && !existsSync(output), 'Choose a new ZIP path');
+mkdirSync(dirname(output), { recursive: true });
+const stage = mkdtempSync(join(tmpdir(), 'kiwi-skill-'));
+
+try {
+  const name = 'online-shopping-assistant';
+  const dir = join(stage, name);
+  const entries = [];
+  function stageFile(relative, source) {
+    const destination = join(dir, relative);
+    mkdirSync(dirname(destination), { recursive: true });
+    cpSync(source, destination);
+    entries.push(`${name}/${relative}`);
+    return destination;
+  }
+
+  for (const [file, source] of sources) stageFile(file, source);
+  const hashes = new Map();
+  for (const [file, source] of runtimeSources) {
+    const destination = stageFile(`scripts/runtime/${file}`, source);
+    hashes.set(file, createHash('sha256').update(readFileSync(destination)).digest('hex'));
+  }
+  const expected = new Map(hashes);
+  verifyFiles(join(dir, 'scripts/runtime'), expected);
+  assert.equal(expected.size, 0, 'Missing runtime files in the staged skill');
+  const manifest = 'scripts/runtime-files.json';
+  writeFileSync(join(dir, manifest), JSON.stringify(Object.fromEntries(hashes)) + '\n');
+  entries.push(`${name}/${manifest}`);
+
+  const archive = join(stage, 'skill.zip');
+  const zip = spawnSync('zip', ['-X', archive, ...entries], { cwd: stage, encoding: 'utf8' });
+  assert.equal(zip.status, 0, zip.error?.message ?? zip.stderr);
+  const list = spawnSync('unzip', ['-Z1', archive], { encoding: 'utf8' });
+  assert.equal(list.status, 0, list.stderr);
+  assert.deepEqual(list.stdout.trim().split('\n').sort(), entries.sort());
+  const check = spawnSync('unzip', ['-t', archive], { encoding: 'utf8' });
+  assert.equal(check.status, 0, check.stdout + check.stderr);
+  cpSync(archive, output, { force: false, errorOnExist: true });
+  console.log(`Created ${output}`);
+} finally {
+  rmSync(stage, { recursive: true, force: true });
+}

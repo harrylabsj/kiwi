@@ -11,8 +11,8 @@
 ## 询价与任务回读
 
 1. 以短商品词 `kiwi_search`，从返回结果中选符合要求且可询价的真实 merchant ID；默认最多三家，不凭空补全。不同品类分别发现并拆分。
-2. 已有授权且询价所需信息充分时调用 `kiwi_request_quotes(intent, merchant_ids, idempotency_key)`。`intent` 包含唯一 `intent_id`、`intent_type` 和 `items`；商品项含短 `query`、数量 `{value, unit}`；规格和约束按真实 schema 填写。货币、单位、税运和交期未知就留待确认，不猜。预算与目标单价分别处理，金额按币种最小单位整数；不自动披露预算底线。
-3. 只发送非空、由搜索返回且已授权的 `merchant_ids`。同一请求保持稳定幂等键；传输错误先 `kiwi_get_task` 回读已知 `task_id`，状态未知时不换键重发。没有 `task_id` 或无法判定结果时停止并说明，不擅自重复写操作。
+2. 已有授权且询价所需信息充分时调用 `kiwi_request_quotes(intent, merchant_ids, idempotency_key)`。`intent` 包含唯一 `intent_id`、`intent_type` 和 `items`；商品项含短 `query`、数量 `{value, unit}`。规格先用于本地整理：`attributes` / `constraints.mandatory_requirements` 当前**不会**发送给商家，也不能作为候选合格依据；需要在商家侧确认的硬性规格，应在候选展示或后续磋商中明确要求商家确认，不得声称“已在询价中声明”。货币、单位、税运和交期未知就留待确认，不猜。`constraints.budget` 与 `constraints.target_unit_price` 都用 money 对象，例如人民币 200 元为 `{"currency":"CNY","amount_minor":20000}`；裸数字会被冻结契约拒绝。不自动披露预算底线。
+3. 只发送非空、由搜索返回且已授权的 `merchant_ids`。缺少商家时先确认选择，收到 `clarification_needed`（reason `merchant_required`）时也按此处理。同一请求保持稳定幂等键；传输错误先 `kiwi_get_task` 回读已知 `task_id`，状态未知时不换键重发。没有 `task_id` 或无法判定结果时停止并说明，不擅自重复写操作。
 4. 用 `kiwi_get_task(task_id)` 查看状态、报价和错误；`partial_success` 保留成功项并说明失败项。明确区分公开资料价、页面参考价与实际商家报价；零报价不说已有报价。
 
 ## 拒绝码与状态表达

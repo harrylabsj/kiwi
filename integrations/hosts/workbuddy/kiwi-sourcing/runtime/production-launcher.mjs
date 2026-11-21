@@ -9,6 +9,7 @@ import {startProductionMcpServer} from './mcp-production-server.mjs';
 import {selectEnvironment} from './environment-policy.mjs';
 import {findCompatibleNpm} from './npm-discovery.mjs';
 import {prepareInstanceData} from './instance-store.mjs';
+import {enableQuoteHistory} from './tool-contract.mjs';
 
 function findExecutable(name){
   const directories=[dirname(process.execPath),...(process.env.PATH??'').split(delimiter)];
@@ -28,7 +29,7 @@ function supportedRuntime(){
 }
 function publicCode(error){
   const message=typeof error?.message==='string'?error.message:'';
-  const exact=new Set(['PLATFORM_UNSUPPORTED','NODE_VERSION_UNSUPPORTED','NODE_RUNTIME_UNVERIFIED','PLUGIN_DATA_UNAVAILABLE','PLUGIN_DATA_INVALID','INSTANCE_DATA_UNAVAILABLE','INSTANCE_DATA_NOT_PRIVATE','INSTANCE_STATE_INCOMPLETE','INSTANCE_STATE_CORRUPT','INSTANCE_STATE_CONFLICT','RUNTIME_DEPENDENCY_MISSING','NPM_12_UNAVAILABLE','PREPARE_TIMEOUT','PREPARE_CANCELLED','PREPARE_TERMINATION_UNCONFIRMED','PREPARE_OUTPUT_INVALID','PREPARE_START_FAILED','BACKEND_PATH_INVALID','BACKEND_PROTOCOL_MISMATCH','BACKEND_TOOL_LIST_INVALID','TREE_RECHECK_FAILED','PREPARED_STATE_MISMATCH','CACHE_BUSY','CACHE_POINTER_INVALID','CACHE_DIRECTORY_INVALID','CACHE_LEGACY_STATE_REQUIRES_REVIEW','PACKAGE_INVALID','VERSION_DOWNGRADE','LATEST_METADATA_UNAVAILABLE','AUDIT_FAILED','SIGNATURE_VERIFIER_UNAVAILABLE','SIGNER_POLICY_VERIFICATION_FAILED','ISOLATED_INSTALL_FAILED','TREE_INSPECTION_FAILED','MCP_PROBE_FAILED','MCP_PROBE_TIMEOUT','TOOL_SET_MISMATCH']);
+  const exact=new Set(['PLATFORM_UNSUPPORTED','NODE_VERSION_UNSUPPORTED','NODE_RUNTIME_UNVERIFIED','PLUGIN_DATA_UNAVAILABLE','PLUGIN_DATA_INVALID','INSTANCE_DATA_UNAVAILABLE','INSTANCE_DATA_NOT_PRIVATE','INSTANCE_STATE_INCOMPLETE','INSTANCE_STATE_CORRUPT','INSTANCE_STATE_CONFLICT','RUNTIME_DEPENDENCY_MISSING','NPM_12_UNAVAILABLE','PREPARE_TIMEOUT','PREPARE_CANCELLED','PREPARE_TERMINATION_UNCONFIRMED','PREPARE_OUTPUT_INVALID','PREPARE_START_FAILED','BACKEND_PATH_INVALID','BACKEND_PROTOCOL_MISMATCH','BACKEND_TOOL_LIST_INVALID','TREE_RECHECK_FAILED','PREPARED_STATE_MISMATCH','CACHE_BUSY','CACHE_POINTER_INVALID','CACHE_DIRECTORY_INVALID','CACHE_LEGACY_STATE_REQUIRES_REVIEW','PACKAGE_INVALID','VERSION_DOWNGRADE','LATEST_METADATA_UNAVAILABLE','AUDIT_FAILED','SIGNATURE_VERIFIER_UNAVAILABLE','SIGNER_POLICY_VERIFICATION_FAILED','ISOLATED_INSTALL_FAILED','TREE_INSPECTION_FAILED','MCP_PROBE_FAILED','MCP_PROBE_TIMEOUT','TOOL_BASELINE_INVALID','TOOL_SET_MISMATCH']);
   if(exact.has(message))return message;
   const detail=/^PREPARE_FAILED:(CACHE_BUSY|CACHE_STATE_INVALID|REGISTRY_UNAVAILABLE|INSTALL_FAILED|PROVENANCE_FAILED|TREE_CHECK_FAILED|TOOL_CHECK_FAILED|TOOL_CHECK_RETRYABLE|IDENTITY_CAPABILITY_MISSING|VERSION_REJECTED)$/.exec(message);
   return detail?message:'LAUNCH_HOLD';
@@ -51,12 +52,16 @@ async function main(){
   backendEnvironment.KIWI_CLIENT_ID=instance.instanceId;
   backendEnvironment.KIWI_SESSION_TOKEN_FILE=instance.tokenFile;
   const nodeBinary=process.execPath,pythonBinary=findExecutable('python3');
-  const baselineRaw=JSON.parse(readFileSync(join(packageRoot,'mcp-tools-0.12.12.json'),'utf8'));
-  const baseline=Array.isArray(baselineRaw)?baselineRaw:baselineRaw.tools;
+  let baselineRaw;
+  try {
+    baselineRaw=JSON.parse(readFileSync(join(packageRoot,'mcp-tools-0.12.12.json'),'utf8'));
+  } catch {
+    throw new Error('TOOL_BASELINE_INVALID');
+  }
+  const baseline=Array.isArray(baselineRaw)?baselineRaw:baselineRaw?.tools;
   if(!Array.isArray(baseline)||baseline.length!==13)throw new Error('TOOL_BASELINE_INVALID');
   if (backendEnvironment.KIWI_QUOTE_HISTORY_DELEGATION === 'true') {
-    const quoteTool = baseline.find(tool => tool.name === 'kiwi_request_quotes');
-    quoteTool.inputSchema.properties.reuse_history = {type:'boolean'};
+    enableQuoteHistory(baseline);
   }
   const cliPath=join(packageRoot,'buyer-session-cli.mjs');
   const controller=new AbortController();let server,startupDeadlineEpochMs;

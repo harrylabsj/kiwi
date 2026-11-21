@@ -14,7 +14,7 @@
   "skills": [
     "./skills/online-shopping-assistant"
   ],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": [
     "shopping",
     "price-comparison",

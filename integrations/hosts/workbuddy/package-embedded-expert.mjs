@@ -15,6 +15,45 @@ const expertRuntime = join(here, 'kiwi-procurement-expert/runtime');
 
 export const embeddedExpertLauncher = './runtime/embedded-expert-launcher.mjs';
 
+export function validateExpertDisplay(manifest) {
+  function bilingual(value) {
+    for (const language of ['zh', 'en']) {
+      assert(typeof value?.[language] === 'string' && value[language].trim(), `Missing ${language} text`);
+    }
+  }
+
+  assert.equal(manifest.expertType, 'agent');
+  assert.equal(manifest.plugin, manifest.name);
+  assert(/^\d+\.\d+\.\d+$/.test(manifest.version));
+  for (const field of ['displayName', 'profession', 'displayDescription', 'defaultInitPrompt']) {
+    bilingual(manifest[field]);
+  }
+  const descriptionLength = [...manifest.displayDescription.zh].length;
+  assert(descriptionLength >= 40 && descriptionLength <= 50,
+    `Chinese description: ${descriptionLength} chars, expected 40–50`);
+  assert.equal(manifest.quickPrompts.length, 3);
+  assert.equal(manifest.tags.length, 3);
+  manifest.quickPrompts.forEach(bilingual);
+  manifest.tags.forEach(bilingual);
+  assert.deepEqual(manifest.defaultInitPrompt, manifest.quickPrompts[0]);
+}
+
+export function validateExpertAvatar(avatar) {
+  assert.equal(avatar.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+  assert.equal(avatar.readUInt32BE(16), 512);
+  assert.equal(avatar.readUInt32BE(20), 512);
+  assert(avatar.length <= 500 * 1024, 'Avatar exceeds 500 KB');
+}
+
+export function validateExpertToolReferences(instructions, requiredTools) {
+  const toolSource = readFileSync(join(root, 'src/mcp/tools.ts'), 'utf8');
+  const toolNames = new Set([...toolSource.matchAll(/name: "(kiwi_[a-z_]+)"/g)].map(match => match[1]));
+  const usedTools = new Set(instructions.match(/\bkiwi_[a-z_]+\b/g));
+  for (const name of usedTools) assert(toolNames.has(name), `Unknown tool: ${name}`);
+  for (const name of requiredTools ?? toolNames) assert(usedTools.has(name), `Missing workflow for tool: ${name}`);
+  return toolNames.size;
+}
+
 const runtimeSources = new Map([
   ...['bundle-verify.mjs', 'embedded-expert-launcher.mjs', 'expert-data.mjs'].map(file => [file, join(expertRuntime, file)]),
   ...[

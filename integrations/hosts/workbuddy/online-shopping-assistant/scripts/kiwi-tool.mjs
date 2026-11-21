@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { dirname, join, isAbsolute } from 'node:path';
-import { realpathSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 // One explicit tool call per invocation. Retry ONLY a definitive not-sent
@@ -33,16 +33,34 @@ export async function invoke({tool, args, launcher, node=process.execPath, timeo
   send({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'workbuddy-shopping-skill',version:'1.0.0'}}});
  });
 }
+async function verifyBundledRuntime(runtime) {
+  try {
+    const { verifyFiles } = await import('./bundle-verify.mjs');
+    const manifest = JSON.parse(readFileSync(new URL('./runtime-files.json', import.meta.url), 'utf8'));
+    const expected = new Map(Object.entries(manifest));
+    if (!expected.has('production-launcher.mjs') || !expected.has('expert-data.mjs') ||
+        !lstatSync(runtime).isDirectory()) {
+      throw new Error('BUNDLED_RUNTIME_INVALID');
+    }
+    verifyFiles(runtime, expected);
+    if (expected.size > 0) throw new Error('BUNDLED_RUNTIME_INVALID');
+  } catch {
+    throw new Error('BUNDLED_RUNTIME_INVALID');
+  }
+}
+
 if(process.argv[1] && fileURLToPath(import.meta.url)===process.argv[1]){
  try{
   if(process.argv.length!==4||process.argv[2]!=='--workspace'||!isAbsolute(process.argv[3]))throw new Error('KIWI_WORKSPACE_REQUIRED');
   const workspace=realpathSync(process.argv[3]);
   if(realpathSync(process.cwd())!==workspace)throw new Error('KIWI_WORKSPACE_MISMATCH');
   let input='';for await(const chunk of process.stdin){input+=chunk;if(Buffer.byteLength(input)>256*1024)throw new Error('INPUT_TOO_LARGE')}
-  const data=JSON.parse(input);const root=dirname(dirname(fileURLToPath(import.meta.url)));
-  const {expertDataDirectory}=await import(join(root,'scripts','runtime','expert-data.mjs'));
+  const data=JSON.parse(input);
+  const runtime=join(dirname(fileURLToPath(import.meta.url)),'runtime');
+  await verifyBundledRuntime(runtime);
+  const {expertDataDirectory}=await import(join(runtime,'expert-data.mjs'));
   const dataDirectory=expertDataDirectory(workspace);
-  const result=await invoke({tool:data.tool,args:data.arguments??{},dataDirectory,launcher:join(root,'scripts','runtime','production-launcher.mjs')});
+  const result=await invoke({tool:data.tool,args:data.arguments??{},dataDirectory,launcher:join(runtime,'production-launcher.mjs')});
   process.stdout.write(JSON.stringify(result)+'\n');if(result?.isError)process.exitCode=1;
  }catch(e){process.stderr.write(`KIWI_SKILL_HOLD:${/^[A-Z0-9_]+$/.test(e?.message??'')?e.message:'INVALID_REQUEST'}\n`);process.exitCode=1}
 }
