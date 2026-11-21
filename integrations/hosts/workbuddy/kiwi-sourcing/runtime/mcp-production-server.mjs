@@ -13,7 +13,7 @@ const responseError=(id,code,message)=>({jsonrpc:'2.0',id,error:{code,message}})
 // Transparent MCP transport only. Business policy, scope, approval, and action
 // outcomes belong to the verified Kiwi backend / calling expert. This adapter
 // must not invent approval, call kiwi_approve, or block a listed business tool.
-export function startProductionMcpServer({input,output,baseline,prepare,activate,onStatus=()=>{},onProtocolDiagnostic=()=>{},backendRequestTimeoutMs=30000,toolTimeoutMs=30000,prepareWaitTimeoutMs=25000,deferPreparation=false}){
+export function startProductionMcpServer({input,output,baseline,prepare,activate,serverName='kiwi-sourcing-production-launcher',onStatus=()=>{},onProtocolDiagnostic=()=>{},backendRequestTimeoutMs=30000,toolTimeoutMs=30000,prepareWaitTimeoutMs=25000,deferPreparation=false}){
   if(!input||!output||!Array.isArray(baseline)||baseline.length!==13||typeof prepare!=='function'||typeof activate!=='function'||backendRequestTimeoutMs<1||toolTimeoutMs<1||prepareWaitTimeoutMs<0||prepareWaitTimeoutMs>=30000)throw new Error('SERVER_ARGUMENT_INVALID');
   const baselineByName=new Map(baseline.map(tool=>[tool?.name,tool]));
   if(baselineByName.size!==13||[...baselineByName.keys()].some(name=>!KNOWN.has(name)))throw new Error('TOOL_BASELINE_INVALID');
@@ -93,7 +93,7 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
         else hostCanElicit=Object.keys(elicitation).length===0;
       }else hostCanElicit=false;
       hostInitialized=true;protocolDiagnostic(clientProtocolVersionClass==='EXACT_MATCH'?'MATCHED':'COUNTEROFFER_SENT');
-      emit({jsonrpc:'2.0',id:message.id,result:{protocolVersion:PROTOCOL,capabilities:{tools:{}},serverInfo:{name:'kiwi-sourcing-production-launcher',version:'1.0.0'}}});return;
+      emit({jsonrpc:'2.0',id:message.id,result:{protocolVersion:PROTOCOL,capabilities:{tools:{}},serverInfo:{name:serverName,version:'1.0.0'}}});return;
     }
     if(!hostInitialized){if(hasId&&validId)emit(responseError(message.id,-32002,'Initialize first'));return}
     if(message.method==='notifications/initialized'){
@@ -162,7 +162,7 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
         void sendResponse(responseError(message.id,-32601,'Server request not supported by the verified host adapter')).catch(()=>fail('BACKEND_WRITE_FAILED'));return;
       }
       if(backendRequests.size>=16){void sendResponse(responseError(message.id,-32000,'Host request capacity exceeded')).catch(()=>fail('BACKEND_WRITE_FAILED'));return;}
-      const hostId=`kiwi-backend:${randomUUID()}`,timer=setTimeout(()=>finishBackendRequest(hostId,{error:{code:-32000}}),backendRequestTimeoutMs);timer.unref?.();
+      const hostId=`kiwi-backend:${randomUUID()}`,timer=setTimeout(()=>finishBackendRequest(hostId,responseError(hostId,-32000,'Host confirmation timed out')),backendRequestTimeoutMs);timer.unref?.();
       backendRequests.set(hostId,{backendId:message.id,timer,send:sendResponse});emit({...message,id:hostId});return;
     }
     if(!Object.hasOwn(message,'method')&&Object.hasOwn(message,'id')){

@@ -88,6 +88,7 @@ export interface McpCallToolParams {
 export interface McpCallToolResult {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
+  structuredContent?: Record<string, unknown>;
 }
 
 /** 一个高层 Kiwi Sourcing Tool 的声明（§6.1 词表）。 */

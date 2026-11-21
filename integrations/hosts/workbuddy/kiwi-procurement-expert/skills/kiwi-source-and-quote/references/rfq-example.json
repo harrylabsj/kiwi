@@ -11,6 +11,7 @@
     ],
     "constraints": {
       "currency": "CNY",
+      "budget": { "currency": "CNY", "amount_minor": 200000 },
       "delivery_location": "杭州",
       "mandatory_requirements": ["支持 HDMI 视频输出"]
     },

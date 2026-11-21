@@ -73,7 +73,7 @@ describe("buyer HTTP 安全中间件（review P1-1）", () => {
     expect(res.status).toBe(200);
   });
 
-  it("无 Bearer / 错误 Bearer → 401；正确 Bearer → 200", async () => {
+  it("无 Bearer / 错误 Bearer → 401；正确 Bearer → 201", async () => {
     const none = await fetch(`${base}/tasks`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     expect(none.status).toBe(401);
     const wrong = await fetch(`${base}/tasks`, {
@@ -85,7 +85,7 @@ describe("buyer HTTP 安全中间件（review P1-1）", () => {
     const ok = await fetch(`${base}/tasks`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: "Bearer sec-token-1" },
-      body: JSON.stringify({ intent: { intent_id: "sec-1", intent_type: "purchase", items: [{ query: "x" }] } }),
+      body: JSON.stringify({ intent: { intent_id: "sec-1", intent_type: "purchase", items: [{ query: "x" }] }, merchant_ids: ["merchant-001"] }),
     });
     expect(ok.status).toBe(201);
   });

@@ -1,6 +1,7 @@
+import {makeTempDirectory} from './fixtures/temp-directory.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,mkdirSync,writeFileSync,rmSync} from 'node:fs';
+import {mkdirSync,writeFileSync,rmSync} from 'node:fs';
 import {join,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {startVerifiedBackend} from '../runtime/backend-client.mjs';
@@ -17,7 +18,7 @@ function installFake(session,tools){
 }
 
 test('verified backend subprocess performs initialize and validates the full tool contract',async()=>{
-  const root=mkdtempSync('/private/tmp/kiwi-production-backend-'),session=join(root,'session');mkdirSync(session,{mode:0o700});installFake(session,baseline);
+  const root=makeTempDirectory('kiwi-production-backend-'),session=join(root,'session');mkdirSync(session,{mode:0o700});installFake(session,baseline);
   const messages=[];
   try{
     const backend=await startVerifiedBackend({nodeBinary:process.execPath,sessionDirectory:session,baseline,clientCapabilities:{elicitation:false},sourceRoot:packageRoot,environment:{HOME:root,TMPDIR:root,PATH:'/usr/bin:/bin'},onMessage:message=>messages.push(message)});
@@ -29,7 +30,7 @@ test('verified backend subprocess performs initialize and validates the full too
 });
 
 test('a backend schema mismatch stops before any tool becomes available',async()=>{
-  const root=mkdtempSync('/private/tmp/kiwi-production-backend-'),session=join(root,'session');mkdirSync(session,{mode:0o700});installFake(session,[]);
+  const root=makeTempDirectory('kiwi-production-backend-'),session=join(root,'session');mkdirSync(session,{mode:0o700});installFake(session,[]);
   try{
     await assert.rejects(()=>startVerifiedBackend({nodeBinary:process.execPath,sessionDirectory:session,baseline,sourceRoot:packageRoot,environment:{HOME:root,TMPDIR:root,PATH:'/usr/bin:/bin'}}),/TOOL_SET_MISMATCH/);
   }finally{rmSync(root,{recursive:true,force:true})}

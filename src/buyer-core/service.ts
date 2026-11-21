@@ -786,15 +786,21 @@ export class KiwiBuyerService {
 
   async requestQuotes(input: QuoteRequestInput): Promise<{ task: Record<string, unknown>; created: boolean; reused_history?: Record<string, unknown> }> {
     const useHistory = input.reuse_history === true && explicitIntentItemSku(input.intent) === undefined;
-    if (useHistory && input.merchant_ids?.length !== 1) {
+    const merchants = input.merchant_ids ?? [];
+    if (useHistory && merchants.length !== 1) {
       throw new McpError("clarification_needed", "沿用上次规格需要恰好指定一个商家；请说明要沿用哪家店的报价。", {
         reason: "history_merchant_required",
+      });
+    }
+    if (merchants.length === 0) {
+      throw new McpError("clarification_needed", "发起询价需要至少指定一个商家；请先从搜索结果中选择可实时询价的商家。", {
+        reason: "merchant_required",
       });
     }
     const idempotencyKey = input.idempotency_key ?? `req-${uuidv7()}`;
     const requestDigest = contentDigest({
       intent: input.intent,
-      merchant_ids: [...new Set(input.merchant_ids ?? [])].sort(),
+      merchant_ids: [...new Set(merchants)].sort(),
       reuse_history: useHistory,
     });
     const existing = this.store.findTaskByIdempotencyKey(this.ownerHash, idempotencyKey);
@@ -804,7 +810,7 @@ export class KiwiBuyerService {
     let effectiveIntent = input.intent;
     let reusedHistory: Record<string, unknown> | undefined;
     if (useHistory) {
-      const merchantId = input.merchant_ids![0]!;
+      const merchantId = merchants[0]!;
       const history = await this.resolveQuoteHistory({ merchant_id: merchantId });
       if (history.status !== "ok" || history.candidates.length === 0) {
         throw new McpError(
@@ -855,7 +861,7 @@ export class KiwiBuyerService {
     }
     // M0 硬门（merchant-buddy 第 0 版 §4/§5）：仅有公开资料、无可路由 Agent 的
     // 商家不得进入 RFQ。服务层显式拒绝（不只靠宿主提示词），在创建任务/消息之前。
-    await this.assertInquiryAvailable(input.merchant_ids);
+    await this.assertInquiryAvailable(merchants);
     const policyId = this.policy.policy_id;
     const expiresAt = this.policy.expires_at;
     const taskId = `task-${uuidv7()}`;
@@ -864,7 +870,7 @@ export class KiwiBuyerService {
     // 无 fetcher 时记录确定性 fan-out 槽位（§6.2 部分失败可解释）；有 fetcher 时
     // 只写真实结果，不预建槽位，避免候选重复。
     const preCandidates = this.quoteFetcher === undefined
-      ? (input.merchant_ids ?? []).map((merchantId) => ({
+      ? merchants.map((merchantId) => ({
           candidate_id: `cand-${uuidv7()}`,
           merchant_id: merchantId,
           status: "pending" as const,
@@ -917,7 +923,6 @@ export class KiwiBuyerService {
     let status = "in_progress";
     let quotedResults: QuoteCandidateInput[] = [];
     if (this.quoteFetcher !== undefined) {
-      const merchants = input.merchant_ids ?? [];
       const index = this.merchantIndex;
       let dispatchStarted = false;
       let dispatchOutcomeUnknown = false;
@@ -2713,8 +2718,7 @@ export class KiwiBuyerService {
    * 的）source_kind 为 undefined，不受此门影响，实时能力不被静态资料降级。
    * 目录暂不可达时不改变既有行为（跳过本门，走 fetcher 的部分失败语义）。
    */
-  private async assertInquiryAvailable(merchantIds?: string[]): Promise<void> {
-    if (merchantIds === undefined || merchantIds.length === 0) return;
+  private async assertInquiryAvailable(merchantIds: string[]): Promise<void> {
     const index = this.merchantIndex;
     if (index === undefined) return;
     for (const merchantId of merchantIds) {

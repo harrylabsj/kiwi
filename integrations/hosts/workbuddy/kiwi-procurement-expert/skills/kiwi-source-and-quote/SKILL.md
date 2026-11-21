@@ -75,9 +75,9 @@ Kiwi Network 搜索覆盖全球。调用 `kiwi_search` 时省略 `region`。有�
 
 调用 `kiwi_request_quotes(intent, merchant_ids, idempotency_key)`：
 
-- 始终传入非空 `merchant_ids`，从已发现、符合授权范围且 `inquiry_available=true` 的候选中选择。当前实现省略该字段可能产生没有实际报价的空任务。
+- 始终传入非空 `merchant_ids`，从已发现、符合授权范围且 `inquiry_available=true` 的候选中选择。普通询价缺少商家时返回 `clarification_needed`，原因是 `merchant_required`，请求不会创建任务。
 - `intent_id` 为本次需求的唯一标识；每项使用短 `query`，已知规格放在 `attributes` 或 `constraints.mandatory_requirements`，而不是把长规格堆进检索词。
-- 已确认数量使用 `{ "value": 2, "unit": "台" }`。总预算是 `constraints.budget`，目标单价是 `constraints.target_unit_price`；金额用币种最小单位整数，例如 CNY 200 元为 20000。预算底线默认只在宿主侧用于筛选，不自动披露给商家。
+- 已确认数量使用 `{ "value": 2, "unit": "台" }`。`constraints.budget`（总预算）和 `constraints.target_unit_price`（目标单价）都用 money 对象，例如人民币 200 元为 `{"currency":"CNY","amount_minor":20000}`。预算底线默认只在宿主侧用于筛选，不自动披露给商家。
 - `deadline` 只使用用户给定/确认且带时区的 RFC3339 时间；不知道就省略。币种不得凭商品所在地推断。
 - `context_projection.disclosure_boundary` 为 `commerce_required`，`projected_fields` 只列实际发送的采购字段；不要粘贴聊天历史。
 - 相同请求因传输错误重试时保持相同的幂等键和相同载荷。需求或商家范围变化使用新键；不得用新键盲目重发状态未知的请求。
@@ -87,11 +87,11 @@ Kiwi Network 搜索覆盖全球。调用 `kiwi_search` 时省略 `region`。有�
 
 ## 沿用上次规格（回访分支）
 
-用户说“上次那家店/上次那款，改成 N 个”时，走 `kiwi_request_quotes` 的 `reuse_history: true` 分支，**不要**先 `kiwi_search` 换店、也不要把历史报价当作本次选择：
+用户说“上次那家店/上次那款，改成 N 个”时，先查看 `kiwi_request_quotes` 是否公开了 `reuse_history`。宿主启用历史委托配置（`KIWI_QUOTE_HISTORY_DELEGATION=true`）且工具公开此参数时，才用 `reuse_history: true` 回访指定商家。
 
 - `merchant_ids` 恰好指定那一家店（用户没有说明是哪家时先澄清）；`intent.items` 仍写商品词与**本次**数量，不需要 SKU。
 - 工具会在正式询价前按本店授权查询上次已发报价：唯一匹配 → 自动以该 SKU + 本次数量发出标准 RFQ，响应里的 `reused_history` 含上次价格、时间与有效期（向买家展示时注明“历史价仅供参考，本次价格以正式报价为准”）；本次实际价格只从本次报价读取。
-- 返回 `clarification_needed`（`history_unavailable` / `history_empty` / `history_ambiguous` / `history_merchant_required`）时不创建任务：向买家澄清后按普通询价重试。多义时把 `candidates` 列给买家选择，不要替买家挑第一款。
+- 参数未公开或返回 `history_unavailable` 时，按普通询价流程先确认商品和规格。返回 `clarification_needed` 时尚未创建任务；多义时用 `candidates` 请买家选定商品。
 - 用户已明确指定新 SKU 或新规格时，以用户本次要求为准，不使用 `reuse_history`。
 
 ## 结果与恢复

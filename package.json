@@ -46,7 +46,7 @@
     "verify:harness": "node integrations/harnesses/deepseek-harness/validate-contract-cases.mjs",
     "verify:supply-chain": "node scripts/verify-facade-supply-chain.mjs",
     "verify:audit-expiry": "node scripts/check-audit-allow-expiry.mjs",
-    "verify:workbuddy": "node integrations/hosts/workbuddy/kiwi-sourcing/scripts/validate.mjs",
+    "verify:workbuddy": "node integrations/hosts/workbuddy/kiwi-sourcing/scripts/validate.mjs && node --test integrations/hosts/workbuddy/kiwi-sourcing/test/*.test.mjs",
     "verify:workbuddy-platform": "node scripts/verify-workbuddy-platform-drift.mjs",
     "verify:workbuddy-assets": "node --test integrations/hosts/workbuddy/test/build-asset-zips.test.mjs",
     "package:workbuddy": "bash integrations/hosts/workbuddy/kiwi-sourcing/scripts/package.sh",

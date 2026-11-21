@@ -38,10 +38,14 @@ function ok(text: string): McpCallToolResult {
 
 function err(error: unknown): McpCallToolResult {
   if (error instanceof McpError) {
-    return {
+    const result: McpCallToolResult = {
       content: [{ type: "text", text: `error ${error.code}: ${error.message}` }],
       isError: true,
     };
+    if (error.code === "clarification_needed" && error.detail && typeof error.detail === "object") {
+      result.structuredContent = { ...error.detail, code: error.code };
+    }
+    return result;
   }
   return {
     content: [

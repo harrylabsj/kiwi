@@ -4,7 +4,8 @@
       "type": "stdio",
       "command": "node",
       "args": [
-        "./runtime/embedded-expert-launcher.mjs"
+        "./runtime/embedded-expert-launcher.mjs",
+        "kiwi-procurement-buyer"
       ],
       "runtime": {
         "type": "node",

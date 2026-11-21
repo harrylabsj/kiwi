@@ -133,7 +133,7 @@ describe("买方连接器身份（不随商家连接器改变）", () => {
     expect(plugin.dependencies.connectors).toBeUndefined();
     expect(Object.keys(mcp.mcpServers)).toEqual([serverName]);
     expect(mcp.mcpServers[serverName]["x-workbuddy"].auth.type).toBe("none");
-    expect(mcp.mcpServers[serverName].args).toEqual(["./runtime/embedded-expert-launcher.mjs"]);
+    expect(mcp.mcpServers[serverName].args).toEqual(["./runtime/embedded-expert-launcher.mjs", serverName]);
   });
 
   it("商家连接器包不声明买方工具，也不指向买方 source", () => {

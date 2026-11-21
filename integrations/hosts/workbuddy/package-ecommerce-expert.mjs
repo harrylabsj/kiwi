@@ -13,7 +13,7 @@ const meta=JSON.parse(readFileSync(join(bundle,files[0]),'utf8'));
 const mcp=JSON.parse(readFileSync(join(bundle,'.mcp.json'),'utf8'));
 assert.equal(meta.version,'1.2.5');assert.equal(meta.dependencies.mcpServers,'./.mcp.json');assert(!meta.dependencies.connectors?.length);
 assert.deepEqual(Object.keys(mcp.mcpServers),['kiwi-shopping-buyer']);
-const server=mcp.mcpServers['kiwi-shopping-buyer'];assert.equal(server.type,'stdio');assert.equal(server.command,'node');assert.deepEqual(server.args,[embeddedExpertLauncher]);assert.equal(server['x-workbuddy'].auth.type,'none');
+const server=mcp.mcpServers['kiwi-shopping-buyer'];assert.equal(server.type,'stdio');assert.equal(server.command,'node');assert.deepEqual(server.args,[embeddedExpertLauncher,'kiwi-shopping-buyer']);assert.equal(server['x-workbuddy'].auth.type,'none');
 checkEmbeddedExpertRuntime();
 const instructions=['agents/haina-ecommerce-expert.md','skills/online-shopping-assistant/SKILL.md','skills/online-shopping-assistant/references/kiwi-inquiry-and-negotiation.md'].map(f=>readFileSync(join(bundle,f),'utf8')).join('\n');
 assert(instructions.includes('kiwi-shopping-buyer'));assert(!instructions.includes('`kiwi-sourcing` 连接器'));assert(!instructions.includes('scripts/kiwi-tool.mjs'));

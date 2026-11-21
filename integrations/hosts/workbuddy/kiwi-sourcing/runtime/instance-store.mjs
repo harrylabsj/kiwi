@@ -2,10 +2,10 @@ import {constants,closeSync,fsyncSync,fstatSync,lstatSync,mkdirSync,openSync,rea
 import {randomBytes} from 'node:crypto';
 import {isAbsolute,join} from 'node:path';
 
-// Per-buyer-instance state. The host supplies CODEBUDDY_PLUGIN_DATA per plugin
-// installation. We only use it as a parent container; the actual identity and
-// buyer database live in a private child that is not tied to a Kiwi version
-// cache. A shared parent is not treated as an isolated instance by itself.
+// Keep identity and buyer data in a private child, independent of runtime caches.
+// The standalone connector receives its parent from CODEBUDDY_PLUGIN_DATA.
+// Expert launchers resolve it via expert-data.mjs, which assumes one buyer per
+// OS user. A shared parent does not establish isolation between buyers.
 const INSTANCE_DIR='kiwi-instance-v1';
 const ID_FILE='instance-id';
 const TOKEN_FILE='session.token';

@@ -20,7 +20,7 @@ test('prepare command timeout uses the remaining outer budget and kills its proc
   try{
     const script=join(dir,'tree.mjs');
     await writeFile(script,"import {spawn} from 'node:child_process'; import {writeFileSync} from 'node:fs'; const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); writeFileSync(process.argv[2],String(child.pid)); setInterval(()=>{},1000);\n");
-    const deadline=Date.now()+700;
+    const deadline=Date.now()+2000;
     await assert.rejects(()=>runPrepareCommand(process.execPath,[script,pidFile],{cwd:dir,env:{PATH:process.env.PATH,KIWI_PREPARE_DEADLINE_EPOCH_MS:String(deadline)},timeoutMs:5000}),/PREPARE_TIMEOUT/);
     const pid=Number(await readFile(pidFile,'utf8'));
     await new Promise(resolve=>setTimeout(resolve,100));

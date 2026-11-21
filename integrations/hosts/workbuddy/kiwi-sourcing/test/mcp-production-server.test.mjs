@@ -10,10 +10,10 @@ const root=dirname(fileURLToPath(import.meta.url));
 const raw=JSON.parse(readFileSync(join(root,'..','runtime','mcp-tools-0.12.12.json'),'utf8'));
 const baseline=Array.isArray(raw)?raw:raw.tools;
 const prepared={name:'@harrylabsj/kiwi',latestChecked:true,authorizationProven:false,executionAuthorized:false,sessionDirectory:'/private/tmp/synthetic-prepared'};
-function harness({prepare=async()=>prepared,activate,consentTimeoutMs=50,deferPreparation=false}={}){
+function harness({prepare=async()=>prepared,activate,consentTimeoutMs=50,deferPreparation=false,serverName}={}){
   const input=new PassThrough(),output=new PassThrough(),messages=[],statuses=[];let buffer='';
   output.on('data',chunk=>{buffer+=chunk.toString();let index;while((index=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,index);buffer=buffer.slice(index+1);if(line)messages.push(JSON.parse(line))}});
-  const server=startProductionMcpServer({input,output,baseline,prepare,deferPreparation,activate:activate??(async()=>fakeBackend()),onStatus:code=>statuses.push(code),consentTimeoutMs,backendRequestTimeoutMs:50});
+  const server=startProductionMcpServer({input,output,baseline,prepare,deferPreparation,serverName,activate:activate??(async()=>fakeBackend()),onStatus:code=>statuses.push(code),consentTimeoutMs,backendRequestTimeoutMs:50});
   return {input,messages,statuses,server,async send(message){input.write(JSON.stringify(message)+'\n');await new Promise(resolve=>setImmediate(resolve))}};
 }
 function fakeBackend(){
@@ -26,6 +26,23 @@ async function until(messages,predicate){
 }
 async function close(h){h.input.end();await Promise.race([h.server.done,new Promise((_,reject)=>setTimeout(()=>reject(new Error('SHUTDOWN_TIMEOUT')),1000))])}
 async function initialize(h,capabilities={}){await h.send({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-06-18',capabilities}});await h.send({jsonrpc:'2.0',method:'notifications/initialized'})}
+
+test('reports the expert MCP name and sends a complete JSON-RPC error on confirmation timeout', async () => {
+  let connect;
+  const h=harness({serverName:'kiwi-shopping-buyer',activate:async(_prepared,{onMessage})=>{connect=onMessage;return fakeBackend()}});
+  try {
+    await initialize(h, {elicitation: {}});
+    assert.equal((await until(h.messages,m=>m.id===1)).result.serverInfo.name,'kiwi-shopping-buyer');
+    await until(h.messages,()=>h.server.status==='ready');
+    const replies=[];
+    connect({jsonrpc:'2.0',id:42,method:'elicitation/create',params:{message:'Confirm'}},async reply=>replies.push(reply));
+    assert.deepEqual(await until(replies,m=>m.id===42),{
+      jsonrpc:'2.0',id:42,error:{code:-32000,message:'Host confirmation timed out'},
+    });
+  } finally {
+    await close(h);
+  }
+});
 
 test('tool list and fast init are available while latest preparation is pending; failure stops calls',async()=>{
   let rejectPrepare,activateCount=0;
