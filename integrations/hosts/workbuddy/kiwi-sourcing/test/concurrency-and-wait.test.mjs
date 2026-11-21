@@ -1,7 +1,8 @@
+import {makeTempDirectory} from './fixtures/temp-directory.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {mkdtempSync,mkdirSync,writeFileSync,existsSync,readFileSync,rmSync,symlinkSync} from 'node:fs';
+import {mkdirSync,writeFileSync,existsSync,readFileSync,rmSync,symlinkSync} from 'node:fs';
 import {join} from 'node:path';
 import {PassThrough} from 'node:stream';
 import {readFileSync as read} from 'node:fs';
@@ -26,7 +27,7 @@ function fixture(root, suffix='abcdef', version='0.12.14') {
 function handle(pin, resolveDone) { return {pin,send:async()=>{},done:new Promise(resolve=>{resolveDone.push(resolve)}),stop(){resolveDone.forEach(resolve=>resolve())}} }
 
 test('two live instances start without lifetime update lock; latest pointer changes without changing A pin',async()=>{
-  const root=mkdtempSync('/private/tmp/kiwi-two-instance-');const a=fixture(root);const resolutions=[];let verifyA,verifyB;
+  const root=makeTempDirectory('kiwi-two-instance-');const a=fixture(root);const resolutions=[];let verifyA,verifyB;
   try {
     await withBuyerCacheStore(a.store,s=>s.recordPrepared(a.session,'0.12.9',a.record));
     const first=await startBackendWithPreparedLock({storeDirectory:a.store,prepared:a.prepared,verifyTree:async selected=>{verifyA=selected.sessionDirectory},backendFactory:async selected=>handle(selected.sessionDirectory,resolutions)});
@@ -41,7 +42,7 @@ test('two live instances start without lifetime update lock; latest pointer chan
 });
 
 test('an unfinished stage is ignored, a finalized one is recoverable, and tampered or ambiguous state fails closed',async()=>{
-  const root=mkdtempSync('/private/tmp/kiwi-recover-install-');
+  const root=makeTempDirectory('kiwi-recover-install-');
   const store=join(root,'store');
   const interrupted=join(store,'kiwi-preflight-cancel');
   mkdirSync(store,{mode:0o700});
@@ -125,7 +126,7 @@ test('preparation wait cannot be configured to exceed the 30 second host ceiling
 });
 
 test('simultaneous cold prepares serialize instead of permanently failing; startup respects abort and deadline',async()=>{
-  const root=mkdtempSync('/private/tmp/kiwi-cold-start-');const a=fixture(root);let active=0,maxActive=0;
+  const root=makeTempDirectory('kiwi-cold-start-');const a=fixture(root);let active=0,maxActive=0;
   try{
     const deadlineEpochMs=Date.now()+2000;
     const prep=(delay)=>withBuyerCacheStore(a.store,async state=>{

@@ -30,7 +30,10 @@ export async function stageEmbeddedBuyer(root, stage) {
 
   // Use the graph only as a file list. Copy the compiled modules byte for byte
   // to keep relative imports, import.meta.url and JSON schema lookups working.
-  // AJV is loaded with createRequire at runtime, so trace its entry points too.
+  // Dynamic loads through createRequire or computed imports may not appear in
+  // the graph. Trace AJV's known entries explicitly. The schema and identity
+  // probes exercise the staged runtime, but any dynamic path outside those
+  // probes needs an explicit entry point and a behavior check when added.
   const { metafile } = await build({
     absWorkingDir: root,
     entryPoints: ['dist/mcp/cli.js', 'node_modules/ajv/dist/2020.js', 'node_modules/ajv-formats/dist/index.js'],

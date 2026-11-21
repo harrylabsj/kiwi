@@ -174,6 +174,27 @@ function grantedAuthorization(approvalId: string): AuthorizationRecord {
 }
 
 describe("KiwiBuyerService：requestQuotes 幂等与部分失败", () => {
+  it.each([{ merchantIds: undefined }, { merchantIds: [] as string[] }])("拒绝缺少商家的询价，补充商家后可用同一请求键创建任务", async ({ merchantIds }) => {
+    const { service, store } = makeHarness(makeInMemoryStore());
+    try {
+      const input = { intent: INTENT, idempotency_key: "rfq-merchant-required" };
+      await expect(service.requestQuotes({ ...input, merchant_ids: merchantIds })).rejects.toMatchObject({
+        code: "clarification_needed",
+        detail: { reason: "merchant_required" },
+      });
+      const tool = buildKiwiTools(service).find(tool => tool.name === "kiwi_request_quotes")!;
+      await expect(tool.handle({ ...input, merchant_ids: merchantIds })).resolves.toMatchObject({
+        isError: true,
+        structuredContent: { code: "clarification_needed", reason: "merchant_required" },
+      });
+      const result = await service.requestQuotes({ ...input, merchant_ids: ["merchant-001"] });
+      expect(result.created).toBe(true);
+      expect(result.task.candidates).toEqual([expect.objectContaining({ merchant_id: "merchant-001" })]);
+    } finally {
+      store.close();
+    }
+  });
+
   it("合法 CommerceIntent 创建任务并回写候选（partial_success + provenance）", async () => {
     const { service, store } = makeHarness(makeInMemoryStore());
     const result = await service.requestQuotes({
@@ -198,8 +219,9 @@ describe("KiwiBuyerService：requestQuotes 幂等与部分失败", () => {
 
   it("相同 idempotency_key 重复提交返回原任务（不重复写入）", async () => {
     const { service } = makeHarness(makeInMemoryStore());
-    const first = await service.requestQuotes({ intent: INTENT, idempotency_key: "rfq-dedup" });
-    const second = await service.requestQuotes({ intent: INTENT, idempotency_key: "rfq-dedup" });
+    const request = { intent: INTENT, idempotency_key: "rfq-dedup", merchant_ids: ["merchant-001"] };
+    const first = await service.requestQuotes(request);
+    const second = await service.requestQuotes(request);
     expect(second.created).toBe(false);
     expect(second.task.task_id).toBe(first.task.task_id);
   });
@@ -208,7 +230,7 @@ describe("KiwiBuyerService：requestQuotes 幂等与部分失败", () => {
     const { service } = makeHarness(makeInMemoryStore());
     const bad = { intent_id: "intent-bad", intent_type: "purchase" };
     await expect(
-      service.requestQuotes({ intent: bad, idempotency_key: "rfq-bad" }),
+      service.requestQuotes({ intent: bad, idempotency_key: "rfq-bad", merchant_ids: ["merchant-001"] }),
     ).rejects.toMatchObject({ code: "contract_violation" });
   });
 });
@@ -216,7 +238,7 @@ describe("KiwiBuyerService：requestQuotes 幂等与部分失败", () => {
 describe("KiwiBuyerService：negotiate 委托边界", () => {
   it("在 max_rounds 内记录磋商步骤", async () => {
     const { service } = makeHarness(makeInMemoryStore());
-    const created = await service.requestQuotes({ intent: INTENT, idempotency_key: "rfq-neg" });
+    const created = await service.requestQuotes({ intent: INTENT, idempotency_key: "rfq-neg", merchant_ids: ["merchant-001"] });
     const taskId = String(created.task.task_id);
     const step = await service.negotiate({
       task_id: taskId,
@@ -248,7 +270,7 @@ describe("KiwiBuyerService：negotiate 委托边界", () => {
         return step;
       },
     };
-    const created = await service.requestQuotes({ intent: INTENT, idempotency_key: "rfq-race" });
+    const created = await service.requestQuotes({ intent: INTENT, idempotency_key: "rfq-race", merchant_ids: ["merchant-001"] });
     const taskId = String(created.task.task_id);
     const first = service.negotiate({ task_id: taskId, action: "counter_offer", summary: "r1" });
     const second = service.negotiate({ task_id: taskId, action: "counter_offer", summary: "r2" });
@@ -265,7 +287,7 @@ describe("KiwiBuyerService：negotiate 委托边界", () => {
 
   it("超出 max_rounds 被拒（delegation_denied）", async () => {
     const { service } = makeHarness(makeInMemoryStore());
-    const created = await service.requestQuotes({ intent: INTENT, idempotency_key: "rfq-rounds" });
+    const created = await service.requestQuotes({ intent: INTENT, idempotency_key: "rfq-rounds", merchant_ids: ["merchant-001"] });
     const taskId = String(created.task.task_id);
     await service.negotiate({ task_id: taskId, action: "counter_offer", summary: "r1" });
     await service.negotiate({ task_id: taskId, action: "counter_offer", summary: "r2" });
@@ -438,7 +460,7 @@ describe("KiwiBuyerService：AcceptNonbinding → Agreement → Handoff（五层
 describe("host-context isolation（§5.4 最小披露）", () => {
   it("任务负载只包含投影的 intent，无环境/宿主上下文", async () => {
     const { service } = makeHarness(makeInMemoryStore());
-    const created = await service.requestQuotes({ intent: INTENT, idempotency_key: "rfq-isolation" });
+    const created = await service.requestQuotes({ intent: INTENT, idempotency_key: "rfq-isolation", merchant_ids: ["merchant-001"] });
     const task = created.task as Record<string, unknown>;
     const intent = task.intent as Record<string, unknown>;
     // 只有 CommerceIntent 进入任务；没有 principal memory / 对话历史 / 宿主工具。
@@ -985,7 +1007,7 @@ describe("持久化：重启后 pending/approval 可解释（§6.2）", () => {
     const dbPath = path.join(dir, "state.sqlite");
     const store1 = new TaskApprovalStore({ dbPath });
     const { service } = makeHarness(store1);
-    const created = await service.requestQuotes({ intent: INTENT, idempotency_key: "rfq-restart" });
+    const created = await service.requestQuotes({ intent: INTENT, idempotency_key: "rfq-restart", merchant_ids: ["merchant-001"] });
     const taskId = String(created.task.task_id);
     const approval = service.requestApproval({ task_id: taskId, action: "handoff" });
     store1.close();

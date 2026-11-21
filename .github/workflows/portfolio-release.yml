@@ -388,7 +388,7 @@ jobs:
           WB_CONNECTOR_VERSION="$(node -p "require('./integrations/hosts/workbuddy/kiwi-merchant-gateway-connector/connector-meta.json').version")"
           WB_APP_VERSION="$(node -p "require('./integrations/hosts/workbuddy/kiwi-merchant-buddy/buddy-app.config.json').version")"
           HERMES_VERSION="$(node -p "require('./hermes-plugin-kiwi/plugin.json').version")"
-          node --test integrations/hosts/workbuddy/kiwi-sourcing/test/cache-os-lock.test.mjs integrations/hosts/workbuddy/kiwi-sourcing/test/format3-tree-contract.test.mjs integrations/hosts/workbuddy/kiwi-sourcing/test/backend-catalog-identity.test.mjs
+          npm run verify:workbuddy
           node integrations/hosts/workbuddy/package.mjs --out "$GITHUB_WORKSPACE/release/workbuddy/kiwi-procurement-expert-${WB_EXPERT_VERSION}.zip"
           node integrations/hosts/workbuddy/package-gateway-connector.mjs --out "$GITHUB_WORKSPACE/release/workbuddy/kiwi-merchant-gateway-connector-${WB_CONNECTOR_VERSION}.zip"
           cp integrations/hosts/workbuddy/kiwi-merchant-buddy/buddy-app.config.json "release/workbuddy/kiwi-merchant-buddy-config-${WB_APP_VERSION}.json"

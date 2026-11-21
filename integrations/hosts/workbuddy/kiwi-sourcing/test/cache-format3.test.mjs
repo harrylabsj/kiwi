@@ -1,7 +1,8 @@
+import {makeTempDirectory} from './fixtures/temp-directory.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
+import {mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {withBuyerCacheStore} from '../runtime/buyer-cache-store-draft.mjs';
 import {createTransaction} from '../runtime/transaction.mjs';
@@ -15,7 +16,7 @@ function staged(root,name,version,content){
 }
 
 test('format3 pointer binds content digest and rejects missing/format2 state',async()=>{
-  const root=mkdtempSync('/private/tmp/kiwi-cache-format3-');
+  const root=makeTempDirectory('kiwi-cache-format3-');
   try{
     const current=staged(root,'kiwi-preflight-aaaaaa','0.12.14','synthetic-bytes');
     await withBuyerCacheStore(root,async store=>{

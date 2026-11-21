@@ -1,7 +1,8 @@
+import {makeTempDirectory} from './fixtures/temp-directory.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {mkdtempSync,mkdirSync,writeFileSync,existsSync,rmSync} from 'node:fs';
+import {mkdirSync,writeFileSync,existsSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {createTransaction} from '../runtime/transaction.mjs';
 import {withBuyerCacheStore} from '../runtime/buyer-cache-store-draft.mjs';
@@ -19,7 +20,7 @@ function prepareStore(base){
 }
 
 test('prepared pointer and tree are checked under startup lock which releases after backend readiness',async()=>{
-  const root=mkdtempSync('/private/tmp/kiwi-production-lock-'),state=prepareStore(root);let resolveDone,verified=false,stopped=false;
+  const root=makeTempDirectory('kiwi-production-lock-'),state=prepareStore(root);let resolveDone,verified=false,stopped=false;
   try{
     await withBuyerCacheStore(state.store,cache=>cache.recordPrepared(state.session,'0.12.9',state.record));
     const done=new Promise(resolve=>{resolveDone=resolve});
@@ -31,7 +32,7 @@ test('prepared pointer and tree are checked under startup lock which releases af
 });
 
 test('tree-binding failure stops before backend creation and releases lock',async()=>{
-  const root=mkdtempSync('/private/tmp/kiwi-production-lock-fail-'),state=prepareStore(root);let spawned=false;
+  const root=makeTempDirectory('kiwi-production-lock-fail-'),state=prepareStore(root);let spawned=false;
   try{
     await withBuyerCacheStore(state.store,cache=>cache.recordPrepared(state.session,'0.12.9',state.record));
     await assert.rejects(()=>startBackendWithPreparedLock({storeDirectory:state.store,prepared:state.prepared,verificationOptions:{},verifyTree:async()=>{throw new Error('TREE_RECHECK_FAILED')},backendFactory:async()=>{spawned=true;return {done:Promise.resolve(),send:async()=>{},stop(){}}}}),/TREE_RECHECK_FAILED/);

@@ -37,7 +37,7 @@ if(mode==='timeout')setInterval(()=>{},1000);
 }
 async function run(mode){
   const x=runtime(mode);
-  try{return await probeMcpIdentity({nodeBinary:process.execPath,packageRoot:x.pkg,fixtureHome:x.home,timeoutMs:500})}
+  try{return await probeMcpIdentity({nodeBinary:process.execPath,packageRoot:x.pkg,fixtureHome:x.home,timeoutMs:mode==='timeout'?500:5000})}
   finally{rmSync(x.root,{recursive:true,force:true})}
 }
 

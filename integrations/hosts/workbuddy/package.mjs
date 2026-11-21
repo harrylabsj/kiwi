@@ -64,7 +64,7 @@ const [serverName, server] = servers[0];
 assert.equal(serverName, "kiwi-procurement-buyer");
 assert.equal(server.type, "stdio");
 assert.equal(server.command, "node");
-assert.deepEqual(server.args, [embeddedExpertLauncher]);
+assert.deepEqual(server.args, [embeddedExpertLauncher, serverName]);
 assert.equal(server["x-workbuddy"].auth.type, "none");
 files.push(".mcp.json");
 checkEmbeddedExpertRuntime();

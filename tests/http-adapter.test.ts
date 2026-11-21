@@ -73,12 +73,13 @@ describe("kiwi-buyer-http（单核心多包装）", () => {
       intent_type: "purchase",
       items: [{ query: "USB-C 扩展坞", quantity: { value: 10, unit: "个" } }],
     };
-    const first = await call("POST", "/tasks", { intent, idempotency_key: "http-k1" });
+    const request = { intent, idempotency_key: "http-k1", merchant_ids: ["merchant-001"] };
+    const first = await call("POST", "/tasks", request);
     expect(first.status).toBe(201);
     const taskId = (first.json.result as { task: { task_id: string } }).task.task_id;
     expect(taskId).toMatch(/^task-/);
 
-    const second = await call("POST", "/tasks", { intent, idempotency_key: "http-k1" });
+    const second = await call("POST", "/tasks", request);
     expect(second.status).toBe(201);
     expect((second.json.result as { task: { task_id: string } }).task.task_id).toBe(taskId);
 
@@ -90,6 +91,7 @@ describe("kiwi-buyer-http（单核心多包装）", () => {
   it("非法 intent → 400 contract_violation（与 MCP 同错误分类）", async () => {
     const { status, json } = await call("POST", "/tasks", {
       intent: { intent_id: "bad", intent_type: "purchase" },
+      merchant_ids: ["merchant-001"],
     });
     expect(status).toBe(400);
     expect((json.error as { code: string }).code).toBe("contract_violation");
@@ -159,6 +161,7 @@ describe("kiwi-buyer-http（单核心多包装）", () => {
     const created = await call("POST", "/tasks", {
       intent: { intent_id: "http-2", intent_type: "purchase", items: [{ query: "硒鼓" }] },
       idempotency_key: "http-k2",
+      merchant_ids: ["merchant-001"],
     });
     const taskId = (created.json.result as { task: { task_id: string } }).task.task_id;
     const approval = await call("POST", "/approvals", { task_id: taskId, action: "handoff" });
