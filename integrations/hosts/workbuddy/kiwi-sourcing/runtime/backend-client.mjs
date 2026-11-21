@@ -35,8 +35,8 @@ function writeLine(stream,line){return new Promise((resolve,reject)=>{
   try{if(stream.write(line+'\n')){cleanup();resolve()}else stream.once('drain',()=>{cleanup();resolve()})}catch(e){cleanup();reject(e)}
 })}
 
-export async function startVerifiedBackend({nodeBinary,sessionDirectory,dataDirectory,baseline,clientCapabilities={},onMessage=()=>{},timeoutMs=15000,sourceRoot,environment=process.env,signal}){
-  if(!isAbsolute(nodeBinary??'')||!isAbsolute(sessionDirectory??'')||!isAbsolute(sourceRoot??'')||!Array.isArray(baseline)||typeof onMessage!=='function'||!environment||typeof environment!=='object')throw new Error('BACKEND_ARGUMENT_INVALID');
+export async function startVerifiedBackend({nodeBinary,sessionDirectory,backendHome=sessionDirectory,dataDirectory,baseline,clientCapabilities={},onMessage=()=>{},timeoutMs=15000,sourceRoot,environment=process.env,signal}){
+  if(![nodeBinary,sessionDirectory,sourceRoot,backendHome].every(value=>isAbsolute(value??''))||!Array.isArray(baseline)||typeof onMessage!=='function'||!environment||typeof environment!=='object')throw new Error('BACKEND_ARGUMENT_INVALID');
   if(signal?.aborted)throw new Error('BACKEND_CANCELLED');
   if(realpathSync(sourceRoot)!==sourceRoot)throw new Error('BACKEND_SOURCE_ROOT_INVALID');
   const cli=join(sessionDirectory,'node_modules','@harrylabsj','kiwi','dist','cli.js');
@@ -45,7 +45,7 @@ export async function startVerifiedBackend({nodeBinary,sessionDirectory,dataDire
   // 统计身份的落盘目录必须跨 npm 版本更新稳定：优先 Host 提供的持久数据目录，
   // 其次用户 HOME；准备缓存目录随版本变化，只能作为最后兜底。
   const buyerIdDirectory=isAbsolute(dataDirectory??'')?join(dataDirectory,'identity'):(isAbsolute(environment.HOME??'')?join(environment.HOME,'.kiwi'):sessionDirectory);
-  const env={...selectEnvironment(environment,'backend'),HOME:sessionDirectory,TMPDIR:sessionDirectory,PATH:[dirname(nodeBinary),'/usr/bin','/bin'].join(delimiter),PYTHONDONTWRITEBYTECODE:'1'};
+  const env={...selectEnvironment(environment,'backend'),HOME:backendHome,TMPDIR:backendHome,PATH:[dirname(nodeBinary),'/usr/bin','/bin'].join(delimiter),PYTHONDONTWRITEBYTECODE:'1'};
   const child=spawn(nodeBinary,[cli,'mcp','serve','--principal','workbuddy:local','--agent','buyer-agent:workbuddy','--buyer-id',catalogBuyerId(buyerIdDirectory),'--a2a-timeout-ms','15000'],{env,stdio:['pipe','pipe','pipe']});
   child.stderr.resume();
   const sendToChild=message=>writeLine(child.stdin,JSON.stringify(message));

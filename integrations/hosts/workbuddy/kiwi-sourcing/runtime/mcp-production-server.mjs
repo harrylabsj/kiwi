@@ -9,6 +9,7 @@ const unavailable=text=>({isError:true,content:[{type:'text',text}]});
 const preparationPending=text=>({isError:true,structuredContent:{status:'retryable',code:'PREPARATION_IN_PROGRESS',requestSent:false},content:[{type:'text',text}]});
 const pendingSearchMessage='PREPARATION_IN_PROGRESS: Verification is still running in this connection. The read-only request was not sent. Retry in the same connection after it is ready; reconnecting can interrupt verification.';
 const prepareErrors = new Map([
+  ['BUNDLED_RUNTIME_INVALID','KIWI_BUNDLED_RUNTIME_INVALID: The expert package did not pass its integrity check. Reinstall the expert package. The procurement request was not sent.'],
   ['PREPARE_FAILED:REGISTRY_UNAVAILABLE','KIWI_PREPARE_REGISTRY_UNAVAILABLE: Cannot reach the official npm registry or its attestation endpoint; verify network access and reconnect.'],
   ['PREPARE_FAILED:INSTALL_FAILED','KIWI_PREPARE_INSTALL_FAILED: Kiwi dependencies could not be installed. The procurement request was not sent.'],
   ['PREPARE_FAILED:PROVENANCE_FAILED','KIWI_PREPARE_PROVENANCE_FAILED: Package provenance verification failed; no package was run.'],
