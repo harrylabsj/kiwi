@@ -16,7 +16,7 @@ const expertRuntime = join(here, 'kiwi-procurement-expert/runtime');
 export const embeddedExpertLauncher = './runtime/embedded-expert-launcher.mjs';
 
 const runtimeSources = new Map([
-  ...['embedded-expert-launcher.mjs', 'expert-data.mjs'].map(file => [file, join(expertRuntime, file)]),
+  ...['bundle-verify.mjs', 'embedded-expert-launcher.mjs', 'expert-data.mjs'].map(file => [file, join(expertRuntime, file)]),
   ...[
     'backend-client.mjs', 'environment-policy.mjs', 'instance-store.mjs',
     'mcp-production-server.mjs', 'mcp-tools-0.12.12.json', 'prepare-error-codes.mjs', 'tool-contract.mjs',
@@ -49,6 +49,11 @@ export async function packageEmbeddedExpert({bundle, files, output}) {
       cpSync(source, destination);
     }
     const embedded = await stageEmbeddedBuyer(root, stage);
+    // Load the staged launcher itself: this catches imports that are missing
+    // from runtimeSources, which file-existence checks and the buyer probes
+    // cannot see.
+    const selfCheck = spawnSync(process.execPath, [join(stage, 'runtime/embedded-expert-launcher.mjs'), '--self-check'], {encoding: 'utf8'});
+    assert.equal(selfCheck.status, 0, `Embedded launcher failed to load: ${(selfCheck.stderr || selfCheck.error?.message || '').trim()}`);
     mkdirSync(fixtureHome, {mode: 0o700});
     const probe = {
       nodeBinary: process.execPath,

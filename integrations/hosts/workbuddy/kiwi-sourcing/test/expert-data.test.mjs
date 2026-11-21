@@ -14,7 +14,7 @@ test('embedded startup keeps known failure codes on stderr and never exposes loc
   try {
     const sources = new URL('../runtime/', import.meta.url);
     const expert = new URL('../../kiwi-procurement-expert/runtime/', import.meta.url);
-    for (const name of ['embedded-expert-launcher.mjs', 'expert-data.mjs']) {
+    for (const name of ['bundle-verify.mjs', 'embedded-expert-launcher.mjs', 'expert-data.mjs']) {
       copyFileSync(new URL(name, expert), join(root, name));
     }
     for (const name of ['backend-client.mjs', 'instance-store.mjs', 'mcp-production-server.mjs',

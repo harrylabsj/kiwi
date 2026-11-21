@@ -1,8 +1,8 @@
-import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startVerifiedBackend } from './backend-client.mjs';
+import { verifyFiles } from './bundle-verify.mjs';
 import { expertDataDirectory } from './expert-data.mjs';
 import { prepareInstanceData } from './instance-store.mjs';
 import { startProductionMcpServer } from './mcp-production-server.mjs';
@@ -14,22 +14,6 @@ const startupHoldCodes = new Set([
   'INSTANCE_STATE_CONFLICT', 'INSTANCE_STATE_CORRUPT', 'INSTANCE_STATE_INCOMPLETE',
   'TOOL_BASELINE_INVALID', 'EXPERT_SERVER_NAME_INVALID',
 ]);
-
-function verifyFiles(directory, manifest, relative = '') {
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    const file = join(directory, entry.name);
-    const key = relative ? `${relative}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) {
-      verifyFiles(file, manifest, key);
-    } else if (entry.isFile() && manifest.has(key)) {
-      const digest = createHash('sha256').update(readFileSync(file)).digest('hex');
-      if (digest !== manifest.get(key)) throw new Error('BUNDLED_RUNTIME_INVALID');
-      manifest.delete(key);
-    } else {
-      throw new Error('BUNDLED_RUNTIME_INVALID');
-    }
-  }
-}
 
 async function main() {
   const serverName = process.argv[2] ?? 'kiwi-embedded-buyer';
@@ -99,6 +83,12 @@ async function main() {
     process.off('SIGTERM', shutdown);
     process.off('SIGINT', shutdown);
   }
+}
+
+// Packaging runs this without a host to prove the submitted module graph
+// loads. A missing runtimeSources entry fails here instead of at first launch.
+if (process.argv.includes('--self-check')) {
+  process.exit(0);
 }
 
 main().catch(error => {

@@ -76,7 +76,7 @@ Kiwi Network 搜索覆盖全球。调用 `kiwi_search` 时省略 `region`。有�
 调用 `kiwi_request_quotes(intent, merchant_ids, idempotency_key)`：
 
 - 始终传入非空 `merchant_ids`，从已发现、符合授权范围且 `inquiry_available=true` 的候选中选择。普通询价缺少商家时返回 `clarification_needed`，原因是 `merchant_required`，请求不会创建任务。
-- `intent_id` 为本次需求的唯一标识；每项使用短 `query`，已知规格放在 `attributes` 或 `constraints.mandatory_requirements`，而不是把长规格堆进检索词。
+- `intent_id` 为本次需求的唯一标识；每项使用短 `query`，而不是把长规格堆进检索词。`attributes` / `constraints.mandatory_requirements` 只存在于意图契约中：当前询价链路**不会**把它们发送给商家，也不能作为候选合格依据。需要在商家侧确认的硬性规格，应在候选展示或后续磋商中明确要求商家确认，不得声称“已在询价中声明”。
 - 已确认数量使用 `{ "value": 2, "unit": "台" }`。`constraints.budget`（总预算）和 `constraints.target_unit_price`（目标单价）都用 money 对象，例如人民币 200 元为 `{"currency":"CNY","amount_minor":20000}`。预算底线默认只在宿主侧用于筛选，不自动披露给商家。
 - `deadline` 只使用用户给定/确认且带时区的 RFC3339 时间；不知道就省略。币种不得凭商品所在地推断。
 - `context_projection.disclosure_boundary` 为 `commerce_required`，`projected_fields` 只列实际发送的采购字段；不要粘贴聊天历史。

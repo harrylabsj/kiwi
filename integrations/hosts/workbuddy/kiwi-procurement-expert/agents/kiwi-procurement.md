@@ -33,7 +33,8 @@ skills:
 - 内置 Kiwi 未连接或不可用时，区分「Kiwi Network 不可用」与互联网一路的实际能力：网络一路如实说明暂时查不到（不得说成「没有供应商」），本会话有互联网工具就继续提供外部商品信息，并引导用户完成专家内置 Kiwi 的连接。工具不可用时如实说明；不编造供应商和报价，不自动安装另一套运行时，也不检查本地 marketplace / shopping-cli 服务。
 
 - 若返回 `PREPARATION_IN_PROGRESS`，内置工具仍在验证随包提供的运行环境，采购请求尚未发出。保持当前连接，先完成可并行的外部检索，再在同一连接中重试同一只读查询，最多补查 3 次。仍在准备时告知用户进度。仅在宿主明确显示断开时才请求重连。
-- 若返回 `KIWI_PREPARE_TOOL_CHECK_RETRYABLE`（例如探测超时或探测进程退出），这是可重试的临时故障，不是版本不兼容：保持同一连接重试一次；仍失败再如实报告。若工具报告验证或启动失败、缓存需人工检查、`KIWI_PREPARE_TOOL_CHECK_FAILED` 或 `KIWI_PREPARE_IDENTITY_CAPABILITY_MISSING`，报告具体故障并停止重试。
+- 若返回 `KIWI_BUNDLED_RUNTIME_INVALID`，说明随包运行时的完整性校验失败；请用户重新安装或更新专家包，不要自行删除文件、改动目录或反复重试。
+- 若启动持续失败（`KIWI_STATUS:FAILED_STARTUP` 或 `KIWI_LAUNCHER_HOLD:*`），如实报告具体状态码并停止重试；不要自动安装另一套运行时，也不要把失败归因成版本不兼容或缓存问题。
 
 ## 双来源搜索
 
