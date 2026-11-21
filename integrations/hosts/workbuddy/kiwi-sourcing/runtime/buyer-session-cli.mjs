@@ -3,6 +3,7 @@ import {stageBuyerCandidate} from './candidate-check.mjs';
 import {inspectBuyerSession,inspectLatestBuyerCache,prepareLatestBuyer,verifyLatestBuyerSession} from './buyer-session.mjs';
 import {prepareManagedBuyer} from './buyer-managed-prepare-draft.mjs';
 import {setResolverAbortSignal} from './latest-resolver.mjs';
+import {holdCode} from './prepare-error-codes.mjs';
 
 // Inspection only. Never starts a connector or authorizes a purchase.
 function parse(argv){
@@ -26,10 +27,7 @@ try{
  if(result.executionAuthorized!==false||result.authorizationProven!==false)throw new Error('RESULT_INVALID');
  process.stdout.write(JSON.stringify(result)+'\n');
 }catch(error){
- const message=error?.message??'';
- const code=/^TOOL_SCHEMA_MISMATCH:kiwi_[a-z_]+$/.test(message)
-   ? 'TOOL_SCHEMA_MISMATCH'
-   : /^[A-Z_]{3,80}$/.test(message) ? message : 'BUYER_INSPECTION_FAILED';
+ const code=holdCode(error?.message??'');
  process.stderr.write(`HOLD: ${code}\n`);
  process.exitCode=1;
 }

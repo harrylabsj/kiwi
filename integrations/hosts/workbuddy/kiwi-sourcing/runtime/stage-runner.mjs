@@ -2,9 +2,7 @@ import {spawn} from 'node:child_process';
 import {isAbsolute} from 'node:path';
 import {selectEnvironment} from './environment-policy.mjs';
 import {StringDecoder} from 'node:string_decoder';
-const safeCodes=new Map([['CACHE_BUSY','CACHE_BUSY'],['CACHE_POINTER_INVALID','CACHE_STATE_INVALID'],['CACHE_DIRECTORY_INVALID','CACHE_STATE_INVALID'],['CACHE_LEGACY_STATE_REQUIRES_REVIEW','CACHE_STATE_INVALID'],['ATTESTATION_FETCH_FAILED','REGISTRY_UNAVAILABLE'],['ATTESTATION_INVALID','ATTESTATION_INVALID'],['PROVENANCE_MISSING','PROVENANCE_MISSING'],['LATEST_METADATA_UNAVAILABLE','REGISTRY_UNAVAILABLE'],['REGISTRY_TIMEOUT','REGISTRY_UNAVAILABLE'],['REGISTRY_HTTP_ERROR','REGISTRY_UNAVAILABLE'],['ISOLATED_INSTALL_FAILED','INSTALL_FAILED'],['AUDIT_FAILED','PROVENANCE_FAILED'],['SIGNATURE_VERIFIER_UNAVAILABLE','SIGNATURE_VERIFIER_UNAVAILABLE'],['SIGNER_POLICY_VERIFICATION_FAILED','SIGNER_POLICY_VERIFICATION_FAILED'],['TREE_INSPECTION_FAILED','TREE_CHECK_FAILED'],['TREE_RECHECK_FAILED','TREE_CHECK_FAILED'],['MCP_PROBE_FAILED','TOOL_CHECK_FAILED'],['MCP_PROBE_TIMEOUT','TOOL_CHECK_FAILED'],['MCP_IDENTITY_UNSUPPORTED','IDENTITY_CAPABILITY_MISSING'],['TOOL_SET_MISMATCH','TOOL_CHECK_FAILED'],['VERSION_DOWNGRADE','VERSION_REJECTED'],['LATEST_CHANGED_STAGE_REQUIRED','VERSION_REJECTED'],['LATEST_RESOLUTION_EXPIRED','VERSION_REJECTED']]);
-safeCodes.set('CACHE_STATE_INVALID','CACHE_STATE_INVALID');
-safeCodes.set('TOOL_SCHEMA_MISMATCH','TOOL_CHECK_FAILED');
+import {PREPARE_CODE_CATEGORIES} from './prepare-error-codes.mjs';
 
 // Draft: launches only a preparation subprocess. Its result never grants
 // permission for purchase actions or itself launches the product.
@@ -20,7 +18,7 @@ export function runPreparation({nodeBinary,cliPath,args,env,timeoutMs=600000,pro
   const cancel=()=>stop('PREPARE_CANCELLED');
   const cleanEnv=selectEnvironment(env,'prepare');cleanEnv.KIWI_PREPARE_DEADLINE_EPOCH_MS=String(Date.now()+timeoutMs);
   try{child=spawn(nodeBinary,[cliPath,...args],{env:cleanEnv,detached:true,stdio:['ignore','pipe','pipe']})}catch{return settle('PREPARE_START_FAILED')}
-  child.stderr.on('data',data=>{if(stderrBytes>=8192)return;stderrBytes+=data.length;stderrPending+=stderrDecoder.write(data.subarray(0,Math.max(0,8192-(stderrBytes-data.length))));let i;while((i=stderrPending.indexOf('\n'))>=0){const line=stderrPending.slice(0,i);stderrPending=stderrPending.slice(i+1);const m=/^HOLD: ([A-Z_]+)$/.exec(line);if(m&&safeCodes.has(m[1]))prepareCategory=safeCodes.get(m[1]);}});child.stdout.on('data',data=>{if(done||stopping)return;size+=data.length;if(size>65536)return stop('PREPARE_OUTPUT_INVALID');chunks.push(data)});
+  child.stderr.on('data',data=>{if(stderrBytes>=8192)return;stderrBytes+=data.length;stderrPending+=stderrDecoder.write(data.subarray(0,Math.max(0,8192-(stderrBytes-data.length))));let i;while((i=stderrPending.indexOf('\n'))>=0){const line=stderrPending.slice(0,i);stderrPending=stderrPending.slice(i+1);const m=/^HOLD: ([A-Z_]+)$/.exec(line);if(m&&PREPARE_CODE_CATEGORIES.has(m[1]))prepareCategory=PREPARE_CODE_CATEGORIES.get(m[1]);}});child.stdout.on('data',data=>{if(done||stopping)return;size+=data.length;if(size>65536)return stop('PREPARE_OUTPUT_INVALID');chunks.push(data)});
   child.once('error',()=>settle('PREPARE_START_FAILED'));
   child.once('close',(code,terminated)=>{
    if(done)return;if(stopping)return settle(stopping);if(code!==0||terminated)return settle(prepareCategory?'PREPARE_FAILED:'+prepareCategory:'PREPARE_FAILED');

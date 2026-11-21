@@ -21,3 +21,14 @@ test('preparation accepts the bounded cold-start budget and reports elapsed prog
 test('preparation budget stays bounded at ten minutes',async()=>{
   await assert.rejects(()=>runPreparation({nodeBinary:process.execPath,cliPath:'/tmp/unused.mjs',args:[],env:{},timeoutMs:600001}),/PREPARE_ARGUMENT_INVALID/);
 });
+
+test('a probe timeout is reported as retryable instead of a tool contract mismatch',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'kiwi-stage-runner-'));
+  try{
+    const child=join(dir,'child.mjs');
+    await writeFile(child,"process.stderr.write('HOLD: MCP_PROBE_TIMEOUT\\n');process.exit(1);\n");
+    await assert.rejects(()=>runPreparation({nodeBinary:process.execPath,cliPath:child,args:[],env:{HOME:dir,TMPDIR:dir,PATH:process.env.PATH}}),/PREPARE_FAILED:TOOL_CHECK_RETRYABLE/);
+    await writeFile(child,"process.stderr.write('HOLD: TOOL_SCHEMA_MISMATCH\\n');process.exit(1);\n");
+    await assert.rejects(()=>runPreparation({nodeBinary:process.execPath,cliPath:child,args:[],env:{HOME:dir,TMPDIR:dir,PATH:process.env.PATH}}),/PREPARE_FAILED:TOOL_CHECK_FAILED/);
+  }finally{await rm(dir,{recursive:true,force:true})}
+});
