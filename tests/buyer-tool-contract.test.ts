@@ -122,14 +122,18 @@ describe("买方已发布工具契约（冻结）", () => {
 });
 
 describe("买方连接器身份（不随商家连接器改变）", () => {
-  it("采购专家内置无需认证的买方 MCP，不依赖市场连接器", () => {
-    const base = "integrations/hosts/workbuddy/kiwi-procurement-expert";
+  it.each([
+    ["kiwi-procurement-expert", "kiwi-procurement-buyer"],
+    ["haina-ecommerce-expert", "kiwi-shopping-buyer"],
+  ])("%s 使用随包运行时并保留自身的买方 MCP 标识", (expert, serverName) => {
+    const base = path.join("integrations/hosts/workbuddy", expert);
     const plugin = JSON.parse(readFileSync(path.join(base, ".codebuddy-plugin/plugin.json"), "utf8"));
     const mcp = JSON.parse(readFileSync(path.join(base, ".mcp.json"), "utf8"));
     expect(plugin.dependencies.mcpServers).toBe("./.mcp.json");
     expect(plugin.dependencies.connectors).toBeUndefined();
-    expect(mcp.mcpServers["kiwi-procurement-buyer"]["x-workbuddy"].auth.type).toBe("none");
-    expect(mcp.mcpServers["kiwi-procurement-buyer"].args).toEqual(["./runtime/embedded-expert-launcher.mjs"]);
+    expect(Object.keys(mcp.mcpServers)).toEqual([serverName]);
+    expect(mcp.mcpServers[serverName]["x-workbuddy"].auth.type).toBe("none");
+    expect(mcp.mcpServers[serverName].args).toEqual(["./runtime/embedded-expert-launcher.mjs"]);
   });
 
   it("商家连接器包不声明买方工具，也不指向买方 source", () => {
