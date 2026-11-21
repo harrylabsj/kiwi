@@ -5,12 +5,22 @@ import {mkdirSync,writeFileSync,rmSync} from 'node:fs';
 import {join,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {startVerifiedBackend} from '../runtime/backend-client.mjs';
-import {checkToolContract} from '../runtime/tool-contract.mjs';
+import {checkToolContract,enableQuoteHistory} from '../runtime/tool-contract.mjs';
 
 const here=dirname(fileURLToPath(import.meta.url));
 const packageRoot=dirname(here);
 const raw=JSON.parse(await import('node:fs/promises').then(fs=>fs.readFile(join(packageRoot,'runtime','mcp-tools-0.12.12.json'),'utf8')));
 const baseline=Array.isArray(raw)?raw:raw.tools;
+
+test('quote-history configuration validates the properties before changing the advertised schema',()=>{
+  const updated=structuredClone(baseline);
+  enableQuoteHistory(updated);
+  const quoteTool=updated.find(tool=>tool.name==='kiwi_request_quotes');
+  assert.deepEqual(quoteTool.inputSchema.properties.reuse_history,{type:'boolean'});
+  assert.throws(()=>enableQuoteHistory(updated.filter(tool=>tool!==quoteTool)),/TOOL_BASELINE_INVALID/);
+  quoteTool.inputSchema.properties=[];
+  assert.throws(()=>enableQuoteHistory(updated),/TOOL_BASELINE_INVALID/);
+});
 function installFake(session,tools){
   const cli=join(session,'node_modules','@harrylabsj','kiwi','dist','cli.js');mkdirSync(dirname(cli),{recursive:true,mode:0o700});
   const literal=JSON.stringify(JSON.stringify(tools));

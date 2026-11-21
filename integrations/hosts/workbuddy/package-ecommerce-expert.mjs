@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkEmbeddedExpertRuntime, embeddedExpertLauncher, packageEmbeddedExpert } from './package-embedded-expert.mjs';
+import {
+  checkEmbeddedExpertRuntime, embeddedExpertLauncher, packageEmbeddedExpert,
+  validateExpertAvatar, validateExpertDisplay, validateExpertToolReferences,
+} from './package-embedded-expert.mjs';
 
 const here=dirname(fileURLToPath(import.meta.url));
 const bundle=join(here,'haina-ecommerce-expert');
@@ -11,11 +14,15 @@ function safeFile(root,name){const p=resolve(root,name);assert(p.startsWith(root
 for(const f of files)safeFile(bundle,f);
 const meta=JSON.parse(readFileSync(join(bundle,files[0]),'utf8'));
 const mcp=JSON.parse(readFileSync(join(bundle,'.mcp.json'),'utf8'));
+validateExpertDisplay(meta);
+assert(files.includes(meta.avatar), 'Avatar must be included in the expert ZIP');
+validateExpertAvatar(readFileSync(safeFile(bundle,meta.avatar)));
 assert.equal(meta.version,'1.2.5');assert.equal(meta.dependencies.mcpServers,'./.mcp.json');assert(!meta.dependencies.connectors?.length);
 assert.deepEqual(Object.keys(mcp.mcpServers),['kiwi-shopping-buyer']);
 const server=mcp.mcpServers['kiwi-shopping-buyer'];assert.equal(server.type,'stdio');assert.equal(server.command,'node');assert.deepEqual(server.args,[embeddedExpertLauncher,'kiwi-shopping-buyer']);assert.equal(server['x-workbuddy'].auth.type,'none');
 checkEmbeddedExpertRuntime();
-const instructions=['agents/haina-ecommerce-expert.md','skills/online-shopping-assistant/SKILL.md','skills/online-shopping-assistant/references/kiwi-inquiry-and-negotiation.md'].map(f=>readFileSync(join(bundle,f),'utf8')).join('\n');
+const instructions=files.filter(file=>file.endsWith('.md')).map(file=>readFileSync(join(bundle,file),'utf8')).join('\n');
+validateExpertToolReferences(instructions,['kiwi_search','kiwi_request_quotes','kiwi_get_task','kiwi_negotiate']);
 assert(instructions.includes('kiwi-shopping-buyer'));assert(!instructions.includes('`kiwi-sourcing` 连接器'));assert(!instructions.includes('scripts/kiwi-tool.mjs'));
 console.log(`Validated ${meta.profession.zh} v${meta.version}: built-in MCP and embedded runtime.`);
 const args=process.argv.slice(2);if(args.length===1&&args[0]==='--check')process.exit(0);

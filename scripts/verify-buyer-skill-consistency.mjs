@@ -119,6 +119,14 @@ const REFERENCE_ENTRY_FILES = [
   },
 ];
 
+const REFERENCE_SHARED_TOKENS = [
+  '`constraints.budget` 与 `constraints.target_unit_price` 都用 money 对象',
+  '{"currency":"CNY","amount_minor":20000}',
+  '裸数字会被冻结契约拒绝',
+  '`attributes` / `constraints.mandatory_requirements` 当前**不会**发送给商家，也不能作为候选合格依据',
+  '只发送非空、由搜索返回且已授权的 `merchant_ids`',
+];
+
 /** 语言相关的措辞标记（展示名称与外部来源表述）。 */
 const LANGUAGE_TOKENS = {
   zh: ["互联网电商", "网络内商家"],
@@ -199,6 +207,9 @@ for (const entry of REFERENCE_ENTRY_FILES) {
   }
   for (const token of entry.forbid) {
     if (text.includes(token)) fail(`${entry.path} 引用了本包不存在的入口：${token}`);
+  }
+  for (const token of REFERENCE_SHARED_TOKENS) {
+    if (!text.includes(token)) fail(`${entry.path} 缺少共享询价约束：${token}`);
   }
 }
 

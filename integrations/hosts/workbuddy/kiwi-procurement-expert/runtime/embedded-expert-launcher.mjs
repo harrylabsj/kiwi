@@ -6,6 +6,7 @@ import { verifyFiles } from './bundle-verify.mjs';
 import { expertDataDirectory } from './expert-data.mjs';
 import { prepareInstanceData } from './instance-store.mjs';
 import { startProductionMcpServer } from './mcp-production-server.mjs';
+import { enableQuoteHistory } from './tool-contract.mjs';
 
 const sourceRoot = fileURLToPath(new URL('.', import.meta.url)).replace(/\/$/, '');
 const sessionDirectory = join(sourceRoot, 'buyer');
@@ -37,11 +38,7 @@ async function main() {
   }
   if (!Array.isArray(baseline) || baseline.length !== 13) throw new Error('TOOL_BASELINE_INVALID');
   if (environment.KIWI_QUOTE_HISTORY_DELEGATION === 'true') {
-    const properties = baseline.find(tool => tool?.name === 'kiwi_request_quotes')?.inputSchema?.properties;
-    if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {
-      throw new Error('TOOL_BASELINE_INVALID');
-    }
-    properties.reuse_history = { type: 'boolean' };
+    enableQuoteHistory(baseline);
   }
   const server = startProductionMcpServer({
     input: process.stdin,
