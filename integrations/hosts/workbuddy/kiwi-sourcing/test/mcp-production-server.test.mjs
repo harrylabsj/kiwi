@@ -164,3 +164,37 @@ test('a terminal tool contract failure never appears as pending or reaches the b
   await close(h);
  }
 });
+
+test('a probe timeout is reported as retryable, not as an incompatible tool contract',async()=>{
+ const h=harness({deferPreparation:true,prepare:async()=>{throw new Error('PREPARE_FAILED:TOOL_CHECK_RETRYABLE')}});
+ try{
+  await initialize(h);
+  const request={jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'kiwi_search',arguments:{query:'test'}}};
+  await h.send(request);
+  await h.send({...request,id:4});
+  for(const id of [3,4]){
+   const {result}=await until(h.messages,m=>m.id===id);
+   assert.equal(result.isError,true);
+   assert.match(result.content[0].text,/KIWI_PREPARE_TOOL_CHECK_RETRYABLE.*retry/);
+   assert.doesNotMatch(result.content[0].text,/versions before retrying/);
+  }
+ } finally {await close(h)}
+});
+
+test('tree and version failures get specific guidance instead of the generic stopped message',async()=>{
+ for(const [code,pattern] of [
+  ['PREPARE_FAILED:TREE_CHECK_FAILED',/KIWI_PREPARE_TREE_CHECK_FAILED/],
+  ['PREPARE_FAILED:VERSION_REJECTED',/KIWI_PREPARE_VERSION_REJECTED/],
+  ['PREPARE_FAILED:CACHE_BUSY',/KIWI_PREPARE_CACHE_BUSY/],
+  ['PREPARE_FAILED:IDENTITY_CAPABILITY_MISSING',/KIWI_PREPARE_IDENTITY_CAPABILITY_MISSING/],
+ ]){
+  const h=harness({deferPreparation:true,prepare:async()=>{throw new Error(code)}});
+  try{
+   await initialize(h);
+   await h.send({jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'kiwi_search',arguments:{query:'test'}}});
+   const {result}=await until(h.messages,m=>m.id===3);
+   assert.match(result.content[0].text,pattern);
+   assert.doesNotMatch(result.content[0].text,/Latest verification failed; connector is stopped/);
+  } finally {await close(h)}
+ }
+});

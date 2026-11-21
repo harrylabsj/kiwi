@@ -19,7 +19,7 @@ const runtimeSources = new Map([
   ...['embedded-expert-launcher.mjs', 'expert-data.mjs'].map(file => [file, join(expertRuntime, file)]),
   ...[
     'backend-client.mjs', 'environment-policy.mjs', 'instance-store.mjs',
-    'mcp-production-server.mjs', 'mcp-tools-0.12.12.json', 'tool-contract.mjs',
+    'mcp-production-server.mjs', 'mcp-tools-0.12.12.json', 'prepare-error-codes.mjs', 'tool-contract.mjs',
   ].map(file => [file, join(sourcingRuntime, file)]),
 ]);
 

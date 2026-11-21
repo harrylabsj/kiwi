@@ -20,22 +20,52 @@ export function ensureBuyerCacheDirectory(root){
 function readPrivate(p,max){let fd;try{fd=openSync(p,constants.O_RDONLY|constants.O_NOFOLLOW);const s=fstatSync(fd);if(!s.isFile()||s.nlink!==1||(s.mode&0o077)||(typeof process.getuid==='function'&&s.uid!==process.getuid())||s.size>max)throw new Error();return readFileSync(fd)}catch(e){if(e.code==='ENOENT')throw e;throw new Error('CACHE_FILE_INVALID',{cause:e})}finally{if(fd!==undefined)closeSync(fd)}}
 function lockDigest(p){let fd;try{fd=openSync(p,constants.O_RDONLY|constants.O_NOFOLLOW);const s=fstatSync(fd);if(!s.isFile()||s.nlink!==1||(s.mode&0o022)||(typeof process.getuid==='function'&&s.uid!==process.getuid())||s.size>16*1024*1024)throw new Error();return createHash('sha256').update(readFileSync(fd)).digest('hex')}catch{throw new Error('CACHE_TREE_LOCK_INVALID')}finally{if(fd!==undefined)closeSync(fd)}}
 function validName(name){return typeof name==='string'&&/^kiwi-preflight-[A-Za-z0-9]{6}$/.test(name)}
+const PREPARED_TEMP=/^\.prepared-[a-f0-9]{24}$/;
 // Call with the store locked and no prepared pointer. WorkBuddy may stop a
-// first install midway. An unfinished stage can be left in place and ignored,
-// but a finalized stage with no pointer could indicate a lost version anchor.
-export function assertRecoverableBuyerCache(root) {
+// first install midway. A session without a transaction is an unfinished stage
+// and can be ignored. A session WITH a transaction already passed source, tree
+// and tool-schema checks and only missed its pointer (the host stopped between
+// staging and recordPrepared); it is recoverable. Tampered or ambiguous state
+// still fails closed.
+function scanRecoverableState(root) {
+ const sessions = [];
+ const stale = [];
  for (const name of readdirSync(root)) {
   if (['.update-lock', '.update-lock.sqlite'].includes(name) || /^\.update-lock-data-[a-f0-9]{24}(-journal)?$/.test(name)) continue;
+  // recordPrepared creates this temp pointer before renaming it; a hard kill
+  // in that window leaves it behind. It carries no anchor and can be removed.
+  if (PREPARED_TEMP.test(name)) { stale.push(name); continue; }
   if (!validName(name)) throw new Error('CACHE_STATE_INVALID');
   const session = join(root, name);
   privateDirectory(session);
+  let hasTransaction = false;
   try {
    lstatSync(join(session, 'transaction.json'));
-   throw new Error('CACHE_STATE_INVALID');
+   hasTransaction = true;
   } catch (error) {
    if (error.code !== 'ENOENT') throw error;
   }
+  if (hasTransaction) sessions.push(name);
  }
+ for (const name of stale) {
+  try { unlinkSync(join(root, name)); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+ }
+ return sessions;
+}
+export function assertRecoverableBuyerCache(root) {
+ const sessions = scanRecoverableState(root);
+ if (sessions.length > 1) throw new Error('CACHE_STATE_INVALID');
+ for (const name of sessions) {
+  try { sessionLock(root, name); } catch { throw new Error('CACHE_STATE_INVALID'); }
+ }
+}
+// Returns the single interrupted-but-finalized session so preparation can
+// finish it instead of re-downloading or bricking the store.
+export function findRecoverableBuyerSession(root) {
+ const sessions = scanRecoverableState(root);
+ if (sessions.length === 0) return null;
+ if (sessions.length > 1) throw new Error('CACHE_STATE_INVALID');
+ try { return sessionLock(root, sessions[0]); } catch { throw new Error('CACHE_STATE_INVALID'); }
 }
 function sessionLock(root,name){if(!validName(name))throw new Error('CACHE_SESSION_INVALID');const dir=join(root,name);privateDirectory(dir);const bytes=readPrivate(join(dir,'verified-download.tgz'),128*1024*1024);const lock=resumeTransaction(join(dir,'transaction.json'),bytes);if(lock.name!=='@harrylabsj/kiwi')throw new Error('PACKAGE_INVALID');return {dir,lock,treeLockSha256:lockDigest(join(dir,'package-lock.json'))}}
 async function acquireGuard(path,options){

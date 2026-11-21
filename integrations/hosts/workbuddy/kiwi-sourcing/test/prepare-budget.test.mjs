@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {mkdir,mkdtemp,readFile,realpath,rm,symlink,writeFile} from 'node:fs/promises';
+import {chmod,mkdir,mkdtemp,readFile,realpath,rm,symlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {remainingPrepareBudgetMs,runPrepareCommand} from '../runtime/prepare-budget.mjs';
 import {snapshotInstallTarballs} from '../runtime/preflight.mjs';
+import {sharedInstallCacheDirectory} from '../runtime/buyer-managed-prepare-draft.mjs';
 
 test('nested install budget is the remaining part of the outer deadline',()=>{
   const now=Date.now();
@@ -54,5 +55,36 @@ test('shared downloads are copied into per-install verification evidence without
     await assert.rejects(()=>snapshotInstallTarballs(stage,shared),/CACHE_TARBALL_INVALID/);
   } finally {
     await rm(root,{recursive:true,force:true});
+  }
+});
+
+test('a missing shared tarball reports a cache error, not an install failure',async()=>{
+  const root=await realpath(await mkdtemp(join(tmpdir(),'kiwi-install-cache-')));
+  const shared=join(root,'shared');
+  const stage=join(root,'stage');
+  const digest=createHash('sha512').update('missing fixture').digest();
+  const lock={packages:{'':{},'node_modules/one':{integrity:`sha512-${digest.toString('base64')}`}}};
+  try {
+    await mkdir(join(shared),{recursive:true});
+    await mkdir(join(stage),{recursive:true});
+    await writeFile(join(stage,'package-lock.json'),JSON.stringify(lock));
+    await assert.rejects(()=>snapshotInstallTarballs(stage,shared),/CACHE_TARBALL_INVALID/);
+    await assert.rejects(()=>snapshotInstallTarballs(stage,shared,{deadlineEpochMs:Date.now()-1}),/PREPARE_TIMEOUT/);
+  } finally {
+    await rm(root,{recursive:true,force:true});
+  }
+});
+
+test('the shared download cache is skipped when the store parent is not private',async()=>{
+  const base=await realpath(await mkdtemp(join(tmpdir(),'kiwi-install-cache-parent-')));
+  try {
+    await chmod(base,0o755);
+    const store=join(base,'store');
+    await mkdir(store,{mode:0o700});
+    assert.equal(sharedInstallCacheDirectory(store),undefined);
+    await chmod(base,0o700);
+    assert.equal(sharedInstallCacheDirectory(store),join(base,'kiwi-buyer-npm-downloads'));
+  } finally {
+    await rm(base,{recursive:true,force:true});
   }
 });

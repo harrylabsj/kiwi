@@ -1,5 +1,6 @@
 import {createInterface} from 'node:readline';
 import {randomUUID} from 'node:crypto';
+import {PREPARE_ERROR_MESSAGES} from './prepare-error-codes.mjs';
 
 const KNOWN=new Set(['kiwi_search','kiwi_request_quotes','kiwi_get_task','kiwi_negotiate','kiwi_accept_agreement','kiwi_get_agreement','kiwi_handoff','kiwi_approve','kiwi_reject','kiwi_follow_merchant','kiwi_unfollow_merchant','kiwi_list_follows','kiwi_get_follow_updates']);
 const PROTOCOL='2025-06-18';
@@ -8,15 +9,6 @@ const out=(output,message)=>{const ok=output.write(JSON.stringify(message)+'\n')
 const unavailable=text=>({isError:true,content:[{type:'text',text}]});
 const preparationPending=text=>({isError:true,structuredContent:{status:'retryable',code:'PREPARATION_IN_PROGRESS',requestSent:false},content:[{type:'text',text}]});
 const pendingSearchMessage='PREPARATION_IN_PROGRESS: Verification is still running in this connection. The read-only request was not sent. Retry in the same connection after it is ready; reconnecting can interrupt verification.';
-const prepareErrors = new Map([
-  ['BUNDLED_RUNTIME_INVALID','KIWI_BUNDLED_RUNTIME_INVALID: The expert package did not pass its integrity check. Reinstall the expert package. The procurement request was not sent.'],
-  ['PREPARE_FAILED:REGISTRY_UNAVAILABLE','KIWI_PREPARE_REGISTRY_UNAVAILABLE: Cannot reach the official npm registry or its attestation endpoint; verify network access and reconnect.'],
-  ['PREPARE_FAILED:INSTALL_FAILED','KIWI_PREPARE_INSTALL_FAILED: Kiwi dependencies could not be installed. The procurement request was not sent.'],
-  ['PREPARE_FAILED:PROVENANCE_FAILED','KIWI_PREPARE_PROVENANCE_FAILED: Package provenance verification failed; no package was run.'],
-  ['PREPARE_FAILED:CACHE_STATE_INVALID','KIWI_PREPARE_CACHE_STATE_INVALID: Incomplete or invalid cache needs review; no package was run.'],
-  ['PREPARE_FAILED:TOOL_CHECK_FAILED','KIWI_PREPARE_TOOL_CHECK_FAILED: The Kiwi runtime did not pass the MCP tool contract check. Check the expert and runtime versions before retrying. The procurement request was not sent.'],
-  ['NPM_12_UNAVAILABLE','NPM_12_UNAVAILABLE: Kiwi requires npm 12. Install or upgrade npm to version 12, ensure it is on PATH, then reconnect and retry.'],
-]);
 const responseError=(id,code,message)=>({jsonrpc:'2.0',id,error:{code,message}});
 // Transparent MCP transport only. Business policy, scope, approval, and action
 // outcomes belong to the verified Kiwi backend / calling expert. This adapter
@@ -208,12 +200,8 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
         prepared=await prepare({signal:abort.signal});
       } catch (error) {
         const message=error?.message??'';
-        if (/^PREPARE_FAILED:(SIGNATURE_VERIFIER_UNAVAILABLE|SIGNER_POLICY_VERIFICATION_FAILED|ATTESTATION_INVALID|PROVENANCE_MISSING)$/.test(message)) {
-          preparationErrorMessage=`KIWI_${message}: Package provenance verification failed; no package was run.`;
-        } else {
-          const code=message==='CACHE_STATE_INVALID'?'PREPARE_FAILED:CACHE_STATE_INVALID':message;
-          preparationErrorMessage=prepareErrors.get(code)??preparationErrorMessage;
-        }
+        const code=message==='CACHE_STATE_INVALID'?'PREPARE_FAILED:CACHE_STATE_INVALID':message;
+        preparationErrorMessage=PREPARE_ERROR_MESSAGES.get(code)??preparationErrorMessage;
         status(message==='PREPARE_TIMEOUT'?'TIMEOUT_PREPARE':'FAILED_PREPARE');
         throw new Error('PREPARE_FAILED',{cause:error});
       }

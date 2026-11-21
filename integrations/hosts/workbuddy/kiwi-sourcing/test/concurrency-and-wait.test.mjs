@@ -7,7 +7,7 @@ import {PassThrough} from 'node:stream';
 import {readFileSync as read} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {createTransaction} from '../runtime/transaction.mjs';
-import {assertRecoverableBuyerCache,withBuyerCacheStore} from '../runtime/buyer-cache-store-draft.mjs';
+import {assertRecoverableBuyerCache,findRecoverableBuyerSession,withBuyerCacheStore} from '../runtime/buyer-cache-store-draft.mjs';
 import {startBackendWithPreparedLock} from '../runtime/locked-backend-session.mjs';
 import {startProductionMcpServer} from '../runtime/mcp-production-server.mjs';
 
@@ -40,7 +40,7 @@ test('two live instances start without lifetime update lock; latest pointer chan
   } finally {rmSync(root,{recursive:true,force:true})}
 });
 
-test('an interrupted first install can retry, but a finalized or symlinked stage cannot replace a lost pointer',async()=>{
+test('an unfinished stage is ignored, a finalized one is recoverable, and tampered or ambiguous state fails closed',async()=>{
   const root=mkdtempSync('/private/tmp/kiwi-recover-install-');
   const store=join(root,'store');
   const interrupted=join(store,'kiwi-preflight-cancel');
@@ -57,7 +57,24 @@ test('an interrupted first install can retry, but a finalized or symlinked stage
     symlinkSync(interrupted,linked);
     await assert.rejects(check,/CACHE_DIRECTORY_INVALID/);
     rmSync(linked);
-    fixture(root);
+    const finalized=fixture(root);
+    // The host may stop between staging (transaction committed) and
+    // recordPrepared; that session is recoverable instead of bricking the store.
+    await check();
+    const recovered=await withBuyerCacheStore(store,()=>findRecoverableBuyerSession(store));
+    assert.equal(recovered.dir,finalized.session);
+    assert.equal(recovered.lock.version,'0.12.14');
+    // A temp pointer left by a hard kill is not an anchor and is cleaned up.
+    const temp=join(store,'.prepared-'+'a'.repeat(24));
+    writeFileSync(temp,'{}',{mode:0o600});
+    await check();
+    assert.equal(existsSync(temp),false);
+    // Two finalized sessions are ambiguous and must not be guessed.
+    fixture(root,'bcdefg','0.12.15');
+    await assert.rejects(check,/CACHE_STATE_INVALID/);
+    rmSync(join(store,'kiwi-preflight-bcdefg'),{recursive:true,force:true});
+    // A tampered archive cannot be adopted.
+    writeFileSync(join(finalized.session,'verified-download.tgz'),Buffer.from('tampered'));
     await assert.rejects(check,/CACHE_STATE_INVALID/);
   } finally {
     rmSync(root,{recursive:true,force:true});
