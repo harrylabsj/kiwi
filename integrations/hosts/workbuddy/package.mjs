@@ -3,13 +3,15 @@ import console from "node:console";
 import process from "node:process";
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { runtimeFiles } from "./kiwi-sourcing/scripts/package-manifest.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { parse } from "yaml";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
+import { stageEmbeddedBuyer } from "./stage-embedded-buyer.mjs";
+import { probeMcpIdentity } from "./kiwi-sourcing/runtime/mcp-identity-probe.mjs";
+import { probeMcpSchema } from "./kiwi-sourcing/runtime/mcp-schema-probe.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../../..");
@@ -66,11 +68,15 @@ const [serverName, server] = servers[0];
 assert.equal(serverName, "kiwi-procurement-buyer");
 assert.equal(server.type, "stdio");
 assert.equal(server.command, "node");
-assert.deepEqual(server.args, ["./runtime/expert-launcher.mjs"]);
+assert.deepEqual(server.args, ["./runtime/embedded-expert-launcher.mjs"]);
 assert.equal(server["x-workbuddy"].auth.type, "none");
-files.push(".mcp.json", "runtime/expert-launcher.mjs", "runtime/expert-data.mjs");
-for (const file of ["runtime/expert-launcher.mjs", "runtime/expert-data.mjs"]) read(file);
+files.push(".mcp.json", "runtime/embedded-expert-launcher.mjs", "runtime/expert-data.mjs");
+for (const file of ["runtime/embedded-expert-launcher.mjs", "runtime/expert-data.mjs"]) read(file);
 const runtimeRoot = path.join(here, "kiwi-sourcing/runtime");
+const runtimeFiles = [
+  "backend-client.mjs", "environment-policy.mjs", "instance-store.mjs",
+  "mcp-production-server.mjs", "mcp-tools-0.12.12.json", "tool-contract.mjs",
+];
 for (const file of runtimeFiles) {
   const full = path.join(runtimeRoot, file);
   assert(lstatSync(full).isFile() && !lstatSync(full).isSymbolicLink(), `Invalid runtime file: ${file}`);
@@ -133,34 +139,47 @@ assert(output.endsWith(".zip"), "Output must be .zip");
 assert(!existsSync(output), "Output already exists; choose a new path");
 assert(!output.startsWith(`${bundle}${path.sep}`), "Keep ZIP outside the bundle");
 mkdirSync(path.dirname(output), { recursive: true });
+const build = spawnSync("npm", ["run", "build"], { cwd: root, stdio: "inherit" });
+assert.equal(build.status, 0, build.error?.message ?? "Unable to compile the buyer runtime");
 const stage = mkdtempSync(path.join(tmpdir(), "kiwi-expert-"));
-for (const file of files) {
-  const dest = path.join(stage, file);
-  mkdirSync(path.dirname(dest), { recursive: true });
-  cpSync(path.join(bundle, file), dest);
+const fixtureHome = mkdtempSync(path.join(tmpdir(), "kiwi-expert-probe-"));
+try {
+  for (const file of files) {
+    const dest = path.join(stage, file);
+    mkdirSync(path.dirname(dest), { recursive: true });
+    cpSync(path.join(bundle, file), dest);
+  }
+  for (const file of runtimeFiles) {
+    cpSync(path.join(runtimeRoot, file), path.join(stage, "runtime", file));
+    files.push(`runtime/${file}`);
+  }
+  files.push(...await stageEmbeddedBuyer(root, stage));
+  const probe = {
+    nodeBinary: process.execPath,
+    packageRoot: path.join(stage, "runtime/buyer/node_modules/@harrylabsj/kiwi"),
+    fixtureHome,
+  };
+  for (const [locale, file] of [["en", "mcp-tools-0.12.12.json"], ["zh", "mcp-tools-0.12.12-zh.json"]]) {
+    const baseline = JSON.parse(readFileSync(path.join(runtimeRoot, file), "utf8"));
+    assert.equal((await probeMcpSchema({ ...probe, baseline, locale })).toolCount, 13);
+  }
+  assert.equal((await probeMcpIdentity(probe)).identity, "supported");
+  const result = spawnSync("zip", ["-X", output, ...files], { cwd: stage, encoding: "utf8" });
+  assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+  assert(lstatSync(output).size <= 20_000_000, "WorkBuddy limits expert ZIPs to 20 MB");
+  const listed = spawnSync("unzip", ["-Z1", output], { encoding: "utf8" });
+  assert.equal(listed.status, 0, listed.stderr);
+  const entries = files.map((file) => file.replace(/^\.\//, "")).sort();
+  assert.deepEqual(listed.stdout.trim().split("\n").sort(), entries);
+  for (const file of entries) {
+    const extracted = spawnSync("unzip", ["-p", output, file], { maxBuffer: 20_000_000 });
+    assert.equal(extracted.status, 0, `Cannot read ${file} from package`);
+    assert.deepEqual(extracted.stdout, readFileSync(path.join(stage, file)), `Package content differs: ${file}`);
+  }
+  const checked = spawnSync("unzip", ["-t", output], { encoding: "utf8" });
+  assert.equal(checked.status, 0, checked.stdout + checked.stderr);
+} finally {
+  rmSync(fixtureHome, { recursive: true, force: true });
+  rmSync(stage, { recursive: true, force: true });
 }
-mkdirSync(path.join(stage, "runtime"), { recursive: true });
-for (const file of runtimeFiles) {
-  cpSync(path.join(runtimeRoot, file), path.join(stage, "runtime", file));
-  files.push(`runtime/${file}`);
-}
-const result = spawnSync("zip", ["-X", output, ...files], { cwd: stage, encoding: "utf8" });
-rmSync(stage, { recursive: true, force: true });
-assert.equal(result.status, 0, result.error?.message ?? result.stderr);
-const listed = spawnSync("unzip", ["-Z1", output], { encoding: "utf8" });
-assert.equal(listed.status, 0, listed.stderr);
-assert.deepEqual(
-  listed.stdout.trim().split("\n").sort(),
-  files.map((p) => p.replace(/^\.\//, "")).sort(),
-);
-// The expert bundle must contain exactly the runtime that passed validation.
-for (const file of files) {
-  const source = file.startsWith("runtime/") && runtimeFiles.includes(file.slice(8))
-    ? path.join(runtimeRoot, file.slice(8)) : path.join(bundle, file);
-  const extracted = spawnSync("unzip", ["-p", output, file.replace(/^\.\//, "")]);
-  assert.equal(extracted.status, 0, `Cannot read ${file} from package`);
-  assert.deepEqual(extracted.stdout, readFileSync(source), `Package content differs: ${file}`);
-}
-const checked = spawnSync("unzip", ["-t", output], { encoding: "utf8" });
-assert.equal(checked.status, 0, checked.stdout + checked.stderr);
 console.log(`Created ${output}`);
