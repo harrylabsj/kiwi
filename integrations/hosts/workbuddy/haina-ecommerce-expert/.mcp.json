@@ -4,7 +4,7 @@
       "type": "stdio",
       "command": "node",
       "args": [
-        "./runtime/expert-launcher.mjs"
+        "./runtime/embedded-expert-launcher.mjs"
       ],
       "runtime": {
         "type": "node",
