@@ -112,9 +112,9 @@ export class McpServer {
           if (this.initRequested) this.initialized = true;
           return undefined;
         case "tools/list":
-          return this.requireInit(request, () => this.handleListTools(request));
+          return await this.requireInit(request, () => this.handleListTools(request));
         case "tools/call":
-          return this.requireInit(request, () => this.handleCallTool(request));
+          return await this.requireInit(request, () => this.handleCallTool(request));
         default:
           return this.error(
             request.id,
@@ -129,7 +129,7 @@ export class McpServer {
       return this.error(
         request.id,
         MCP_ERROR.INTERNAL_ERROR,
-        `internal error: ${error instanceof Error ? error.message : String(error)}`,
+        "internal error: Tool operation failed",
       );
     }
   }

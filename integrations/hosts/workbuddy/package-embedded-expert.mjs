@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
+import { parse } from 'yaml';
 import { fileURLToPath } from 'node:url';
 import { probeMcpIdentity } from './kiwi-sourcing/runtime/mcp-identity-probe.mjs';
 import { probeMcpSchema } from './kiwi-sourcing/runtime/mcp-schema-probe.mjs';
@@ -38,6 +39,38 @@ export function validateExpertDisplay(manifest) {
   manifest.quickPrompts.forEach(bilingual);
   manifest.tags.forEach(bilingual);
   assert.deepEqual(manifest.defaultInitPrompt, manifest.quickPrompts[0]);
+}
+
+function frontmatter(relative, read) {
+  const text = read(relative).toString("utf8");
+  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  assert(match, `Missing frontmatter: ${relative}`);
+  const meta = parse(match[1]);
+  assert(meta && typeof meta.description === "string" && meta.description.trim());
+  assert(/^[a-z0-9-]{1,64}$/.test(meta.name));
+  return { meta, text };
+}
+
+export function validateExpertFrontmatter(manifest, read) {
+  assert.equal(manifest.agents.length, 1);
+  const agent = frontmatter(manifest.agents[0], read);
+  assert.equal(agent.meta.name, manifest.agentName);
+  assert.equal(basename(manifest.agents[0], ".md"), manifest.agentName);
+  assert.deepEqual(agent.meta.displayName, manifest.displayName);
+  assert.deepEqual(agent.meta.profession, manifest.profession);
+  assert(!Object.hasOwn(agent.meta, "tools"), "WorkBuddy assigns tool permissions; do not set tools");
+
+  const skillNames = [];
+  let instructions = agent.text;
+  for (const directory of manifest.skills) {
+    const skill = frontmatter(`${directory}/SKILL.md`, read);
+    assert.equal(skill.meta.name, basename(directory));
+    skillNames.push(skill.meta.name);
+    instructions += `\n${skill.text}`;
+  }
+  assert.equal(new Set(skillNames).size, skillNames.length);
+  assert.deepEqual([...agent.meta.skills].sort(), skillNames.sort());
+  return instructions;
 }
 
 export function validateExpertAvatar(avatar) {

@@ -629,8 +629,11 @@ export class KiwiBuyerService {
     const auto = this.policy.policy_id !== "dp-default" && this.policy.actions.inquiry_rfq?.mode === "auto" && !ref.replaces_source_id;
     const sourceKey = contentDigest([merchant, source.variant, historical.basis_digest]);
     const payload = { ref, merchant, intent, requested_intent_digest: contentDigest(input.intent), source_key: sourceKey, ...(ref.replaces_source_id ? { replaces_source_id: ref.replaces_source_id } : {}) };
+    const nativeKey = `company-rfq-${contentDigest([ref.case_id, input.idempotency_key])}`;
     const guarded = cases.bindAction({ case_ref: ref, operation: "rfq", request_id: input.idempotency_key,
-      payload, approval_id: input.approval_id, auto, validate: current => {
+      payload, approval_id: input.approval_id, auto,
+      rfqTaskMissing: () => !this.store.findTaskByIdempotencyKey(this.ownerHash, nativeKey),
+      validate: (current, resumingId) => {
         this.procurementMode("rfq", merchant, true);
         if (maxQuantity && (maxQuantity.unit !== basis.unit || (basis.quantity ?? Infinity) > maxQuantity.value)) {
           throw new McpError("delegation_denied", "Procurement quantity exceeds delegation");
@@ -639,7 +642,7 @@ export class KiwiBuyerService {
           throw new McpError("delegation_denied", "CNY is outside the delegation");
         }
         if (source.basis_digest !== current.basis_digest) procurementError("SOURCE_BASIS_CHANGED");
-        const count = cases.followupCount(current.id, sourceKey, "rfq");
+        const count = cases.followupCount(current.id, sourceKey, "rfq", resumingId);
         if (!ref.replaces_source_id) {
           if (source.task_id || count > 0) procurementError("USE_TARGETED_REQUOTE");
           return;
@@ -653,24 +656,19 @@ export class KiwiBuyerService {
     const action = guarded.action;
     if (action.status === "DONE") return action.result;
     if (action.status === "PENDING" || action.status === "APPROVED") return this.actionApproval(action);
-    const nativeKey = `company-rfq-${contentDigest([ref.case_id, input.idempotency_key])}`;
-    if (!guarded.dispatch && !this.store.findTaskByIdempotencyKey(this.ownerHash, nativeKey)) {
-      return action.result ?? { action_id: action.id, status: "UNKNOWN" };
-    }
+    if (action.status === "REVOKED") procurementError("PROCUREMENT_APPROVAL_REVOKED: submit a new request for approval");
     const boundSource: Source = ref.replaces_source_id ? { ...source,
       id: `source-${action.id}`, replaces_source_id: ref.replaces_source_id, task_id: undefined, candidate_id: undefined } : source;
-    try {
-      const result = await this.requestQuotes({ intent, merchant_ids: [merchant], idempotency_key: nativeKey, beforeSend: () => cases.assertDispatchable(action.id) });
-      const candidates = Array.isArray(result.task.candidates) ? result.task.candidates.map(asRecord) : [];
-      const candidate = candidates.find(entry => entry.status === "succeeded" && entry.merchant_id === merchant);
-      const taskId = String(result.task.task_id);
-      const status = result.task.status === "in_progress" ? "UNKNOWN" : "DONE";
-      return cases.completeAction(action.id, status, { ...result, task_id: taskId, action_id: action.id, status },
-        candidate || !ref.replaces_source_id ? { source: boundSource, task_id: taskId, candidate_id: typeof candidate?.candidate_id === "string" ? candidate.candidate_id : undefined } : undefined);
-    } catch (error) {
-      cases.completeAction(action.id, "UNKNOWN", { action_id: action.id, status: "UNKNOWN" });
-      throw error;
-    }
+    const result = await this.requestQuotes({ intent, merchant_ids: [merchant], idempotency_key: nativeKey, beforeSend: () => cases.assertDispatchable(action.id) });
+    const candidates = Array.isArray(result.task.candidates) ? result.task.candidates.map(asRecord) : [];
+    const candidate = candidates.find(entry => entry.status === "succeeded" && entry.merchant_id === merchant);
+    const taskId = String(result.task.task_id);
+    const status = result.task.status === "in_progress" ? "UNKNOWN" : "DONE";
+    // A concurrent reader may see the reserved task before its creator sends.
+    // Do not change the action or case revision underneath that sender.
+    if (!result.created && status === "UNKNOWN") return { ...result, task_id: taskId, action_id: action.id, status };
+    return cases.completeAction(action.id, status, { ...result, task_id: taskId, action_id: action.id, status },
+      candidate || !ref.replaces_source_id ? { source: boundSource, task_id: taskId, candidate_id: typeof candidate?.candidate_id === "string" ? candidate.candidate_id : undefined } : undefined);
   }
 
   private actionApproval(action: ProcurementAction) {
@@ -693,14 +691,16 @@ export class KiwiBuyerService {
     if (!source?.merchant_id || row?.offer_digest !== input.expected_offer_digest || row.price_kind !== "KNP_OFFER")
       procurementError("TARGET_REQUIRED_OR_OFFER_CHANGED");
     const merchant = source.merchant_id;
-    const questions = input.questions?.map(question => ({ field: question.field, reason: question.reason }));
+    // Only fields validated against the snapshot may cross the merchant boundary.
+    // Keep the original request in the local approval and idempotency record.
+    const questions = input.questions?.map(({ field }) => ({ field }));
     const target = input.target_unit_price;
     const payload = { ...payloadInput, ref, source_key: contentDigest([merchant, source.variant, historical.basis_digest]),
       merchant_id: merchant, proposed_terms: target ? { items: [{ sku: source.variant, quantity: { value: historical.basis.quantity, unit: historical.basis.unit },
         unit_price: { currency: target.currency, amount_minor: target.amount_minor, basis: target.basis } }] } : undefined };
     const guarded = cases.bindAction({ case_ref: ref, operation: input.action, request_id: input.request_id,
       payload, approval_id: input.approval_id, auto: this.policy.policy_id !== "dp-default" && this.policy.actions[input.action]?.mode === "auto" &&
-        (input.action === "counter_offer" || questions?.every(question => !question.reason) === true), validate: current => {
+        (input.action === "counter_offer" || input.questions?.every(question => !question.reason) === true), validate: current => {
         this.procurementMode(input.action, merchant, true);
         const candidate = this.store.listCandidates(input.task_id).find(entry => entry.candidate_id === input.candidate_id);
         const provenance = asRecord(candidate?.provenance);

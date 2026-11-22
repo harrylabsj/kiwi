@@ -85,7 +85,8 @@ function csvCell(value: unknown): string {
   return '"' + (/^[\s]*[=+\-@\t\r\n]/.test(string) ? "'" : "") + string.replaceAll('"', '""') + '"';
 }
 function mdCell(value: unknown): string {
-  return String(value ?? "待核对").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replace(/[|\r\n]/g, " ");
+  return String(value ?? "待核对").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+    .replaceAll("[", "&#91;").replaceAll("]", "&#93;").replace(/[|\r\n]/g, " ");
 }
 function render(caseData: Case, comparison: Pick<Comparison, "id" | "revision" | "evaluated_at" | "data">) {
   const { basis, coverage, decisions } = caseData;
@@ -377,7 +378,8 @@ export class ProcurementCases {
   bindAction(args: {
     case_ref: CaseRef; operation: ProcurementAction["operation"]; request_id: string;
     payload: Record<string, unknown>; approval_id?: string; auto?: boolean;
-    validate(current: Case): void;
+    rfqTaskMissing?: () => boolean;
+    validate(current: Case, resumingId?: string): void;
   }): { action: ProcurementAction; dispatch: boolean } {
     this.getCase(args.case_ref.case_id);
     const digest = contentDigest(args.payload);
@@ -385,7 +387,21 @@ export class ProcurementCases {
       const id = this.replay<string>(args.operation, args.request_id, digest);
       let action = id === undefined ? undefined : this.getAction(id);
       if (action && (action.status === "DONE" || action.status === "IN_FLIGHT" || action.status === "UNKNOWN")) {
-        return { action, dispatch: false };
+        if (action.status === "DONE" || !args.rfqTaskMissing?.()) return { action, dispatch: false };
+        // No native reservation means this RFQ could not have been sent. The
+        // unique native task key still arbitrates concurrent callers after commit.
+        const current = this.getCase(action.case_id);
+        const authorizationExpired = Date.parse(action.expires_at) <= Date.parse(this.deps.now());
+        // An automatic action has no human decision. Its exposed action ID
+        // cannot authorize a retry after delegation changes to "ask".
+        const needsNewApproval = !args.auto && this.store.read<ProcurementAction>(this.owner, "action", action.id, 1)?.status !== "PENDING";
+        if (authorizationExpired || needsNewApproval || current.state !== "ACTIVE" || current.revision !== action.case_revision) {
+          return { action: this.updateAction(action, { status: "REVOKED" }), dispatch: false };
+        }
+        if ((args.approval_id !== undefined || !args.auto) && args.approval_id !== action.id) fail("PROCUREMENT_APPROVAL_MISMATCH");
+        args.validate(current, action.id);
+        if (action.status === "UNKNOWN") action = this.updateAction(action, { status: "IN_FLIGHT" });
+        return { action, dispatch: true };
       }
       const current = this.active(args.case_ref);
       if (action?.status === "REVOKED") fail("PROCUREMENT_APPROVAL_REVOKED");
@@ -427,8 +443,8 @@ export class ProcurementCases {
     });
   }
 
-  followupCount(caseId: string, key: string, operation: ProcurementAction["operation"]): number {
-    return this.store.countActions(this.owner, caseId, key, operation);
+  followupCount(caseId: string, key: string, operation: ProcurementAction["operation"], resumingId?: string): number {
+    return this.store.countActions(this.owner, caseId, key, operation, resumingId);
   }
 
   append(current: Case, patch: Partial<Case>): Case {

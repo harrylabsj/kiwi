@@ -32,3 +32,6 @@ delivery/
 /docs/reviews/
 /docs/testing/
 *.bundle
+
+# Local WorkBuddy benchmark output
+/integrations/hosts/workbuddy/raw/scale-measurement.json

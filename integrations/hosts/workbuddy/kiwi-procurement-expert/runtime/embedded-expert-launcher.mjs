@@ -13,7 +13,7 @@ const sessionDirectory = join(sourceRoot, 'buyer');
 const startupHoldCodes = new Set([
   'EXPERT_DATA_UNAVAILABLE', 'INSTANCE_DATA_NOT_PRIVATE', 'INSTANCE_DATA_UNAVAILABLE',
   'INSTANCE_STATE_CONFLICT', 'INSTANCE_STATE_CORRUPT', 'INSTANCE_STATE_INCOMPLETE',
-  'TOOL_BASELINE_INVALID', 'EXPERT_SERVER_NAME_INVALID',
+  'TOOL_BASELINE_INVALID', 'EXPERT_SERVER_NAME_INVALID', 'NODE_VERSION_UNSUPPORTED',
 ]);
 
 async function main() {
@@ -22,6 +22,10 @@ async function main() {
   const configPath = join(sourceRoot, 'expert-config.json');
   const config = existsSync(configPath) ? JSON.parse(readFileSync(configPath, 'utf8')) : undefined;
   const company = config !== undefined;
+  if (company) {
+    const [major, minor] = process.versions.node.split('.').map(Number);
+    if (major < 22 || (major === 22 && minor < 19)) throw new Error('NODE_VERSION_UNSUPPORTED');
+  }
   if (company && (config.profile !== 'company-procurement-v1' ||
       config.namespace !== '.kiwi-workbuddy-company-procurement-v1' || serverName !== 'kiwi-company-procurement-buyer')) {
     throw new Error('TOOL_BASELINE_INVALID');

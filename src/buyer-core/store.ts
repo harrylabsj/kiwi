@@ -27,7 +27,7 @@
  */
 
 import { ProcurementStore } from "./procurement/store.js";
-import { mkdirSync, chmodSync, existsSync } from "node:fs";
+import { mkdirSync, chmodSync, closeSync, constants, fchmodSync, openSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ReceiptOutbox } from "../commerce/receipt/receipts.js";
@@ -146,7 +146,7 @@ export class TaskApprovalStore {
       const dir = path.dirname(options.dbPath);
       mkdirSync(dir, { recursive: true, mode: 0o700 });
       this.db = new DatabaseSync(options.dbPath);
-      if (existsSync(options.dbPath)) chmodSync(options.dbPath, 0o600);
+      chmodSync(options.dbPath, 0o600);
     }
     // busy_timeout must be set before WAL or any schema DDL: journal_mode=WAL
     // itself needs a lock, and the previous order failed before the timeout
@@ -155,6 +155,22 @@ export class TaskApprovalStore {
     this.db.exec("PRAGMA foreign_keys = ON");
     withInitRetry(() => this.db.exec("PRAGMA journal_mode = WAL"));
     withInitRetry(() => this.migrate());
+    if (options.dbPath !== ":memory:") {
+      for (const suffix of ["-wal", "-shm"]) {
+        let fd: number;
+        try {
+          fd = openSync(options.dbPath + suffix, constants.O_RDONLY | constants.O_NOFOLLOW);
+        } catch (error) {
+          if (error instanceof Error && "code" in error && error.code === "ENOENT") continue;
+          throw error;
+        }
+        try {
+          fchmodSync(fd, 0o600);
+        } finally {
+          closeSync(fd);
+        }
+      }
+    }
   }
 
   openProcurementStore(): ProcurementStore {

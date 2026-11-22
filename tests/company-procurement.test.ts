@@ -1,7 +1,7 @@
-import { chmodSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeCosts, type QuoteCosts } from "../src/buyer-core/procurement/quote-normalizer.js";
 import { projectRequirements, REQUIREMENTS_KEY } from "../src/buyer-core/procurement/requirements.js";
 import { TaskApprovalStore } from "../src/buyer-core/store.js";
@@ -81,6 +81,16 @@ describe("company procurement cost and case integrity", () => {
     const first = make("same-owner");
     expect(buildKiwiTools(first.service)).toHaveLength(13);
     expect(first.tools).toHaveLength(17);
+    for (const suffix of ["", "-wal", "-shm"]) expect(statSync(dbPath + suffix).mode & 0o777).toBe(0o600);
+    for (const name of ["kiwi_get_task", "kiwi_get_agreement", "kiwi_handoff"]) {
+      const missing = await first.raw(name, {});
+      expect(missing.isError).toBe(true);
+      expect(missing.content[0]?.text).toContain("invalid_params");
+    }
+    const failure = vi.spyOn(first.service, "getTask").mockImplementationOnce(() => { throw new Error(dbPath); });
+    expect((await first.raw("kiwi_get_task", { task_id: "example" })).content[0]?.text)
+      .toBe("error internal_error: Tool operation failed");
+    failure.mockRestore();
     expect((await first.raw("kiwi_prepare_procurement", { operation: "create", request_id: "invalid", basis, owner: "foreign" })).isError).toBe(true);
     const inputLines = ["one", "two", "three"].map(input_line_id => ({ input_line_id, raw: input_line_id }));
     const { group } = await first.call("kiwi_prepare_procurement", { operation: "register_group", request_id: "group-1", lines: inputLines });
@@ -145,7 +155,7 @@ describe("company procurement through native A2A and external source capture", (
       mkdirSync(captureRoot, { mode: 0o700 });
       writeFileSync(join(captureRoot, "verified-b.json"), JSON.stringify({
         name: "Platform supplier", variant: "platform-sku-b", price_kind: "SUPPLIER_QUOTE",
-        evidence: { reference: "fixture-quote.pdf#page=1", captured_at: new Date().toISOString(),
+        evidence: { reference: "[fixture-quote.pdf#page=1](example)", captured_at: new Date().toISOString(),
           valid_until: new Date(Date.now() + 3600000).toISOString() },
         product: { model: basis.model, values: { warranty: 36 }, supplier_ref: "verified-company-2", verified_kiwi_merchant_id: "merchant-001", stock_quantity: 120,
           arrived_by: new Date(Date.now() + 3 * 86400000).toISOString(), destination: "北京" },
@@ -153,8 +163,9 @@ describe("company procurement through native A2A and external source capture", (
           charges: [{ ...costs.charges![0], amount_minor: 10000 }] },
       }), { mode: 0o600 });
       let confirm = false;
+      let clockOffset = 0;
       const service = new KiwiBuyerService({ store, principal: "workbuddy-test", buyerAgentId: "buyer:company", sessionId: "company",
-        delegationPolicy: DEFAULT_DELEGATION_POLICY, merchantIndex: { search: async () => [merchant], resolveById: async id => id === merchant.merchant_id ? merchant : undefined },
+        now: () => new Date(Date.now() + clockOffset).toISOString(), delegationPolicy: DEFAULT_DELEGATION_POLICY, merchantIndex: { search: async () => [merchant], resolveById: async id => id === merchant.merchant_id ? merchant : undefined },
         quoteFetcher: new A2AQuoteFetcher(protocol), negotiator: new A2ANegotiator(protocol) });
       const { call, raw } = toolClient(service, { captureRoot, confirm: async () => confirm });
       const created = await call("kiwi_prepare_procurement", { operation: "create", request_id: "create", basis });
@@ -168,13 +179,37 @@ describe("company procurement through native A2A and external source capture", (
         merchant_ids: ["merchant-001"], idempotency_key: "first-rfq",
         procurement_ref: { case_id: attached.case.id, revision: attached.case.revision, source_binding_id: "a" } };
       expect(await raw("kiwi_request_quotes", { ...args, merchant_ids: ["merchant-001", "merchant-x"] })).toMatchObject({ isError: true });
+      const expiring = { ...args, idempotency_key: "expired-before-reservation" };
+      const expiringDraft = await call("kiwi_request_quotes", expiring);
+      confirm = true;
+      const expiredId = expiringDraft.approval_required.approval_id;
+      await call("kiwi_approve", { approval_id: expiredId });
+      vi.spyOn(store, "createTask").mockImplementationOnce(() => { throw new Error("interrupted"); });
+      expect((await raw("kiwi_request_quotes", { ...expiring, approval_id: expiredId })).isError).toBe(true);
+      clockOffset = 16 * 60_000;
+      expect((await raw("kiwi_request_quotes", { ...expiring, approval_id: expiredId })).content[0]?.text).toContain("REVOKED");
+      expect(capture).toHaveLength(0);
+      clockOffset = 0;
+      confirm = false;
       const draft = await call("kiwi_request_quotes", args);
       expect(capture).toHaveLength(0);
       const approvalId = draft.approval_required.approval_id;
       expect(await raw("kiwi_approve", { approval_id: approvalId })).toMatchObject({ isError: true });
       confirm = true;
       await call("kiwi_approve", { approval_id: approvalId });
-      const first = await call("kiwi_request_quotes", { ...args, approval_id: approvalId });
+      const approved = { ...args, approval_id: approvalId };
+      // Stop between the authorization commit and the native task reservation.
+      const reservation = vi.spyOn(store, "createTask").mockImplementationOnce(() => { throw new Error("interrupted"); });
+      expect((await raw("kiwi_request_quotes", approved)).isError).toBe(true);
+      reservation.mockRestore();
+      expect(capture).toHaveLength(0);
+      expect(service.companyProcurement().getAction(approvalId).status).toBe("IN_FLIGHT");
+      await expect(service.requestProcurementQuotes({ ...approved, approval_id: "wrong" })).rejects.toThrow("APPROVAL_MISMATCH");
+      // Older releases persisted UNKNOWN for the same pre-reservation failure.
+      service.companyProcurement().completeAction(approvalId, "UNKNOWN", { status: "UNKNOWN" });
+      const attempts = await Promise.all([call("kiwi_request_quotes", approved), call("kiwi_request_quotes", approved)]);
+      const first = await call("kiwi_request_quotes", approved);
+      expect(attempts.map(result => result.task_id)).toEqual([first.task_id, first.task_id]);
       expect(transportError).toBeUndefined();
       expect(first.task.status, JSON.stringify(first.task.candidates)).toBe("succeeded");
       expect(await call("kiwi_request_quotes", { ...args, approval_id: approvalId })).toEqual(first);
@@ -194,15 +229,17 @@ describe("company procurement through native A2A and external source capture", (
       ]));
       expect(snapshot.data.recommendation).toBe("b");
       expect(snapshot.csv).toContain("1360000");
-      expect(snapshot.markdown).toContain("fixture-quote.pdf#page=1");
+      expect(snapshot.markdown).toContain("&#91;fixture-quote.pdf#page=1&#93;(example)");
 
       const action = { request_id: "clarification-1", task_id: first.task_id, candidate_id: first.task.candidates[0].candidate_id,
         expected_offer_digest: snapshot.data.rows[0].offer_digest, comparison_ref: { comparison_id: snapshot.id, revision: snapshot.revision },
-        action: "clarification", questions: [{ field: "requirement:warranty:NOT_MET" }] };
+        action: "clarification", questions: [{ field: "requirement:warranty:NOT_MET", reason: "internal cost center ACCT-789" }] };
       const clarification = await call("kiwi_negotiate", action);
       await call("kiwi_approve", { approval_id: clarification.approval_required.approval_id });
       const sent = await call("kiwi_negotiate", { ...action, approval_id: clarification.approval_required.approval_id });
       expect(sent.status).toBe("DONE");
+      expect(JSON.stringify(capture[1])).toContain("requirement:warranty:NOT_MET");
+      expect(JSON.stringify(capture[1])).not.toContain("ACCT-789");
       expect(capture.map(event => event.action)).toEqual(["rfq", "clarification"]);
       expect(await call("kiwi_negotiate", action)).toEqual(sent);
 
@@ -211,7 +248,10 @@ describe("company procurement through native A2A and external source capture", (
         revision: current.revision, replaces_source_id: "a" } };
       const requoteDraft = await call("kiwi_request_quotes", requote);
       await call("kiwi_approve", { approval_id: requoteDraft.approval_required.approval_id });
-      const next = await call("kiwi_request_quotes", { ...requote, approval_id: requoteDraft.approval_required.approval_id });
+      const approvedRequote = { ...requote, approval_id: requoteDraft.approval_required.approval_id };
+      vi.spyOn(store, "createTask").mockImplementationOnce(() => { throw new Error("interrupted"); });
+      expect((await raw("kiwi_request_quotes", approvedRequote)).isError).toBe(true);
+      const next = await call("kiwi_request_quotes", approvedRequote);
       expect(next.task_id).not.toBe(first.task_id);
       const later = (await call("kiwi_get_procurement", { operation: "get", case_id: current.id })).case;
       const refreshed = await call("kiwi_compare_quotes", { operation: "refresh", request_id: "refresh",

@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   checkEmbeddedExpertRuntime, embeddedExpertLauncher, packageEmbeddedExpert,
-  validateExpertAvatar, validateExpertDisplay, validateExpertToolReferences,
+  validateExpertAvatar, validateExpertDisplay, validateExpertFrontmatter, validateExpertToolReferences,
 } from './package-embedded-expert.mjs';
 
 const bundle = join(dirname(fileURLToPath(import.meta.url)), 'kiwi-company-procurement-expert');
@@ -31,9 +31,11 @@ assert.equal(meta.agents.length, 1);
 assert.equal(meta.skills.length, 3);
 assert(meta.agents.every(file => files.includes(file.slice(2))));
 assert(meta.skills.every(dir => files.includes(dir.slice(2) + '/SKILL.md')));
+validateExpertFrontmatter(meta, read);
+assert.equal(meta.categoryId, '12-IndustryConsultant');
 assert(files.includes(meta.avatar));
 validateExpertAvatar(readFileSync(join(bundle, meta.avatar)));
-assert.equal(meta.version, '1.0.1');
+assert.equal(meta.version, '1.0.2');
 assert.equal(meta.dependencies.mcpServers, './.mcp.json');
 assert(!meta.dependencies.connectors?.length);
 assert.deepEqual(Object.keys(mcp.mcpServers), [serverName]);
@@ -41,7 +43,10 @@ const server = mcp.mcpServers[serverName];
 assert.equal(server.type, 'stdio');
 assert.equal(server.command, 'node');
 assert.deepEqual(server.args, [embeddedExpertLauncher, serverName]);
-assert.equal(server['x-workbuddy'].auth.type, 'none');
+assert.deepEqual(server.runtime, { type: 'node', version: '22' });
+assert.equal(server.timeout, 30_000);
+assert.deepEqual(server.env, { LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8' });
+assert.deepEqual(server['x-workbuddy'].auth, { type: 'none' });
 assert.deepEqual(config, { profile, namespace: '.kiwi-workbuddy-company-procurement-v1' });
 checkEmbeddedExpertRuntime();
 const instructions = files.filter(file => file.endsWith('.md')).map(read).join('\n');

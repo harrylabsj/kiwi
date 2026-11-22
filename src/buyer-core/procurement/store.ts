@@ -15,18 +15,21 @@ export class ProcurementStore {
   }
 
   actions<T>(owner: string, caseId: string): T[] {
-    return this.db.prepare(`SELECT payload FROM mcp_company_procurement_versions
-      WHERE owner=? AND kind='action' AND json_extract(payload, '$.case_id')=?
-      GROUP BY id HAVING MAX(revision) ORDER BY id`).all(owner, caseId)
+    return this.db.prepare(`SELECT payload FROM (
+      SELECT id, payload, ROW_NUMBER() OVER (PARTITION BY id ORDER BY revision DESC) AS rank
+      FROM mcp_company_procurement_versions WHERE owner=? AND kind='action' AND json_extract(payload, '$.case_id')=?
+    ) WHERE rank=1 ORDER BY id`).all(owner, caseId)
       .map(row => JSON.parse(String(row.payload)) as T);
   }
 
-  countActions(owner: string, caseId: string, sourceKey: string, operation: string): number {
-    const row = this.db.prepare(`SELECT COUNT(DISTINCT id) AS count FROM mcp_company_procurement_versions
-      WHERE owner=? AND kind='action'
+  countActions(owner: string, caseId: string, sourceKey: string, operation: string, resumingId?: string): number {
+    const row = this.db.prepare(`SELECT COUNT(*) AS count FROM (
+      SELECT payload, ROW_NUMBER() OVER (PARTITION BY id ORDER BY revision DESC) AS rank
+      FROM mcp_company_procurement_versions WHERE owner=? AND kind='action' AND id IS NOT ?
       AND json_extract(payload, '$.case_id')=? AND json_extract(payload, '$.operation')=?
       AND json_extract(payload, '$.payload.source_key')=?
-      AND json_extract(payload, '$.status') IN ('IN_FLIGHT', 'UNKNOWN', 'DONE')`).get(owner, caseId, operation, sourceKey);
+    ) WHERE rank=1 AND json_extract(payload, '$.status') IN ('IN_FLIGHT', 'UNKNOWN', 'DONE')`)
+      .get(owner, resumingId ?? null, caseId, operation, sourceKey);
     return Number(row?.count ?? 0);
   }
 
@@ -45,8 +48,10 @@ export class ProcurementStore {
   }
 
   list<T>(owner: string, kind: string, limit: number, offset: number): T[] {
-    return this.db.prepare(`SELECT payload FROM mcp_company_procurement_versions WHERE owner=? AND kind=?
-      GROUP BY id HAVING MAX(revision) ORDER BY id DESC LIMIT ? OFFSET ?`).all(owner, kind, limit, offset)
+    return this.db.prepare(`SELECT payload FROM (
+      SELECT id, payload, ROW_NUMBER() OVER (PARTITION BY id ORDER BY revision DESC) AS rank
+      FROM mcp_company_procurement_versions WHERE owner=? AND kind=?
+    ) WHERE rank=1 ORDER BY id DESC LIMIT ? OFFSET ?`).all(owner, kind, limit, offset)
       .map(row => JSON.parse(String(row.payload)) as T);
   }
 

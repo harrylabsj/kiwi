@@ -45,6 +45,12 @@ function counterTarget(value: unknown): { currency: string; amount_minor: number
   throw new McpError("invalid_params", "请提供还价币种和正整数最小货币单位金额。");
 }
 
+function requiredString(args: Record<string, unknown>, key: string): string {
+  const value = args[key];
+  if (typeof value !== "string" || !value.trim()) throw new McpError("invalid_params", `Expected a non-empty ${key}`);
+  return value;
+}
+
 function ok(text: string): McpCallToolResult {
   return { content: [{ type: "text", text }] };
 }
@@ -64,7 +70,7 @@ function err(error: unknown): McpCallToolResult {
     content: [
       {
         type: "text",
-        text: `error internal_error: ${error instanceof Error ? error.message : String(error)}`,
+        text: "error internal_error: Tool operation failed",
       },
     ],
     isError: true,
@@ -117,7 +123,7 @@ export function buildKiwiTools(service: KiwiBuyerService, profile: BuyerToolProf
       async handle(args) {
         try {
           const result = await service.search({
-            query: String(args.query),
+            query: requiredString(args, "query"),
             category: args.category === undefined ? undefined : String(args.category),
           });
           // 旧字段 merchants/note 原样保留（已发布宿主在用）；
@@ -236,7 +242,7 @@ export function buildKiwiTools(service: KiwiBuyerService, profile: BuyerToolProf
       },
       async handle(args) {
         try {
-          return ok(JSON.stringify(service.getTask(String(args.task_id))));
+          return ok(JSON.stringify(service.getTask(requiredString(args, "task_id"))));
         } catch (error) {
           return err(error);
         }
@@ -271,11 +277,11 @@ export function buildKiwiTools(service: KiwiBuyerService, profile: BuyerToolProf
         try {
           const target = counterTarget(args.target_unit_price);
           const result = await service.negotiate({
-            task_id: String(args.task_id),
+            task_id: requiredString(args, "task_id"),
             action: args.action as "counter_offer" | "clarification",
-            ...(args.candidate_id !== undefined ? { candidate_id: String(args.candidate_id) } : {}),
+            ...(args.candidate_id !== undefined ? { candidate_id: requiredString(args, "candidate_id") } : {}),
             ...(target ? { target_unit_price: target } : {}),
-            summary: String(args.summary),
+            summary: requiredString(args, "summary"),
           });
           return ok(JSON.stringify(result));
         } catch (error) {
@@ -307,15 +313,15 @@ export function buildKiwiTools(service: KiwiBuyerService, profile: BuyerToolProf
       async handle(args) {
         try {
           const result = await service.acceptAgreement({
-            task_id: String(args.task_id),
-            candidate_id: String(args.candidate_id),
-            approval_id: args.approval_id === undefined ? undefined : String(args.approval_id),
+            task_id: requiredString(args, "task_id"),
+            candidate_id: requiredString(args, "candidate_id"),
+            approval_id: args.approval_id === undefined ? undefined : requiredString(args, "approval_id"),
           });
           return ok(JSON.stringify(result));
         } catch (error) {
           return approvalRequiredOrErr(error, {
-            task_id: String(args.task_id),
-            candidate_id: String(args.candidate_id),
+            task_id: args.task_id,
+            candidate_id: args.candidate_id,
           });
         }
       },
@@ -336,7 +342,7 @@ export function buildKiwiTools(service: KiwiBuyerService, profile: BuyerToolProf
       },
       async handle(args) {
         try {
-          return ok(JSON.stringify(service.getAgreement(String(args.agreement_id))));
+          return ok(JSON.stringify(service.getAgreement(requiredString(args, "agreement_id"))));
         } catch (error) {
           return err(error);
         }
@@ -364,16 +370,16 @@ export function buildKiwiTools(service: KiwiBuyerService, profile: BuyerToolProf
       async handle(args) {
         try {
           const result = await service.handoff({
-            agreement_id: String(args.agreement_id),
-            approval_id: args.approval_id === undefined ? undefined : String(args.approval_id),
-            destination_type: String(args.destination_type),
+            agreement_id: requiredString(args, "agreement_id"),
+            approval_id: args.approval_id === undefined ? undefined : requiredString(args, "approval_id"),
+            destination_type: requiredString(args, "destination_type"),
             url: args.url === undefined ? undefined : String(args.url),
           });
           return ok(JSON.stringify(result));
         } catch (error) {
           return approvalRequiredOrErr(error, {
-            agreement_id: String(args.agreement_id),
-            destination_type: String(args.destination_type),
+            agreement_id: args.agreement_id,
+            destination_type: args.destination_type,
           });
         }
       },
@@ -400,7 +406,7 @@ export function buildKiwiTools(service: KiwiBuyerService, profile: BuyerToolProf
           return ok(
             JSON.stringify(
               service.approve({
-                approval_id: String(args.approval_id),
+                approval_id: requiredString(args, "approval_id"),
                 note: args.note === undefined ? undefined : String(args.note),
               }),
             ),
@@ -432,7 +438,7 @@ export function buildKiwiTools(service: KiwiBuyerService, profile: BuyerToolProf
           return ok(
             JSON.stringify(
               service.reject({
-                approval_id: String(args.approval_id),
+                approval_id: requiredString(args, "approval_id"),
                 reason: args.reason === undefined ? undefined : String(args.reason),
               }),
             ),
