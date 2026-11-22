@@ -123,7 +123,7 @@ describe("买方已发布工具契约（冻结）", () => {
 
 describe("买方连接器身份（不随商家连接器改变）", () => {
   it.each([
-    ["kiwi-procurement-expert", "kiwi-procurement-buyer"],
+    ["kiwi-procurement-expert", "kiwi-procurement-buyer-1-1-11"],
     ["haina-ecommerce-expert", "kiwi-shopping-buyer"],
   ])("%s 使用随包运行时并保留自身的买方 MCP 标识", (expert, serverName) => {
     const base = path.join("integrations/hosts/workbuddy", expert);

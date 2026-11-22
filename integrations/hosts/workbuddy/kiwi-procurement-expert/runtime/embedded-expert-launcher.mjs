@@ -32,7 +32,7 @@ async function main() {
   }
   if (!company && serverName === 'kiwi-company-procurement-buyer') throw new Error('TOOL_BASELINE_INVALID');
   const profile = config?.profile ?? 'legacy13';
-  const dataDirectory = !company && serverName === 'kiwi-procurement-buyer'
+  const dataDirectory = !company && /^kiwi-procurement-buyer(?:-\d+-\d+-\d+)?$/.test(serverName)
     ? procurementDataDirectory()
     : expertDataDirectory(undefined, config?.namespace);
   const instance = prepareInstanceData(dataDirectory);

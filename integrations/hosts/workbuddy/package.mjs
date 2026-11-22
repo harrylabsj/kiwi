@@ -36,7 +36,7 @@ const mcp = JSON.parse(read(".mcp.json"));
 const servers = Object.entries(mcp.mcpServers ?? {});
 assert.equal(servers.length, 1);
 const [serverName, server] = servers[0];
-assert.equal(serverName, "kiwi-procurement-buyer");
+assert.equal(serverName, `kiwi-procurement-buyer-${manifest.version.replaceAll(".", "-")}`);
 assert.equal(server.type, "stdio");
 assert.equal(server.command, "node");
 assert.deepEqual(server.args, [embeddedExpertLauncher, serverName]);

@@ -7,9 +7,9 @@ description: Discover suppliers for the specified product using Kiwi, clarify mi
 
 ## 确认搜索范围和商品
 
-有任务号先回读；只比较给定材料或指定其他平台时按该范围核对。开放找货缺少商品词时，先向买家确认商品；有商品词时，单品与批量都先调用 `kiwi_search(query, category?)`，再按双来源规则比较。工具不可用时说明查询状态。
+有任务号先回读；只比较给定材料或指定其他平台时按该范围核对。开放找货缺少商品词时，先向买家确认商品；有商品词时，单品与批量都先调用 `kiwi_search(query, category?)`，仅列可询价名单时，直接依据 Kiwi 结果作答；需要跨渠道选购时再作双来源比较。工具不可用时说明查询状态。
 
-有外文商品原名时以原名作为 query，不附加预算、交期或中文译名。仅中文查询无匹配时，可用买家给出的原名再查一次。用短商品词调用 `kiwi_search(query, category?)`，发现 Kiwi Network 内的候选；本会话若提供互联网检索/网页读取工具，同轮再查一路外部电商商品，两路结果**分区展示**（见「双来源结果」）。只使用结果中的真实 merchant_id，买方不直连 shopping-cli 或另建本地 marketplace。
+有外文商品原名时以原名作为 query，不附加预算、交期或中文译名。仅中文查询无匹配时，可用买家给出的原名再查一次。用短商品词调用 `kiwi_search(query, category?)`，发现 Kiwi Network 内的候选；买家要求开放选购或对比外部平台且本会话有互联网检索/网页读取工具时，同轮再查一路外部电商商品，两路结果**分区展示**（见「双来源结果」）。只使用结果中的真实 merchant_id，买方不直连 shopping-cli 或另建本地 marketplace。
 
 Kiwi Network 搜索覆盖全球。调用 `kiwi_search` 时省略 `region`。有收货地和到货期限时，发现候选后再用这些条件确认交付。
 
@@ -30,7 +30,7 @@ Kiwi Network 搜索覆盖全球。调用 `kiwi_search` 时省略 `region`。有�
 
 ## 双来源结果
 
-采购搜索覆盖两个来源，分别展示、分别标注出处，不混成一张列表：
+只问可询价商家名单时，先交付命中商品、可询价商家和仍需确认的预算与交期；缺少报价时如实标明。需要跨平台比较时，采购搜索覆盖两个来源，分别展示、分别标注出处。
 
 | 来源 | 展示名称 | 谁提供 |
 |---|---|---|
@@ -67,7 +67,7 @@ Kiwi Network 搜索覆盖全球。调用 `kiwi_search` 时省略 `region`。有�
 买家可以显式关注商家、主动查看其公开动态（拉取式订阅）：
 
 - 只有买家**明确要求**“关注这个商家”时才调用 `kiwi_follow_merchant(merchant_id, category?, consent_version?)`；搜索、浏览公开资料、发起询价都不构成订阅，不得因这些行为替买家关注。可选 `category` 用于只关心某类目动态。
-- 买家问“我关注的商家有什么更新”时用 `kiwi_get_follow_updates`：返回按商家分组的公开事件（`product_added` / `product_updated` / `faq_updated` / `service_notice` / `publication_withdrawn`，只有公开字段），增量返回、看过后不重复。这些是商家发布的公开动态，不是实时库存/报价，也不是商家发给买家的消息——商家没有向关注者推送的通道。
+- 买家问“我关注的商家有什么更新”时用 `kiwi_get_follow_updates`：返回按商家分组的公开事件（`product_added` / `product_updated` / `faq_updated` / `service_notice` / `publication_withdrawn`，只有公开字段），按水位增量返回。只在处理结果已保存后，用各商家的 last_seen_at 作为 watermarks 确认；未确认的分组可重读。这些是商家发布的公开动态，不是实时库存/报价，也不是商家发给买家的消息——商家没有向关注者推送的通道。
 - 买家要求取消时用 `kiwi_unfollow_merchant`；买家想管理关注对象时用 `kiwi_list_follows` 展示当前活跃关注。取消后不再向买家展示该商家的更新。
 - 工具返回“需要先在 Kiwi 目录登录”或“会话已过期”时，如实转告买家并引导其完成 Kiwi 目录登录后重试；不得绕过、不得伪造买家身份。
 
