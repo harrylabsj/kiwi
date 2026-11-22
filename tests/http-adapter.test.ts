@@ -159,7 +159,7 @@ describe("kiwi-buyer-http（单核心多包装）", () => {
 
   it("POST /approvals 创建持久审批（宿主适配面）", async () => {
     const created = await call("POST", "/tasks", {
-      intent: { intent_id: "http-2", intent_type: "purchase", items: [{ query: "硒鼓" }] },
+      intent: { intent_id: "http-2", intent_type: "purchase", items: [{ query: "硒鼓", quantity: { value: 1, unit: "个" } }] },
       idempotency_key: "http-k2",
       merchant_ids: ["merchant-001"],
     });

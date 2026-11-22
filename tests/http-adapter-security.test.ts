@@ -85,7 +85,7 @@ describe("buyer HTTP 安全中间件（review P1-1）", () => {
     const ok = await fetch(`${base}/tasks`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: "Bearer sec-token-1" },
-      body: JSON.stringify({ intent: { intent_id: "sec-1", intent_type: "purchase", items: [{ query: "x" }] }, merchant_ids: ["merchant-001"] }),
+      body: JSON.stringify({ intent: { intent_id: "sec-1", intent_type: "purchase", items: [{ query: "x", quantity: { value: 1, unit: "个" } }] }, merchant_ids: ["merchant-001"] }),
     });
     expect(ok.status).toBe(201);
   });
