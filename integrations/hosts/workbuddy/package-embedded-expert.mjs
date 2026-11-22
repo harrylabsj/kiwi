@@ -115,6 +115,7 @@ export async function packageEmbeddedExpert({bundle, files, output, profile = 'l
     const stage = join(workspace, 'stage');
     const fixtureHome = join(workspace, 'fixture');
     const sources = new Map(files.map(file => [file.replace(/^\.\//, ''), join(bundle, file)]));
+    if (profile === 'legacy13') sources.set('runtime/mcp-tools-0.12.12-zh.json', join(sourcingRuntime, 'mcp-tools-0.12.12-zh.json'));
     for (const [file, source] of runtimeSources) sources.set(`runtime/${file}`, source);
     for (const [file, source] of sources) {
       const destination = join(stage, file);
@@ -144,7 +145,7 @@ export async function packageEmbeddedExpert({bundle, files, output, profile = 'l
         assert(followUpdates && index >= 0, 'Missing follow updates tool');
         baseline[index] = followUpdates;
         if (sources.has(`runtime/${file}`)) writeFileSync(join(stage, 'runtime', file), JSON.stringify(baseline));
-        enableTargetedNegotiation(baseline);
+        enableTargetedNegotiation(baseline, locale);
       }
       assert.equal((await probeMcpSchema({...probe, baseline, locale, profile})).toolCount, toolNames(profile).length);
     }

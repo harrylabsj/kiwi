@@ -11,10 +11,10 @@ import { test } from 'node:test';
 
 const root = resolve(process.argv[2]);
 // WorkBuddy's expert dependency loader resolves ./ arguments against .mcp.json.
-function launchExpert(config, stdio) {
+function launchExpert(config, stdio, env = process.env) {
   const cwd = process.argv[3] ?? root;
   const args = config.args.map(arg => arg.startsWith('./') ? resolve(root,arg) : arg);
-  return spawn(config.command,args,{cwd,stdio});
+  return spawn(config.command,args,{cwd,stdio,env});
 }
 const runtime = name => pathToFileURL(resolve(root, 'runtime', name));
 const core = name => import(runtime('buyer/node_modules/@harrylabsj/kiwi/dist/' + name));
@@ -29,10 +29,10 @@ const item = {sku:'LAMP',query:'desk lamp',quantity:{value:1,unit:'piece'}};
 const intent = {intent_id:'audit',intent_type:'inquiry',items:[item]};
 const frame = (method, params, id) => JSON.stringify({jsonrpc:'2.0',id,method,params})+'\n';
 
-await test('P1-4 / P2-1 · cold package entry, multi-item and missing quantity', {timeout:15000}, async () => {
+for (const locale of ['zh','en']) await test(`P1-4 / P2-1 · ${locale} packaged tools and real cold backend call`, {timeout:15000}, async () => {
   const [name, config] = Object.entries(JSON.parse(readFileSync(resolve(root,'.mcp.json'))).mcpServers)[0];
   const start = performance.now();
-  const child = launchExpert(config,['pipe','pipe','inherit']);
+  const child = launchExpert(config,['pipe','pipe','inherit'],{...process.env,...config.env,KIWI_LANG:locale});
   const closed = new Promise(resolve => child.on('close',resolve));
   const lines = createInterface({input:child.stdout})[Symbol.asyncIterator]();
   let id = 0;
@@ -49,6 +49,7 @@ await test('P1-4 / P2-1 · cold package entry, multi-item and missing quantity',
     child.stdin.write(frame('notifications/initialized',{}));
     const {tools} = await request('tools/list',{});
     assert.equal(tools.length,13);
+    for (const tool of tools) assert.equal(/\p{Script=Han}/u.test(tool.description),locale==='zh',tool.name);
     assert.ok(tools.find(t=>t.name==='kiwi_negotiate').inputSchema.properties.candidate_id);
     const rfq = {name:'kiwi_request_quotes',arguments:{intent,merchant_ids:[],idempotency_key:'cold-rfq'}};
     let result = await request('tools/call',rfq);

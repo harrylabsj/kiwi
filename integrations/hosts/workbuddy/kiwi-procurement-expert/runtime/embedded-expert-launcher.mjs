@@ -53,17 +53,22 @@ async function main() {
     environment.KIWI_PROCUREMENT_CAPTURE_DIRECTORY = join(dataDirectory, 'captures');
   }
   let baseline;
+  const explicit = environment.KIWI_LANG?.trim();
+  const language = /^(?:zh|en)(?:[-_.@]|$)/i.test(explicit ?? '') ? explicit : (environment.LANG || environment.LC_ALL || 'en');
+  const locale = /^zh(?:[-_.@]|$)/i.test(language) ? 'zh' : 'en';
+  environment.KIWI_LANG = locale;
   try {
-    const chinese = /^zh/i.test(environment.KIWI_LANG ?? environment.LANG ?? environment.LC_ALL ?? '');
-    const file = company ? `mcp-tools-company-${chinese ? 'zh' : 'en'}.json` : 'mcp-tools-0.12.12.json';
+    const file = company ? `mcp-tools-company-${locale}.json`
+      : locale === 'zh' ? 'mcp-tools-0.12.12-zh.json' : 'mcp-tools-0.12.12.json';
     baseline = JSON.parse(readFileSync(join(sourceRoot, file), 'utf8'));
     checkToolContract(baseline, baseline, profile);
-  } catch {
-    throw new Error('TOOL_BASELINE_INVALID');
-  }
-  if (!company) enableTargetedNegotiation(baseline);
-  if (environment.KIWI_QUOTE_HISTORY_DELEGATION === 'true') {
-    enableQuoteHistory(baseline);
+    if (!company) enableTargetedNegotiation(baseline, locale);
+    if (environment.KIWI_QUOTE_HISTORY_DELEGATION === 'true') enableQuoteHistory(baseline);
+  } catch (error) {
+    const detail = error.contractDetail ?? (error.code === 'ENOENT' ? 'FILE_MISSING'
+      : error instanceof SyntaxError ? 'INVALID_JSON' : 'VALIDATION_FAILED');
+    process.stderr.write(`KIWI_BASELINE_DIAGNOSTIC:${detail}\n`);
+    throw new Error('TOOL_BASELINE_INVALID',{cause:error});
   }
   const server = startProductionMcpServer({
     input: process.stdin,
