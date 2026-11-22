@@ -76,6 +76,31 @@ describe("受控嵌套事务（savepoint）", () => {
     }
   });
 
+  it.each([false, true])("manual WAL read transactions leave the writer slot free (hide flag=%s)", hide => {
+    const dir = mkdtempSync(join(tmpdir(), "kiwi-read-tx-"));
+    const file = join(dir, "ledger.sqlite");
+    const reader = new DatabaseSync(file);
+    const writer = new DatabaseSync(file);
+    const conn = hide ? hideIsTransaction(reader) : reader;
+    try {
+      reader.exec("PRAGMA journal_mode=WAL; CREATE TABLE entry(n); BEGIN; SELECT * FROM entry");
+      writer.exec("BEGIN IMMEDIATE");
+      inImmediateTransaction(conn, () => {
+        inImmediateTransaction(conn, () => reader.prepare("SELECT * FROM entry").all());
+      });
+      writer.exec("ROLLBACK");
+      // A failed immediate probe could also hold the slot after the callback.
+      inImmediateTransaction(conn, () => reader.prepare("SELECT * FROM entry").all());
+      writer.exec("BEGIN IMMEDIATE; ROLLBACK");
+      reader.exec("ROLLBACK");
+      endTransactionBoundary(conn);
+    } finally {
+      writer.close();
+      reader.close();
+      rmSync(dir, {recursive: true, force: true});
+    }
+  });
+
   function ids(): string[] {
     return (db.prepare("SELECT id FROM rows ORDER BY id").all() as Array<{ id: string }>).map(
       (row) => row.id,
@@ -451,7 +476,7 @@ describe("受控嵌套事务（savepoint）", () => {
 
   it("审查项（Node 23 模拟，无 isTransaction）：手工边界场景与 Node 22 行为一致", () => {
     // DeepSeek 在真实 Node 23.11.1 复现 poison 永久滞留；本地以 Proxy 隐藏
-    // isTransaction 模拟该运行时（实现已不读取该属性，22/23 行为一致）。
+    // isTransaction 模拟该运行时（走 BEGIN DEFERRED 回退探针）。
     const conn = new Proxy(db, {
       get(target, prop) {
         if (prop === "isTransaction") return undefined;

@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadProfile } from "../src/config/profile.js";
-import { merchantInit } from "../src/product-init.js";
+import { generateMerchantId, merchantInit, slugifyMerchantId } from "../src/product-init.js";
 
 function tmpDir(): string {
   return mkdtempSync(path.join(tmpdir(), "kiwi-init-"));
@@ -347,4 +347,11 @@ describe("merchant init (D1)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+
+it("uses a 96-bit suffix for generated merchant IDs and preserves named IDs", () => {
+  expect(generateMerchantId()).toMatch(/^merchant-[a-f0-9]{24}$/);
+  expect(slugifyMerchantId("!!!")).toMatch(/^merchant-[a-f0-9]{24}$/);
+  expect(slugifyMerchantId("Acme Shop")).toBe("acme-shop");
 });

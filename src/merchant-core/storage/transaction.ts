@@ -61,9 +61,8 @@ import type { DatabaseSync } from "node:sqlite";
 
 /**
  * 连接上的 wrapper 记账：depth = 当前事务上下文层数；kind = 最外层边界的
- * 归属（wrapper 自有 / 手工 BEGIN）。Node 22.19–23.x 的 node:sqlite 没有
- * `isTransaction` 属性，手工边界在**首次 wrapper 接触**时登记（见
- * inImmediateTransaction 的 within-transaction 捕获路径）。
+ * 归属（wrapper 自有 / 手工 BEGIN）。手工边界在首次 wrapper 接触时登记；
+ * 没有 isTransaction 的连接使用只读探测。
  */
 const txDepth = new WeakMap<DatabaseSync, number>();
 const txBoundaryKind = new WeakMap<DatabaseSync, "wrapper" | "manual">();
@@ -114,9 +113,7 @@ export class TransactionBoundaryUncertainError extends Error {
 /**
  * 本 wrapper 是否已在当前连接上开启事务上下文。
  *
- * 只统计 wrapper 自己的深度——Node 22.19–23.x 的 node:sqlite 没有
- * `isTransaction` 属性（engines >=22.19.0 允许 Node 23），手工 BEGIN 的外层
- * 无法静态检测，由最外层 `BEGIN` 的冲突捕获兜底（见 `inImmediateTransaction`）。
+ * 只统计已登记的 wrapper 深度。尚未登记的手工 BEGIN 由 hasLiveTransaction 识别。
  */
 export function isInsideTransaction(db: DatabaseSync): boolean {
   return (txDepth.get(db) ?? 0) > 0;
@@ -165,46 +162,37 @@ export function markTransactionAborted(db: DatabaseSync): void {
   txPoisoned.add(db);
 }
 
-/**
- * 嵌套路径：显式 SAVEPOINT。内层成功 RELEASE 并入外层；抛错只回滚到进入点。
- *
- * **事务活性探针**（DeepSeek Node 22/23 实证的原子性缺陷修复）：depth>0 只
- * 说明"曾经进入过外层"，不保证事务仍存在——外层事务可能已被 fn 内的直接
- * 语句（`INSERT OR ROLLBACK`、`RAISE(ROLLBACK)` 触发器）自动回滚且错误被 fn
- * 吞掉。此时 SAVEPOINT 会在 autocommit 中开启隐式事务、RELEASE 即提交，
- * 外层 COMMIT 再失败也留下已落库数据。因此入口先以 `BEGIN IMMEDIATE` 探测：
- * - 失败（within a transaction）→ 外层事务存活 → 正常 SAVEPOINT；
- * - 成功（autocommit）→ 按下游上下文分级处置（见下），未观察到自动回滚且
- *   属手工边界的按全新事务执行（既有手工语义）；
- * - 其他失败（如忙锁）→ 无法安全进入 savepoint，fail-closed。
- * 探测不依赖 `isTransaction`（Node 22.19–23.x 无该属性），版本行为一致。
- *
- * **实质边界（不声称全路径零残留）**：探针只拦截"经 wrapper 的写入"。fn 在
- * 吞掉自动回滚错误后直接 `db.prepare(...).run()` 的裸写会在 autocommit 中
- * 逐条提交，wrapper 无法拦截——纪律：事务内的业务写必须经 repository/wrapper；
- * 详见 `inImmediateTransaction` 头注释。
- */
-function runSavepoint<T>(db: DatabaseSync, fn: () => T): T {
-  let probeAlive = false;
+/** Inspect manual transactions without promoting a WAL reader to a writer. */
+function hasLiveTransaction(db: DatabaseSync): boolean {
+  const active = db.isTransaction;
+  if (typeof active === "boolean") return active;
+  // Older node:sqlite has no flag. A plain BEGIN tests autocommit without a write lock.
   try {
+    db.exec("begin deferred");
+  } catch (error) {
+    if (isNestedTransactionError(error)) return true;
+    throw error;
+  }
+  db.exec("rollback"); // close only our newly opened, empty probe
+  return false;
+}
+
+function assertBoundaryAlive(db: DatabaseSync): void {
+  let cause: unknown;
+  try {
+    if (hasLiveTransaction(db)) return;
+    // The tracked transaction is gone. Preserve the original lock-error evidence
+    // for poisoned/uncertain boundaries without touching a live read transaction.
     db.exec("begin immediate");
-  } catch (probeErr) {
-    if (isNestedTransactionError(probeErr)) {
-      probeAlive = true;
-    } else {
-      handleStaleBoundary(db, probeErr);
-    }
+    db.exec("rollback");
+  } catch (error) {
+    cause = error;
   }
-  if (!probeAlive) {
-    // 探针成功 = autocommit：记账中的外层事务已死。回滚空探针（无业务写入）
-    // 后分级处置。
-    try {
-      db.exec("rollback");
-    } catch {
-      // 连接状态异常仍按 poison/uncertain 处理。
-    }
-    handleStaleBoundary(db, undefined);
-  }
+  handleStaleBoundary(db, cause);
+}
+
+/** The caller verified the outer boundary before creating a SAVEPOINT. */
+function runSavepoint<T>(db: DatabaseSync, fn: () => T): T {
   const depth = (txDepth.get(db) ?? 0) + 1;
   const name = `kiwi_tx_${depth}_${++savepointSeq}`;
   db.exec(`SAVEPOINT ${name}`);
@@ -269,15 +257,10 @@ export function endTransactionBoundary(db: DatabaseSync): void {
  *
  * - **最外层**：`BEGIN IMMEDIATE` → fn → COMMIT / ROLLBACK——语义与既有
  *   完全一致，不扩大；
- * - **嵌套**（本 wrapper 的外层，或手工 BEGIN 的外层——后者通过最外层
- *   `BEGIN` 报 "cannot start a transaction within a transaction" 捕获识别，
- *   并**登记边界归属**（kind=manual；Node 22.19–23.x 无 isTransaction 属性，
- *   首次 wrapper 接触即登记））：使用**显式 SAVEPOINT**——内层成功 `RELEASE`
- *   （并入外层；外层最终回滚时仍一并撤销）；内层抛错 `ROLLBACK TO` 进入点后
- *   `RELEASE` 再重抛。因此"内层写入后抛错、被外层捕获继续"时，内层部分写入
- *   **不提交**；每层失败只回滚到自己的进入点。
+ * - **嵌套**：通过连接状态或无写锁的 BEGIN DEFERRED 探针识别手工边界，
+ *   登记 kind=manual。使用显式 SAVEPOINT，内层失败只回滚到自己的进入点。
  * - **自动回滚恢复**：触发器 `RAISE(ROLLBACK)`、`INSERT OR ROLLBACK` 等会让
- *   SQLite 连事务一起回滚；嵌套入口的**事务活性探针**（见 runSavepoint）在
+ *   SQLite 连事务一起回滚；嵌套入口的**事务活性探针**（见 assertBoundaryAlive）在
  *   depth 失真时分级拒绝并标记 poisoned，随后的 ROLLBACK/COMMIT/RELEASE
  *   次生错误一律吞掉，重抛原始错误——不掩盖、零残留。
  *
@@ -298,19 +281,16 @@ export function inImmediateTransaction<T>(db: DatabaseSync, fn: () => T): T {
   if (txPoisoned.has(db)) throw new TransactionAutoRolledBackError();
   // 手工边界状态不确定（可能干净结束、也可能未观察的自动回滚）：同样拒绝。
   if (txUncertain.has(db)) throw new TransactionBoundaryUncertainError();
-  if (isInsideTransaction(db)) return runSavepoint(db, fn);
-  try {
-    db.exec("begin immediate");
-  } catch (err) {
-    // 手工 BEGIN 的外层（Node 22.19–23.x 无 isTransaction 可查）：登记边界
-    // 归属（首次 wrapper 接触）后转 SAVEPOINT。
-    if (isNestedTransactionError(err)) {
-      txDepth.set(db, 1);
-      txBoundaryKind.set(db, "manual");
-      return runSavepoint(db, fn);
-    }
-    throw err;
+  if (isInsideTransaction(db)) {
+    assertBoundaryAlive(db);
+    return runSavepoint(db, fn);
   }
+  if (hasLiveTransaction(db)) {
+    txDepth.set(db, 1);
+    txBoundaryKind.set(db, "manual");
+    return runSavepoint(db, fn);
+  }
+  db.exec("begin immediate");
   txDepth.set(db, 1);
   txBoundaryKind.set(db, "wrapper");
   try {

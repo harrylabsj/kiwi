@@ -183,6 +183,7 @@ import {
   reloadMerchantCredential,
   inspectMerchantCredentialStorage,
   merchantInit,
+  generateMerchantId,
   slugifyMerchantId,
 } from "./product-init.js";
 import readline from "node:readline";
@@ -2566,17 +2567,16 @@ async function cmdMerchantInit(args: ParsedArgs): Promise<number> {
       merchantToken = shoppingEnv === catalogEnv ? "" : (process.env[shoppingEnv] ?? "");
       if (merchantToken === "") merchantToken = await promptSecret("shopping-cli 商品服务令牌（回车稍后配置；输入不回显）: ");
     }
-    // TTY 下可全回车：merchant_id 自动生成（避免固定名碰撞）。
-    if (merchantId === "") merchantId = `merchant-${Math.random().toString(36).slice(2, 8)}`;
-    if (name === "") name = merchantId;
-  } else if (merchantId === "" && name === "") {
-    merchantId = `merchant-${Math.random().toString(36).slice(2, 8)}`;
-    name = merchantId;
-  } else {
-    // 系统补全：merchant_id 缺省从名称派生；名称缺省用 merchant_id。
-    if (merchantId === "") merchantId = slugifyMerchantId(name);
-    if (name === "") name = merchantId;
   }
+  if (merchantId === "") {
+    if (process.stdin.isTTY || name === "") {
+      merchantId = generateMerchantId();
+      process.stderr.write(`本次自动生成商家号 ${merchantId}。对接已有商家时请通过 --merchant-id 指定原商家号。\n`);
+    } else {
+      merchantId = slugifyMerchantId(name);
+    }
+  }
+  if (name === "") name = merchantId;
   const report = await merchantInit({
     merchantName: name,
     ...(merchantId !== "" ? { merchantId } : {}),

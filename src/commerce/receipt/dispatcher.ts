@@ -78,7 +78,9 @@ export class ReceiptDispatcher {
             this.outbox.markDelivered(entry.event_id);
             delivered += 1;
           } catch (err) {
-            if (err instanceof ReceiptHttpError && [400, 409, 413, 422].includes(err.status)) {
+            // An unchanged POST cannot correct a disallowed method or a retired
+            // endpoint. A 404 can be temporary during a Catalog rollout.
+            if (err instanceof ReceiptHttpError && [400, 405, 409, 410, 413, 422].includes(err.status)) {
               this.outbox.markBlocked(entry.event_id, err.message);
               this.logError(`receipt ${entry.event_id} requires correction`, err);
               continue;

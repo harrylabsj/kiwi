@@ -132,13 +132,17 @@ function trimEdgeDashes(value: string): string {
   return value.slice(start, end);
 }
 
+export function generateMerchantId(): string {
+  return `merchant-${randomBytes(12).toString("hex")}`;
+}
+
 export function slugifyMerchantId(name: string): string {
   // \u5165\u53c2\u662f**\u5546\u5bb6\u81ea\u5df1\u586b\u7684\u540d\u79f0**\uff0c\u957f\u5ea6\u7531\u8bf7\u6c42\u65b9\u51b3\u5b9a\uff1a\u6574\u6761\u94fe\u8def\u5fc5\u987b\u7ebf\u6027\u3002
   const slug = trimEdgeDashes(
     name.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-"),
   );
   if (slug !== "") return slug;
-  return `merchant-${randomBytes(3).toString("hex")}`;
+  return generateMerchantId();
 }
 
 export interface MerchantInitOptions {

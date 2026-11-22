@@ -313,7 +313,8 @@ export class BuyerFollowsSource {
   }
 
   /**
-   * 仅确认调用方已经处理的更新。未确认的分组在响应丢失后仍可重读。
+   * watermarks 只传各商家已完成处理且结果已持久化的 last_seen_at。
+   * ack 在下一页 GET 之前生效；只收到或暂存在内存中的分组应省略，以便崩溃后重读。
    */
   async getUpdates(watermarks?: Record<string, string>): Promise<BuyerFollowUpdateGroup[]> {
     if (watermarks && Object.keys(watermarks).length > 0) {

@@ -139,7 +139,9 @@ describe("product CLI command tree (D0)", () => {
       const { code, stderr, stdout } = await run(["merchant", "init", "--no-install"]);
       expect(code).toBe(EXIT.OK);
       expect(stdout).toContain("profile_path");
-      expect(stdout).toContain("merchant-");
+      const generatedId = JSON.parse(stdout).agent_id;
+      expect(generatedId).toMatch(/^merchant-[a-f0-9]{24}$/);
+      expect(stderr).toContain(`本次自动生成商家号 ${generatedId}`);
       expect(stderr).not.toContain("尚未实现");
     } finally {
       process.chdir(originalCwd);
