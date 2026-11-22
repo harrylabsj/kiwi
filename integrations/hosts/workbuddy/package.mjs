@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import console from "node:console";
 import process from "node:process";
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv2020 from "ajv/dist/2020.js";
@@ -27,6 +28,8 @@ function read(relative) {
 
 const manifest = JSON.parse(read(manifestPath));
 validateExpertDisplay(manifest);
+assert(manifest.author?.name?.trim() && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(manifest.author.email ?? ""),
+  "WorkBuddy expert author must include a name and contact email");
 assert.equal(manifest.dependencies.mcpServers, "./.mcp.json");
 assert(!manifest.dependencies.connectors?.length, "Expert must not depend on a marketplace connector");
 const mcp = JSON.parse(read(".mcp.json"));
@@ -69,5 +72,21 @@ assert(
   "Usage: node package.mjs --check | --out /path/package.zip",
 );
 const output = path.resolve(args[1]);
-await packageEmbeddedExpert({bundle, files, output});
+function verifyProcurementExpert(extracted, fixture) {
+  const home = path.join(fixture, "readonly-home");
+  const data = path.join(fixture, "private-data");
+  const workspace = path.join(fixture, "buyer workspace");
+  for (const dir of [home, data, workspace]) mkdirSync(dir, {mode: 0o700});
+  chmodSync(home, 0o500);
+  try {
+    const result = spawnSync(process.execPath, [path.join(here, "test/verify-expert-audit.mjs"), extracted, workspace], {
+      cwd: workspace, env: {HOME: home, CODEBUDDY_PLUGIN_DATA: data, TMPDIR: fixture, PATH: path.dirname(process.execPath)},
+      encoding: "utf8", timeout: 90000,
+    });
+    assert.equal(result.status, 0, result.error?.message ?? (result.stdout + result.stderr));
+    assert.deepEqual(readdirSync(home), []);
+    assert(lstatSync(path.join(data, ".kiwi-workbuddy-buyer-v1", "kiwi-instance-v1", "buyer.sqlite")).isFile());
+  } finally { chmodSync(home, 0o700); }
+}
+await packageEmbeddedExpert({bundle, files, output, verifyExtracted:verifyProcurementExpert});
 console.log(`Created ${output}`);
