@@ -69,7 +69,7 @@ export function checkEmbeddedExpertRuntime() {
   }
 }
 
-export async function packageEmbeddedExpert({bundle, files, output, profile = 'legacy13'}) {
+export async function packageEmbeddedExpert({bundle, files, output, profile = 'legacy13', verifyExtracted = profile === 'company-procurement-v1' ? probeCompanyProcurementExpert : undefined}) {
   assert(output.endsWith('.zip'), 'Output must be .zip');
   assert(!existsSync(output), 'Output already exists; choose a new path');
   assert(!output.startsWith(bundle + sep), 'Keep ZIP outside the bundle');
@@ -132,11 +132,11 @@ export async function packageEmbeddedExpert({bundle, files, output, profile = 'l
     }
     const checked = spawnSync('unzip', ['-t', archive], {encoding: 'utf8'});
     assert.equal(checked.status, 0, checked.stdout + checked.stderr);
-    if (profile === 'company-procurement-v1') {
+    if (verifyExtracted) {
       const extracted = join(workspace, 'extracted');
       const unpack = spawnSync('unzip', ['-q', archive, '-d', extracted], {encoding: 'utf8'});
       assert.equal(unpack.status, 0, unpack.stderr);
-      await probeCompanyProcurementExpert(extracted, fixtureHome);
+      await verifyExtracted(extracted, fixtureHome);
     }
     cpSync(archive, output, {force: false, errorOnExist: true});
   } finally {
