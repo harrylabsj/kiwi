@@ -1,9 +1,10 @@
 {
   "name": "kiwi-procurement-expert",
-  "version": "1.1.7",
-  "description": "Kiwi procurement expert for supplier discovery, quote comparison and nonbinding negotiation, with dual-source sourcing (Kiwi Network merchants plus internet e-commerce listings when the host session provides web tools). Covers single-item purchases as well as bulk procurement: every purchase intent starts with kiwi_search before any web search.",
+  "version": "1.1.8",
+  "description": "Discover suppliers for a specified product, compare sourced prices and delivery terms, and request nonbinding quotes within the buyer’s mandate.",
   "author": {
-    "name": "harrylabsj"
+    "name": "harrylabsj",
+    "email": "1711496337@qq.com"
   },
   "homepage": "https://github.com/harrylabsj/kiwi",
   "license": "Apache-2.0",
@@ -32,8 +33,8 @@
   "avatar": "avatars/kiwi-procurement.png",
   "categoryId": "12-IndustryConsultant",
   "defaultInitPrompt": {
-    "zh": "帮我整理采购需求，寻找合适的供应商",
-    "en": "Help me clarify my sourcing needs and find suitable suppliers"
+    "zh": "预算240元，希望10天内到货。帮我找女款拉链活页夹（Women’s Zipper Binder）的供应商，列出哪些商家可以询价。",
+    "en": "Find suppliers for a Women's Zipper Binder within CNY 240 and a 10-day delivery window. Show which suppliers accept quote requests."
   },
   "plugin": "kiwi-procurement-expert",
   "tags": [
@@ -52,8 +53,8 @@
   ],
   "quickPrompts": [
     {
-      "zh": "帮我整理采购需求，寻找合适的供应商",
-      "en": "Help me clarify my sourcing needs and find suitable suppliers"
+      "zh": "预算240元，希望10天内到货。帮我找女款拉链活页夹（Women’s Zipper Binder）的供应商，列出哪些商家可以询价。",
+      "en": "Find suppliers for a Women's Zipper Binder within CNY 240 and a 10-day delivery window. Show which suppliers accept quote requests."
     },
     {
       "zh": "比较商家报价与互联网商品信息，找出费用和交期差异",

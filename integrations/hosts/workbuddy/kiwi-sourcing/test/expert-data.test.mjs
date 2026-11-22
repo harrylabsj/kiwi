@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, chmodSync, symlinkSync, statSync, rmSync, copyF
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expertDataDirectory } from '../../kiwi-procurement-expert/runtime/expert-data.mjs';
+import { expertDataDirectory, procurementDataDirectory } from '../../kiwi-procurement-expert/runtime/expert-data.mjs';
 import { makeTempDirectory } from './fixtures/temp-directory.mjs';
 test('private data persists per OS home and distinct homes stay separate',()=>{const root=mkdtempSync(join(tmpdir(),'kiwi-expert-test-'));try{const a=join(root,'a'),b=join(root,'b');mkdirSync(a,{mode:0o700});mkdirSync(b,{mode:0o700});const first=expertDataDirectory(a);assert.equal(first,expertDataDirectory(a));assert.notEqual(first,expertDataDirectory(b));assert.equal(statSync(first).mode&0o777,0o700)}finally{rmSync(root,{recursive:true,force:true})}});
 test('rejects symlink or nonprivate data directory',()=>{const root=mkdtempSync(join(tmpdir(),'kiwi-expert-test-'));try{const h=join(root,'home'),target=join(root,'target');mkdirSync(h,{mode:0o700});mkdirSync(target,{mode:0o700});symlinkSync(target,join(h,'.kiwi-workbuddy-buyer-v1'));assert.throws(()=>expertDataDirectory(h));rmSync(join(h,'.kiwi-workbuddy-buyer-v1'));mkdirSync(join(h,'.kiwi-workbuddy-buyer-v1'));chmodSync(join(h,'.kiwi-workbuddy-buyer-v1'),0o755);assert.throws(()=>expertDataDirectory(h))}finally{rmSync(root,{recursive:true,force:true})}});
@@ -41,4 +41,21 @@ test('embedded startup keeps known failure codes on stderr and never exposes loc
   } finally {
     rmSync(root, {recursive: true, force: true});
   }
+});
+
+test('procurement preserves existing state and supports a private host directory', () => {
+  const root = makeTempDirectory('kiwi-procurement-data-');
+  try {
+    const home = join(root, 'home'), host = join(root, 'host'), otherHome = join(root, 'other-home');
+    for (const dir of [home, host, otherHome]) mkdirSync(dir, {mode:0o700});
+    const legacy = expertDataDirectory(home);
+    assert.equal(procurementDataDirectory(home,host),legacy);
+    chmodSync(otherHome,0o500);
+    const selected = procurementDataDirectory(otherHome,host);
+    chmodSync(otherHome,0o700);
+    assert.equal(selected,join(host,'.kiwi-workbuddy-buyer-v1'));
+    assert.equal(procurementDataDirectory(otherHome,host),selected);
+    chmodSync(selected,0o777);
+    assert.throws(()=>procurementDataDirectory(otherHome,host),/EXPERT_DATA_UNAVAILABLE/);
+  } finally { rmSync(root,{recursive:true,force:true}); }
 });

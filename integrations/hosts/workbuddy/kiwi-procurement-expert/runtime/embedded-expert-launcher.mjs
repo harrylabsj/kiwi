@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startVerifiedBackend } from './backend-client.mjs';
 import { verifyFiles } from './bundle-verify.mjs';
-import { expertDataDirectory } from './expert-data.mjs';
+import { expertDataDirectory, procurementDataDirectory } from './expert-data.mjs';
 import { prepareInstanceData } from './instance-store.mjs';
 import { startProductionMcpServer } from './mcp-production-server.mjs';
 import { checkToolContract, enableQuoteHistory, enableTargetedNegotiation } from './tool-contract.mjs';
@@ -32,7 +32,9 @@ async function main() {
   }
   if (!company && serverName === 'kiwi-company-procurement-buyer') throw new Error('TOOL_BASELINE_INVALID');
   const profile = config?.profile ?? 'legacy13';
-  const dataDirectory = expertDataDirectory(undefined, config?.namespace);
+  const dataDirectory = !company && serverName === 'kiwi-procurement-buyer'
+    ? procurementDataDirectory()
+    : expertDataDirectory(undefined, config?.namespace);
   const instance = prepareInstanceData(dataDirectory);
   const environment = { ...process.env };
   for (const key of ['KIWI_CLIENT_ID', 'KIWI_SESSION', 'KIWI_SESSION_TOKEN',

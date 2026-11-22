@@ -10,6 +10,12 @@ import { pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
 const root = resolve(process.argv[2]);
+// WorkBuddy's expert dependency loader resolves ./ arguments against .mcp.json.
+function launchExpert(config, stdio) {
+  const cwd = process.argv[3] ?? root;
+  const args = config.args.map(arg => arg.startsWith('./') ? resolve(root,arg) : arg);
+  return spawn(config.command,args,{cwd,stdio});
+}
 const runtime = name => pathToFileURL(resolve(root, 'runtime', name));
 const core = name => import(runtime('buyer/node_modules/@harrylabsj/kiwi/dist/' + name));
 const protocolVersion = '2025-06-18';
@@ -26,7 +32,7 @@ const frame = (method, params, id) => JSON.stringify({jsonrpc:'2.0',id,method,pa
 await test('P1-4 / P2-1 · cold package entry, multi-item and missing quantity', {timeout:15000}, async () => {
   const [name, config] = Object.entries(JSON.parse(readFileSync(resolve(root,'.mcp.json'))).mcpServers)[0];
   const start = performance.now();
-  const child = spawn(config.command,config.args,{cwd:root,stdio:['pipe','pipe','inherit']});
+  const child = launchExpert(config,['pipe','pipe','inherit']);
   const closed = new Promise(resolve => child.on('close',resolve));
   const lines = createInterface({input:child.stdout})[Symbol.asyncIterator]();
   let id = 0;
@@ -201,7 +207,7 @@ await test('P2-4 · packaged launcher exits nonzero after losing its own backend
   timeout:15000,skip:process.platform!=='linux',
 }, async () => {
   const [config]=Object.values(JSON.parse(readFileSync(resolve(root,'.mcp.json'))).mcpServers);
-  const child=spawn(config.command,config.args,{cwd:root,stdio:['pipe','pipe','pipe']});
+  const child=launchExpert(config,['pipe','pipe','pipe']);
   const closed=new Promise(resolve=>child.once('close',(code,signal)=>resolve({code,signal})));
   let log='';
   child.stderr.on('data',chunk=>{log+=chunk});
