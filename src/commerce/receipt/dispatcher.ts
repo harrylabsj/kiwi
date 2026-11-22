@@ -22,7 +22,7 @@
  * 故障绝不阻塞本地业务流程（提交本地事实 → 入队 → 异步投递）。
  */
 
-import type { CommerceReceipt, ReceiptOutbox, ReceiptSubmitter } from "./receipts.js";
+import { ReceiptHttpError, type CommerceReceipt, type ReceiptOutbox, type ReceiptSubmitter } from "./receipts.js";
 
 export interface ReceiptDispatcherOptions {
   outbox: ReceiptOutbox;
@@ -53,6 +53,10 @@ export class ReceiptDispatcher {
     this.outbox.enqueue(receipt);
   }
 
+  replayLedger(file: string, version: string, replay: () => void): void {
+    this.outbox.replayLedger(file, version, replay);
+  }
+
   kick(): void {
     queueMicrotask(() => void this.drain().catch((error) => this.logError("receipt drain failed", error)));
   }
@@ -74,6 +78,11 @@ export class ReceiptDispatcher {
             this.outbox.markDelivered(entry.event_id);
             delivered += 1;
           } catch (err) {
+            if (err instanceof ReceiptHttpError && [400, 409, 413, 422].includes(err.status)) {
+              this.outbox.markBlocked(entry.event_id, err.message);
+              this.logError(`receipt ${entry.event_id} requires correction`, err);
+              continue;
+            }
             this.outbox.markFailed(entry.event_id, err instanceof Error ? err.message : String(err));
             this.logError(`receipt ${entry.event_id} delivery deferred`, err);
           }

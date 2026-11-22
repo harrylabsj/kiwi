@@ -566,14 +566,7 @@ export async function assembleMerchantRuntime(
         // 审批候选状态（恢复同步：候选已死的发布标 SUPERSEDED，§9.5）。
         candidateStatus: (candidateId: string) => approvals.get(candidateId)?.status,
         policyVersion: rfqPolicyVersion,
-        // 报价有效期跟随运行中策略 TTL（§13.1：调整走部署配置/策略）。与
-        // rfqPolicyConfigFromMerchantPolicy 的 max_valid_until_days 同用向下
-        // 取整到天（TTL < 86400s 时两侧同为 1 天），避免「策略 TTL 短于
-        // 缺省 7 天 → 计价必拒」的装配错配。
-        quoteValidityDays: () => {
-          const ttl = policyRuntime.current().policy?.quote_ttl_seconds;
-          return ttl !== undefined && ttl > 0 ? Math.max(1, Math.floor(ttl / 86_400)) : undefined;
-        },
+        quoteValiditySeconds: () => policyRuntime.current().policy?.quote_ttl_seconds,
       }),
     };
   })();

@@ -21,6 +21,7 @@
  * 计算快照，公开投影仍由引擎生成，不直接回放数据库字段。
  */
 
+import { inImmediateTransaction } from "../storage/transaction.js";
 import type { DatabaseSync } from "node:sqlite";
 
 import { contentDigest } from "../../negotiation/jcs.js";
@@ -136,7 +137,6 @@ function setFromRows(set: SetRow, options: OptionRow[]): ProposalSet {
 export class ProposalRepository {
   private readonly db: DatabaseSync;
   private readonly now: () => string;
-  private inTx = false;
 
   constructor(options: ProposalRepositoryOptions) {
     this.db = options.db;
@@ -144,19 +144,7 @@ export class ProposalRepository {
   }
 
   transaction<T>(work: () => T): T {
-    if (this.inTx) return work();
-    this.inTx = true;
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const result = work();
-      this.db.exec("COMMIT");
-      return result;
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    } finally {
-      this.inTx = false;
-    }
+    return inImmediateTransaction(this.db, work);
   }
 
   saveSet(set: ProposalSet): ProposalSet {

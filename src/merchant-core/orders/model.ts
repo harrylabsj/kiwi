@@ -22,6 +22,8 @@
  * 合并与退款更正都在这里定义；真实来源契约仍由 M0 冻结。
  */
 
+import { createHash } from "node:crypto";
+
 export interface ExternalOrderIdentity {
   merchant_id: string;
   source_namespace: string;
@@ -227,6 +229,7 @@ export function mergeOrderEvent(input: {
 export function allocateAttributions(
   lines: readonly OrderLineFact[],
   allocations: readonly AttributionInput[],
+  recordId = "",
 ): AttributionResult {
   const byLine = new Map<string, OrderLineFact>();
   for (const line of lines) {
@@ -273,7 +276,7 @@ export function allocateAttributions(
     usedAmount.set(line.line_id, nextAmount);
     accepted.push({
       ...allocation,
-      attribution_id: `attr_${line.line_id}_${allocation.opportunity_id}`,
+      attribution_id: "attr_" + createHash("sha256").update(JSON.stringify([recordId, line.line_id, allocation.opportunity_id])).digest("hex"),
       ...(allocation.confirmed_by !== undefined
         ? { confirmed_by: requireText(allocation.confirmed_by, "allocations[].confirmed_by", 128) }
         : {}),

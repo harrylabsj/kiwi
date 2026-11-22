@@ -26,6 +26,7 @@ import type { ContributionRepository } from "../contribution/repository.js";
 import type { ContributionInput } from "../contribution/types.js";
 import {
   OrderFactError,
+  refundTotalMinor,
   type AttributionInput,
   type ExternalOrderIdentity,
   type OrderStreamContract,
@@ -181,13 +182,38 @@ export class MerchantOrderService {
     contribution: ContributionInput;
     costSnapshotId?: string;
   }): ReturnType<ContributionRepository["saveAssessment"]> {
-    const assessment = calculateContribution(input.contribution);
-    return this.contributions.saveAssessment({
-      merchantId: input.merchantId,
-      refKind: "order",
-      refId: input.recordId,
-      assessment,
-      ...(input.costSnapshotId !== undefined ? { costSnapshotId: input.costSnapshotId } : {}),
+    return this.orders.transaction(() => {
+      const order = this.orders.getOrder(input.merchantId, input.recordId);
+      if (!order) throw new OrderFactError("not_found", "order not found");
+      if (input.costSnapshotId !== undefined) {
+        const snapshot = this.contributions.getCostSnapshot(input.merchantId, input.costSnapshotId);
+        if (!snapshot || snapshot.ref_kind !== "order" || snapshot.ref_id !== input.recordId) {
+          throw new OrderFactError("validation", "成本快照不属于当前订单");
+        }
+      }
+      let basis = input.contribution;
+      if (basis.kind === "ACTUAL") {
+        if (basis.net_revenue_minor !== undefined && (basis.gross_revenue_minor !== undefined || basis.refund_minor !== undefined)) {
+          throw new OrderFactError("validation", "净收入与原始收入/退款只能选择一种口径");
+        }
+        const refund = refundTotalMinor(this.orders.listRefunds(input.merchantId, input.recordId));
+        const gross = order.total_minor ?? this.orders.listLines(input.recordId)
+          .reduce((total, line) => total + line.amount_minor, 0);
+        if ((basis.net_revenue_minor !== undefined && basis.net_revenue_minor !== gross - refund) ||
+            (basis.gross_revenue_minor !== undefined && basis.gross_revenue_minor !== gross) ||
+            (basis.refund_minor !== undefined && basis.refund_minor !== refund)) {
+          throw new OrderFactError("validation", "实际收入口径与订单金额或已记录退款不符");
+        }
+        basis = { ...basis, gross_revenue_minor: gross, refund_minor: refund };
+        delete basis.net_revenue_minor;
+      }
+      return this.contributions.saveAssessment({
+        merchantId: input.merchantId,
+        refKind: "order",
+        refId: input.recordId,
+        assessment: calculateContribution(basis),
+        ...(input.costSnapshotId !== undefined ? { costSnapshotId: input.costSnapshotId } : {}),
+      });
     });
   }
 }

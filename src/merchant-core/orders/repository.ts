@@ -21,6 +21,7 @@
  * 在写入前由 `allocateAttributions` 校验，数据库只保存已确认分配。
  */
 
+import { inImmediateTransaction } from "../storage/transaction.js";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -103,7 +104,6 @@ export interface OrderRepositoryOptions {
 export class OrderRepository {
   private readonly db: DatabaseSync;
   private readonly now: () => string;
-  private inTx = false;
 
   constructor(options: OrderRepositoryOptions) {
     this.db = options.db;
@@ -111,19 +111,7 @@ export class OrderRepository {
   }
 
   transaction<T>(work: () => T): T {
-    if (this.inTx) return work();
-    this.inTx = true;
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const result = work();
-      this.db.exec("COMMIT");
-      return result;
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    } finally {
-      this.inTx = false;
-    }
+    return inImmediateTransaction(this.db, work);
   }
 
   createOrder(input: {
@@ -336,7 +324,7 @@ export class OrderRepository {
       throw new OrderFactError("not_found", `order ${recordId} not found`);
     }
     const lines = this.listLines(recordId);
-    const result = allocateAttributions(lines, allocations);
+    const result = allocateAttributions(lines, allocations, recordId);
     return this.transaction(() => {
       this.db.prepare("DELETE FROM order_attributions_v2 WHERE record_id = ?").run(recordId);
       for (const allocation of result.allocations) {

@@ -12,7 +12,7 @@ import {
 
 const NOW = "2026-10-29T10:00:00.000Z";
 
-function set(overrides: { alternative?: boolean; blocked?: boolean } = {}) {
+function set(overrides: { alternative?: boolean; blocked?: boolean; discount?: number } = {}) {
   return prepareProposalSet({
     merchant_id: "merchant-1",
     opportunity_id: "opp-1",
@@ -27,6 +27,7 @@ function set(overrides: { alternative?: boolean; blocked?: boolean } = {}) {
         unit: "piece",
         quantity: 2,
         base_unit_price_minor: 10_000,
+        line_discount_minor: overrides.discount ?? 0,
         line_tax: { basis: "EXCLUSIVE", rate_bps: 0 },
         shipping_tax: { basis: "EXCLUSIVE", rate_bps: 0 },
         adaptation: [{ constraint: "size", result: overrides.blocked ? "NOT_MET" : "MET" }],
@@ -61,7 +62,7 @@ describe("publish adapters", () => {
     const line = toRfqPricingLine(assertPublishable(set(), "opt-1"), {
       line_id: "line-1",
       tax_basis: "INCLUSIVE",
-      tax_rate_bps: 1_300,
+      tax_rate_bps: 0,
       evidence_source_ids: ["snap-1"],
     });
     expect(line).toMatchObject({
@@ -71,9 +72,18 @@ describe("publish adapters", () => {
       unit_price_minor: 10_000,
       discount_minor: 0,
       tax_basis: "INCLUSIVE",
-      tax_rate_bps: 1_300,
+      tax_rate_bps: 0,
       evidence_source_ids: ["snap-1"],
     });
+  });
+
+  it("preserves the approved discount or rejects an inexact conversion", () => {
+    const selected = (discount: number) => assertPublishable(set({ discount }), "opt-1");
+    const rfq = { line_id: "1", tax_basis: "EXCLUSIVE" as const, tax_rate_bps: 0, evidence_source_ids: [] };
+    expect(toKnpTerms(selected(2000)).items?.[0]?.unit_price?.amount_minor).toBe(9000);
+    expect(toRfqPricingLine(selected(2001), rfq).discount_minor).toBe(2001);
+    expect(() => toKnpTerms(selected(2001))).toThrow();
+    expect(() => toRfqPricingLine(selected(2000), { ...rfq, tax_rate_bps: 1300 })).toThrow();
   });
 
   it("替代品/被硬约束阻断/非 READY 集合不能发布", () => {

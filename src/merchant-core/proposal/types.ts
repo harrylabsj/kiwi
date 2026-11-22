@@ -74,6 +74,7 @@ export interface ProposalOption {
   quantity: number;
   unit_price_minor?: number;
   currency: "CNY";
+  line_discount_minor?: number;
   pricing?: PricingResult;
   valid_until?: string | null;
   price_source?: { kind: "base" } | { kind: "promotion"; promotion_id: string; revision: number };

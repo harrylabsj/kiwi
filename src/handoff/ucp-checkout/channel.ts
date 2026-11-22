@@ -394,7 +394,7 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
     // 审查 P1-10：business 返回的 checkout 必须与刚授权的 terms 一致；不一致
     // 不落本地镜像（避免后续完成门禁把错误内容当成已授权），但把远端
     // session_ref/checkout 回传，供上层取消。
-    const bound = this.bindFreshCheckout(checkout, terms, pkg.terms_digest);
+    const bound = this.bindFreshCheckout(checkout, terms, pkg.terms_digest, pkg);
     if (!bound.ok) return bound.result;
     const session = this.storeSession(checkout, pkg, terms, pkg.terms_digest, "created");
     const ctx: ResultContext = {
@@ -454,7 +454,7 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
     const checkout = this.withEffectiveExpiry(http.response, this.now());
     // 审查 P1-10（cart→checkout 同理）：cart 内容可能已被 business 改动；
     // fresh checkout 必须与 agreed_terms 一致才建立本地授权镜像。
-    const bound = this.bindFreshCheckout(checkout, terms, pkg.terms_digest);
+    const bound = this.bindFreshCheckout(checkout, terms, pkg.terms_digest, pkg);
     if (!bound.ok) return bound.result;
     const session = this.storeSession(checkout, pkg, terms, pkg.terms_digest, "created");
     this.recordCartCheckoutLink(cartId, checkout, pkg.terms_digest);
@@ -482,6 +482,8 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
     }
 
     const checkout = this.withEffectiveExpiry(response, this.now());
+    const checkoutError = this.checkSessionBinding(mirror, checkout);
+    if (checkoutError !== undefined) return checkoutError;
     this.checkouts.set(ref, checkout);
     if (
       checkout.status !== "completed" &&
@@ -520,6 +522,8 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
       });
     }
     const checkout = this.withEffectiveExpiry(response, this.now());
+    const checkoutError = this.checkSessionBinding(mirror, checkout);
+    if (checkoutError !== undefined) return checkoutError;
     if (checkout.status === "completed" || checkout.status === "canceled") {
       return this.failWith(`session_not_actionable: status ${checkout.status}`, "session_not_actionable");
     }
@@ -556,6 +560,8 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
     }
 
     const updatedCheckout = this.withEffectiveExpiry(put.response, this.now());
+    const updatedCheckoutError = this.checkSessionBinding(mirror, updatedCheckout, nextTerms, nextDigest);
+    if (updatedCheckoutError !== undefined) return updatedCheckoutError;
     // 审查 P1-10：PUT 的响应同样是远端权威内容，必须与本次授权的 nextTerms
     // 一致；否则不更新本地镜像，返回 fail-closed。
     const bound = this.bindFreshCheckout(updatedCheckout, nextTerms, nextDigest);
@@ -589,6 +595,8 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
       });
     }
     const checkout = this.withEffectiveExpiry(response, this.now());
+    const checkoutError = this.checkSessionBinding(mirror, checkout);
+    if (checkoutError !== undefined) return checkoutError;
     this.checkouts.set(ref, checkout);
 
     // 2. 状态映射（终态优先）。
@@ -623,15 +631,6 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
     if (this.isExpired(checkout, this.now())) {
       return this.failWith(`session_expired: ${ref}`, "session_expired");
     }
-    // 审查 P1-10：完成门禁只能证明“授权存在”，不能证明“远端内容仍是授权内容”。
-    // 这里把 fresh checkout 与本地镜像的 current_terms 绑定比对，阻断 business
-    // 在批准后改价/换 SKU 的 TOCTOU。
-    const bound = this.bindFreshCheckout(
-      checkout,
-      mirror.current_terms,
-      mirror.current_terms_digest,
-    );
-    if (!bound.ok) return bound.result;
     const totalsCheck = validateTotals(checkout.totals);
     if (totalsCheck !== undefined && !totalsCheck.ok) {
       return {
@@ -667,6 +666,8 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
     }
 
     const completedCheckout = this.withEffectiveExpiry(complete.response, this.now());
+    const completedCheckoutError = this.checkSessionBinding(mirror, completedCheckout);
+    if (completedCheckoutError !== undefined) return completedCheckoutError;
     this.checkouts.set(ref, completedCheckout);
     if (completedCheckout.status === "completed") {
       this.recordCompletedOrder(mirror, completedCheckout);
@@ -712,6 +713,8 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
       });
     }
     const checkout = this.withEffectiveExpiry(response, this.now());
+    const checkoutError = this.checkSessionBinding(mirror, checkout);
+    if (checkoutError !== undefined) return checkoutError;
     if (checkout.status === "completed" || checkout.status === "canceled") {
       return this.failWith(`session_not_actionable: status ${checkout.status}`, "session_not_actionable");
     }
@@ -729,6 +732,8 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
     }
 
     const canceledCheckout = this.withEffectiveExpiry(cancel.response, this.now());
+    const canceledCheckoutError = this.checkSessionBinding(mirror, canceledCheckout);
+    if (canceledCheckoutError !== undefined) return canceledCheckoutError;
     this.checkouts.set(ref, canceledCheckout);
     if (canceledCheckout.status === "canceled") {
       const session = this.markCancelled(mirror);
@@ -760,8 +765,13 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
     checkout: UcpCheckoutSession,
     terms: TermSet,
     termsDigest: string,
+    pkg?: HandoffPackage,
   ): { ok: true } | { ok: false; result: UcpCheckoutResult } {
-    const mismatch = checkoutBindingMismatch(checkout, terms, termsDigest);
+    const reference = checkout.reference as { agreement_id?: unknown; negotiation_id?: unknown } | undefined;
+    const mismatch = pkg && (
+      (reference?.agreement_id !== undefined && reference.agreement_id !== pkg.agreement_id) ||
+      (reference?.negotiation_id !== undefined && reference.negotiation_id !== pkg.negotiation_id)
+    ) ? "remote trade reference differs from handoff" : checkoutBindingMismatch(checkout, terms, termsDigest);
     if (mismatch === undefined) return { ok: true };
     return {
       ok: false,
@@ -793,13 +803,26 @@ export class UcpCheckoutChannel implements AsyncHandoffChannel {
     });
   }
 
+  private checkSessionBinding(
+    session: HandoffSession, checkout: UcpCheckoutSession,
+    terms = session.current_terms, digest = session.current_terms_digest,
+  ): UcpCheckoutResult | undefined {
+    const reference = checkout.reference as { agreement_id?: unknown; negotiation_id?: unknown } | undefined;
+    if (checkout.session_id !== session.session_ref ||
+        (reference?.agreement_id !== undefined && reference.agreement_id !== session.package.agreement_id) ||
+        (reference?.negotiation_id !== undefined && reference.negotiation_id !== session.package.negotiation_id)) {
+      return this.failWith("checkout does not match the local session", "line_items_mismatch");
+    }
+    if (checkout.status === "completed" || checkout.status === "ready_for_complete" || (checkout.line_items?.length ?? 0) > 0) {
+      const bound = this.bindFreshCheckout(checkout, terms, digest);
+      if (!bound.ok) return bound.result;
+    }
+    return undefined;
+  }
+
   private recordCompletedOrder(session: HandoffSession, checkout: UcpCheckoutSession): void {
     const receipts = this.orderReceipts;
-    if (receipts === undefined || checkout.session_id !== session.session_ref) return;
-    if (!this.bindFreshCheckout(checkout, session.current_terms, session.current_terms_digest).ok) return;
-    const reference = checkout.reference as { agreement_id?: unknown; negotiation_id?: unknown } | undefined;
-    if ((reference?.agreement_id !== undefined && reference.agreement_id !== session.package.agreement_id) ||
-        (reference?.negotiation_id !== undefined && reference.negotiation_id !== session.package.negotiation_id)) return;
+    if (receipts === undefined) return;
     const order = checkout.order;
     if (order === null || typeof order !== "object") return;
     const { id, permalink_url } = order as { id?: unknown; permalink_url?: unknown };

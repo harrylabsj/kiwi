@@ -686,6 +686,27 @@ export class LedgerStore {
     return { valid: true, count: events.length };
   }
 
+  /** append replaces the file atomically, so directory metadata changes on every commit. */
+  receiptDirectoryVersion(): string {
+    const dir = this.ledgerDir;
+    if (!existsSync(dir)) return "absent";
+    const stat = statSync(dir, { bigint: true });
+    return `${stat.ino}:${stat.mtimeNs}`;
+  }
+
+  receiptLedgerFiles(): string[] {
+    if (!existsSync(this.ledgerDir)) return [];
+    return readdirSync(this.ledgerDir).filter((name) => name.endsWith(".jsonl"))
+      .map((name) => path.join(this.ledgerDir, name));
+  }
+
+  readReceiptLedger(file: string): LedgerEvent[] {
+    if (path.dirname(file) !== this.ledgerDir || !file.endsWith(".jsonl")) {
+      throw new LedgerError("ledger_invalid_identity", "invalid receipt ledger file");
+    }
+    return this.loadFromFile(file);
+  }
+
   /** 所有已落账的 negotiation_id（按文件名扫描）。 */
   listNegotiations(): string[] {
     const dir = this.ensureLedgerDir();

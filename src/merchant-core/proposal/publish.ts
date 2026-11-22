@@ -21,6 +21,7 @@
  * 不伪造 RfqCase、不伪造协议对象；正式发布仍走各自既有的批准/状态机。
  */
 
+import { calculatePricing } from "../rfq/pricing.js";
 import type { TermSet } from "../../negotiation/domain/common.js";
 import { ProposalError, type ProposalOption, type ProposalSet } from "./types.js";
 
@@ -42,6 +43,17 @@ export function assertPublishable(set: ProposalSet, optionId: string): ProposalO
   return option;
 }
 
+function approvedDiscount(option: ProposalOption): number {
+  if (option.line_discount_minor !== undefined) return option.line_discount_minor;
+  const line = option.pricing?.lines[0];
+  const base = option.quantity * (option.unit_price_minor ?? 0);
+  // Older snapshots lack a tax basis and discount. Only infer zero when unambiguous.
+  if (line && (line.net_minor !== base || line.gross_minor !== base)) {
+    throw new ProposalError("not_selectable", "旧方案缺少可验证的行优惠，请重新计价");
+  }
+  return 0;
+}
+
 /** 生成 KNP offer/counter_offer 的 terms（非绑定；不代表订单或支付）。 */
 export function toKnpTerms(
   option: ProposalOption,
@@ -50,12 +62,17 @@ export function toKnpTerms(
   if (option.unit_price_minor === undefined) {
     throw new ProposalError("not_selectable", "选项缺少可发布单价");
   }
+  const discount = approvedDiscount(option);
+  const gross = option.pricing?.lines[0]?.gross_minor ?? option.unit_price_minor * option.quantity - discount;
+  if ((option.pricing?.shipping.gross_minor ?? 0) !== 0 || gross % option.quantity !== 0) {
+    throw new ProposalError("not_selectable", "当前 KNP 适配器无法精确表达运费或不可整分的行金额");
+  }
   const terms: TermSet = {
     items: [
       {
         sku: option.sku,
         quantity: { value: option.quantity, unit: option.unit },
-        unit_price: { currency: option.currency, amount_minor: option.unit_price_minor },
+        unit_price: { currency: option.currency, amount_minor: gross / option.quantity },
       },
     ],
   };
@@ -98,15 +115,26 @@ export function toRfqPricingLine(
   if (!Number.isSafeInteger(input.tax_rate_bps) || input.tax_rate_bps < 0 || input.tax_rate_bps > 10_000) {
     throw new ProposalError("validation", "tax_rate_bps 必须在 [0,10000]");
   }
-  return {
+  const line = {
     line_id: input.line_id,
     sku: option.sku,
     unit: option.unit,
     quantity: option.quantity,
     unit_price_minor: option.unit_price_minor,
-    discount_minor: 0,
+    discount_minor: approvedDiscount(option),
     tax_basis: input.tax_basis,
     tax_rate_bps: input.tax_rate_bps,
     evidence_source_ids: [...input.evidence_source_ids],
   };
+  const approved = option.pricing?.lines[0];
+  if (approved) {
+    const [published] = calculatePricing({
+      schema_version: "0.1.0", currency: option.currency, rounding: "HALF_UP_LINE", lines: [line],
+      shipping: { amount_minor: 0, tax_basis: "EXCLUSIVE", tax_rate_bps: 0 },
+    }).lines;
+    if (!published || published.net_minor !== approved.net_minor || published.gross_minor !== approved.gross_minor) {
+      throw new ProposalError("not_selectable", "RFQ 税额与批准方案不符，请重新计价");
+    }
+  }
+  return line;
 }

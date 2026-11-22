@@ -80,6 +80,18 @@ export interface OrderReceipt extends Omit<CommerceReceiptBase, "event_type"> {
   };
 }
 
+export function orderReceiptId(channel: string, orderRef: string): string {
+  const legacy = `merchant-order:${channel}:${orderRef}`;
+  if (legacy.length <= 128) return legacy;
+  return "merchant-order-v2:" + createHash("sha256").update(JSON.stringify([channel, orderRef])).digest("hex");
+}
+
+export class ReceiptHttpError extends Error {
+  constructor(readonly status: number) {
+    super(`catalog receipt submit failed: HTTP ${status}`);
+  }
+}
+
 export type CommerceReceipt = IntentReceipt | EntryReceipt | OrderReceipt;
 
 // ---------------------------------------------------------------------------
@@ -124,10 +136,16 @@ export class ReceiptOutbox {
         updated_at TEXT NOT NULL,
         reporter_scope TEXT NOT NULL DEFAULT ''
       );
+      CREATE TABLE IF NOT EXISTS receipt_ledger_checkpoints (
+        scope TEXT NOT NULL, file TEXT NOT NULL, version TEXT NOT NULL, PRIMARY KEY(scope,file)
+      );
       CREATE INDEX IF NOT EXISTS idx_receipt_outbox_pending
         ON commerce_receipt_outbox (status, next_retry_at);
     `);
     const columns = this.db.prepare("PRAGMA table_info(commerce_receipt_outbox)").all();
+    if (!columns.some((column) => column.name === "delivery_blocked")) {
+      this.db.exec("ALTER TABLE commerce_receipt_outbox ADD COLUMN delivery_blocked INTEGER NOT NULL DEFAULT 0");
+    }
     if (!columns.some((column) => column.name === "reporter_scope")) {
       this.db.exec("ALTER TABLE commerce_receipt_outbox ADD COLUMN reporter_scope TEXT NOT NULL DEFAULT ''");
     }
@@ -157,13 +175,19 @@ export class ReceiptOutbox {
       .prepare(
         `SELECT event_id, payload_json, status, attempts, next_retry_at, last_error
           FROM commerce_receipt_outbox
-          WHERE reporter_scope = ? AND status = 'PENDING' AND (next_retry_at IS NULL OR next_retry_at <= ?)
+          WHERE reporter_scope = ? AND status = 'PENDING' AND delivery_blocked = 0 AND (next_retry_at IS NULL OR next_retry_at <= ?)
           ORDER BY created_at ASC LIMIT 100`,
       )
       .all(this.reporterScope, stamp) as unknown as OutboxRow[];
     return rows.flatMap((row) => {
       try {
-        return [{ event_id: row.event_id, receipt: JSON.parse(row.payload_json) as CommerceReceipt }];
+        const receipt = JSON.parse(row.payload_json) as CommerceReceipt;
+        // Pre-upgrade oversized keys were never accepted. Preserve the local row
+        // identity while retrying exactly the same bounded key as a new producer.
+        if (receipt.event_type === "merchant_order_created" && receipt.event_id.length > 128) {
+          receipt.event_id = orderReceiptId(receipt.order_channel, receipt.order_ref);
+        }
+        return [{ event_id: row.event_id, receipt }];
       } catch {
         return [];
       }
@@ -195,9 +219,23 @@ export class ReceiptOutbox {
       .run(attempts, new Date(Date.parse(this.now()) + backoffMs).toISOString(), error.slice(0, 200), this.now(), eventId);
   }
 
+  markBlocked(eventId: string, error: string): void {
+    this.db.prepare("UPDATE commerce_receipt_outbox SET delivery_blocked=1, last_error=?, updated_at=? WHERE event_id=?")
+      .run(error.slice(0, 200), this.now(), eventId);
+  }
+
+  replayLedger(file: string, version: string, replay: () => void): void {
+    const row = this.db.prepare("SELECT version FROM receipt_ledger_checkpoints WHERE scope=? AND file=?")
+      .get(this.reporterScope, file);
+    if (row?.version === version) return;
+    replay();
+    this.db.prepare("INSERT OR REPLACE INTO receipt_ledger_checkpoints(scope,file,version) VALUES(?,?,?)")
+      .run(this.reporterScope, file, version);
+  }
+
   pendingCount(): number {
     const row = this.db
-      .prepare("SELECT COUNT(*) AS n FROM commerce_receipt_outbox WHERE status = 'PENDING'")
+      .prepare("SELECT COUNT(*) AS n FROM commerce_receipt_outbox WHERE status = 'PENDING' AND delivery_blocked = 0")
       .get() as { n: number };
     return Number(row.n);
   }
@@ -246,7 +284,7 @@ export class MerchantReceiptSubmitter implements ReceiptSubmitter {
       signal: AbortSignal.timeout(15_000),
     });
     if (!response.ok) {
-      throw new Error(`catalog receipt submit failed: HTTP ${response.status}`);
+      throw new ReceiptHttpError(response.status);
     }
   }
 }
@@ -364,7 +402,7 @@ export class BuyerReceiptSubmitter implements ReceiptSubmitter {
       signal: AbortSignal.timeout(15_000),
     });
     if (!response.ok) {
-      throw new Error(`catalog receipt submit failed: HTTP ${response.status}`);
+      throw new ReceiptHttpError(response.status);
     }
   }
 }

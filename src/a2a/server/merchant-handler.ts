@@ -27,6 +27,7 @@
  */
 
 import { merchantProcurementTerms, readProcurementProjection, type MerchantProcurementProvider } from "./merchant-procurement.js";
+import { statSync as statReceiptLedger } from "node:fs";
 import { StreamGateError } from "../../merchant-core/customer-delivery/stream-gate.js";
 import { BoundedMap, BoundedSet } from "../../runtime/bounded-memory.js";
 import { checkedProductStock, checkedSourceEvidence, quoteFactsStillValid, recoverQuoteSourceSnapshot, type ProductSourceEvidence, type QuoteSourceSnapshot, type ResolvedProductFacts } from "./merchant-product-facts.js";
@@ -72,6 +73,7 @@ import type { ReceiptDispatcher } from "../../commerce/receipt/dispatcher.js";
 import {
   thumbprintFromOpenInquiryIdentity,
   type EntryReceipt,
+  type IntentReceipt,
 } from "../../commerce/receipt/receipts.js";
 import {
   createNegotiationPhase,
@@ -1034,12 +1036,12 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
     });
   };
 
-  const recordAgreementReceipt = (negotiationId: string, agreement: Record<string, unknown>, identity: string): void => {
+  const recordAgreementReceipt = (negotiationId: string, agreement: Record<string, unknown>, identity: string, recovering = false): void => {
     const receipts = options.commerceReceipts;
     const binding = thumbprintFromOpenInquiryIdentity(identity);
     if (receipts === undefined || binding === undefined) return;
     const agreementId = String(agreement.agreement_id);
-    void receipts.dispatcher.enqueueAndDeliver({
+    const receipt: IntentReceipt = {
       event_id: `merchant-agreement:${agreementId}`,
       event_type: "merchant_agreement_issued",
       merchant_id: receipts.merchantId,
@@ -1049,29 +1051,40 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
       terms_digest: String(agreement.terms_digest),
       buyer_binding: binding,
       occurred_at: String(agreement.created_at),
-    }).catch(() => {});
+    };
+    if (recovering) receipts.dispatcher.record(receipt);
+    else void receipts.dispatcher.enqueueAndDeliver(receipt).catch(() => {});
   };
 
+  let scannedVersion: string | undefined;
   const recoverReceipts = (): void => {
-    if (options.commerceReceipts === undefined) return;
-    for (const negotiationId of ledger.listNegotiations()) {
+    const dispatcher = options.commerceReceipts?.dispatcher;
+    if (!dispatcher) return;
+    const version = ledger.receiptDirectoryVersion();
+    if (version === scannedVersion) return;
+    let complete = true;
+    for (const file of ledger.receiptLedgerFiles()) {
       try {
-        const events = ledger.events(negotiationId);
-        const terminal = [...events].reverse().find((event) => event.state_transition !== undefined);
-        for (const event of events) {
-          if (event.event_kind === "message_sent" && event.wire_payload !== undefined) {
-            recordEntryReceipt(event.wire_payload as unknown as NegotiationEnvelope);
+        const stat = statReceiptLedger(file, { bigint: true });
+        dispatcher.replayLedger(file, `${stat.ino}:${stat.size}:${stat.mtimeNs}`, () => {
+          const events = ledger.readReceiptLedger(file);
+          const terminal = [...events].reverse().find((event) => event.state_transition !== undefined);
+          for (const event of events) {
+            if (event.event_kind === "message_sent" && event.wire_payload !== undefined) {
+              recordEntryReceipt(event.wire_payload as unknown as NegotiationEnvelope, true);
+            }
+            if (terminal?.state_transition?.to_phase !== "AGREEMENT_REACHED" || event.event_kind !== "system") continue;
+            const result = event.outcome.kind === "ok" ? event.outcome.result : undefined;
+            if (result?.kind === "agreement_issued" && result.agreement !== null && typeof result.agreement === "object") {
+              recordAgreementReceipt(event.negotiation_id, result.agreement as Record<string, unknown>, String(result.buyer_binding ?? ""), true);
+            }
           }
-          if (terminal?.state_transition?.to_phase !== "AGREEMENT_REACHED" || event.event_kind !== "system") continue;
-          const result = event.outcome.kind === "ok" ? event.outcome.result : undefined;
-          if (result?.kind === "agreement_issued" && result.agreement !== null && typeof result.agreement === "object") {
-            recordAgreementReceipt(negotiationId, result.agreement as Record<string, unknown>, String(result.buyer_binding ?? ""));
-          }
-        }
+        });
       } catch {
-        // One unreadable negotiation must not prevent recovery of later entries.
+        complete = false;
       }
     }
+    if (complete) scannedVersion = version;
   };
 
   /** 终态重放：证据命中时按原协议幂等返回（B6）。 */
@@ -1239,7 +1252,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
     };
   };
 
-  const recordEntryReceipt = (reply: NegotiationEnvelope): void => {
+  const recordEntryReceipt = (reply: NegotiationEnvelope, recovering = false): void => {
     // K6：带成交入口的报价正式发出（message_sent 已落账）→ 上报“商家已
     // 提供入口”（可早于协议，按报价引用关联）。预置公开链接与被拒绝审批
     // 不触发——本函数只在正式报价发布路径上调用。上报失败不影响报价。
@@ -1263,7 +1276,8 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           },
           occurred_at: reply.created_at,
         };
-        void options.commerceReceipts.dispatcher.enqueueAndDeliver(entry).catch(() => {});
+        if (recovering) options.commerceReceipts.dispatcher.record(entry);
+        else void options.commerceReceipts.dispatcher.enqueueAndDeliver(entry).catch(() => {});
       }
     }
   };

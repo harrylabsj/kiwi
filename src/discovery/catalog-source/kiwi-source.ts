@@ -56,6 +56,7 @@ const MAX_SEARCH_PAGES = 100;
 
 const KIWI_SEARCH_QUERY_KEYS: readonly string[] = [
   "q",
+  "merchant_id",
   "capability",
   "protocol",
   "hosting_mode",
@@ -71,6 +72,7 @@ const KIWI_SEARCH_QUERY_KEYS: readonly string[] = [
 /** listing 搜索查询键白名单（v0.4 §8；未知键 fail-closed invalid_input）。 */
 const KIWI_LISTING_SEARCH_QUERY_KEYS: readonly string[] = [
   "q",
+  "merchant_id",
   "owner_agent_id",
   "listing_type",
   "category",
@@ -109,6 +111,7 @@ function buildSearchQuery(query: KiwiCatalogSearchQuery): string {
     if (value !== undefined) entries.push([key, value]);
   };
   push("q", query.q);
+  push("merchant_id", query.merchant_id);
   push("capability", query.capability);
   push("protocol", query.protocol);
   push("hosting_mode", query.hosting_mode);
@@ -373,6 +376,7 @@ function buildListingSearchQuery(query: KiwiListingSearchQuery): string {
     if (value !== undefined) entries.push([key, String(value)]);
   };
   push("q", query.q);
+  push("merchant_id", query.merchant_id);
   push("owner_agent_id", query.owner_agent_id);
   push("listing_type", query.listing_type);
   push("category", query.category);

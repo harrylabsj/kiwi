@@ -27,6 +27,7 @@
  *     同一结果，同键不同摘要 IDEMPOTENCY_CONFLICT（摘要 = rfq-canonical-json-v1）。
  */
 
+import { inImmediateTransaction } from "../storage/transaction.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -210,23 +211,10 @@ export class RfqRepository {
     return this.now();
   }
 
-  private inTx = false;
 
   /** 事务执行（可重入：内层调用加入外层事务——内层失败抛错由外层统一回滚）。 */
   private tx<T>(work: () => T): T {
-    if (this.inTx) return work();
-    this.inTx = true;
-    this.db.exec("BEGIN");
-    try {
-      const result = work();
-      this.db.exec("COMMIT");
-      return result;
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    } finally {
-      this.inTx = false;
-    }
+    return inImmediateTransaction(this.db, work);
   }
 
   /** Local synchronous unit of work; no Promise work may be started here. */

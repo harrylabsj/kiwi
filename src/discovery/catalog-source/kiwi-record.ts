@@ -130,6 +130,7 @@ export interface CatalogSkill {
 export interface KiwiCatalogSearchQuery
   extends Omit<CatalogSearchQuery, "category" | "region" | "skill"> {
   verification_level?: VerificationLevel;
+  merchant_id?: string;
   freshness_state?: FreshnessState;
   administrative_state?: AdministrativeState;
   /** 精确匹配 KTH destination_type（禁止 supports_* 平行词表）。 */
@@ -229,6 +230,7 @@ export interface ListingSearchResult {
  * 与 KiwiCatalogSearchQuery 分离：listing 面有自己的键集与 JSON1 结构化过滤。
  */
 export interface KiwiListingSearchQuery {
+  merchant_id?: string;
   q?: string;
   /** 精确限定 listing owner，避免先做全局限量搜索再在本地过滤。 */
   owner_agent_id?: string;

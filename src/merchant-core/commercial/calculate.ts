@@ -160,12 +160,16 @@ export function calculateCommercialQuote(input: CommercialQuoteInput): Commercia
   const selected = promotions[0];
   const unitPriceMinor = selected?.unit_price_minor ?? baseMinor;
 
+  const lineBase = BigInt(input.quantity) * BigInt(unitPriceMinor);
+  if (lineBase > MAX_MINOR) invalid("quantity × unit_price_minor 超出金额上限");
+  if (BigInt(discountMinor) > lineBase) invalid("line_discount_minor 超过行基数");
+
   const floor = input.private_floor_minor;
   if (floor !== undefined) {
     if (!Number.isSafeInteger(floor) || floor < 0 || floor > MAX_QUOTE_AMOUNT_MINOR) {
       invalid("private_floor_minor 必须是合法 minor 整数");
     }
-    if (BigInt(unitPriceMinor) < BigInt(floor)) {
+    if (lineBase - BigInt(discountMinor) < BigInt(input.quantity) * BigInt(floor)) {
       return {
         status: "approval_required",
         calculation_version: COMMERCIAL_CALCULATION_VERSION,
@@ -173,10 +177,6 @@ export function calculateCommercialQuote(input: CommercialQuoteInput): Commercia
       };
     }
   }
-
-  const lineBase = BigInt(input.quantity) * BigInt(unitPriceMinor);
-  if (lineBase > MAX_MINOR) invalid("quantity × unit_price_minor 超出金额上限");
-  if (BigInt(discountMinor) > lineBase) invalid("line_discount_minor 超过行基数");
 
   let pricing: PricingResult;
   try {

@@ -313,10 +313,12 @@ export class BuyerFollowsSource {
   }
 
   /**
-   * 主动拉取关注更新：仅响应买家主动查询。水位语义在上游（返回什么再推进
-   * last_seen_at，不丢不重）；本客户端原样透传分组，不本地过滤、不缓存重放。
+   * 仅确认调用方已经处理的更新。未确认的分组在响应丢失后仍可重读。
    */
-  async getUpdates(): Promise<BuyerFollowUpdateGroup[]> {
+  async getUpdates(watermarks?: Record<string, string>): Promise<BuyerFollowUpdateGroup[]> {
+    if (watermarks && Object.keys(watermarks).length > 0) {
+      await this.request("POST", "/v1/me/follows/updates/ack", { watermarks });
+    }
     const raw = await this.request("GET", "/v1/me/follows/updates");
     const body = requireObject(raw, "follow updates response");
     if (!Array.isArray(body.updates)) {

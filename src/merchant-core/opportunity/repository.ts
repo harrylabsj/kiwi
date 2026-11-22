@@ -21,6 +21,7 @@
  * 幂等，来源记录按 (merchant, namespace, account, external_inquiry_id) 幂等。
  */
 
+import { inImmediateTransaction } from "../storage/transaction.js";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -132,7 +133,6 @@ function requirementToRow(row: RequirementRow): RequirementSnapshot {
 export class OpportunityRepository {
   private readonly db: DatabaseSync;
   private readonly now: () => string;
-  private inTx = false;
 
   constructor(options: OpportunityRepositoryOptions) {
     this.db = options.db;
@@ -140,19 +140,7 @@ export class OpportunityRepository {
   }
 
   transaction<T>(work: () => T): T {
-    if (this.inTx) return work();
-    this.inTx = true;
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const result = work();
-      this.db.exec("COMMIT");
-      return result;
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    } finally {
-      this.inTx = false;
-    }
+    return inImmediateTransaction(this.db, work);
   }
 
   getSourceByExternalId(input: {
