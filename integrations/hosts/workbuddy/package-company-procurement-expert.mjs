@@ -33,7 +33,7 @@ assert(meta.agents.every(file => files.includes(file.slice(2))));
 assert(meta.skills.every(dir => files.includes(dir.slice(2) + '/SKILL.md')));
 assert(files.includes(meta.avatar));
 validateExpertAvatar(readFileSync(join(bundle, meta.avatar)));
-assert.equal(meta.version, '1.0.0');
+assert.equal(meta.version, '1.0.1');
 assert.equal(meta.dependencies.mcpServers, './.mcp.json');
 assert(!meta.dependencies.connectors?.length);
 assert.deepEqual(Object.keys(mcp.mcpServers), [serverName]);

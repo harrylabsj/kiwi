@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { probeMcpIdentity } from './kiwi-sourcing/runtime/mcp-identity-probe.mjs';
 import { probeMcpSchema } from './kiwi-sourcing/runtime/mcp-schema-probe.mjs';
 import { toolNames, enableTargetedNegotiation } from './kiwi-sourcing/runtime/tool-contract.mjs';
+import { probeCompanyProcurementExpert } from './probe-company-procurement-expert.mjs';
 import { stageEmbeddedBuyer } from './stage-embedded-buyer.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -122,6 +123,12 @@ export async function packageEmbeddedExpert({bundle, files, output, profile = 'l
     }
     const checked = spawnSync('unzip', ['-t', archive], {encoding: 'utf8'});
     assert.equal(checked.status, 0, checked.stdout + checked.stderr);
+    if (profile === 'company-procurement-v1') {
+      const extracted = join(workspace, 'extracted');
+      const unpack = spawnSync('unzip', ['-q', archive, '-d', extracted], {encoding: 'utf8'});
+      assert.equal(unpack.status, 0, unpack.stderr);
+      await probeCompanyProcurementExpert(extracted, fixtureHome);
+    }
     cpSync(archive, output, {force: false, errorOnExist: true});
   } finally {
     rmSync(workspace, {recursive: true, force: true});
