@@ -9,7 +9,7 @@ description: Discover suppliers for the specified product using Kiwi, clarify mi
 
 有任务号先回读；只比较给定材料或指定其他平台时按该范围核对。开放找货缺少商品词时，先向买家确认商品；有商品词时，单品与批量都先调用 `kiwi_search(query, category?)`，再按双来源规则比较。工具不可用时说明查询状态。
 
-有短商品词就调用 `kiwi_search(query, category?)`，发现 Kiwi Network 内的候选；本会话若提供互联网检索/网页读取工具，同轮再查一路外部电商商品，两路结果**分区展示**（见「双来源结果」）。只使用结果中的真实 merchant_id，买方不直连 shopping-cli 或另建本地 marketplace。
+有外文商品原名时以原名作为 query，不附加预算、交期或中文译名。仅中文查询无匹配时，可用买家给出的原名再查一次。用短商品词调用 `kiwi_search(query, category?)`，发现 Kiwi Network 内的候选；本会话若提供互联网检索/网页读取工具，同轮再查一路外部电商商品，两路结果**分区展示**（见「双来源结果」）。只使用结果中的真实 merchant_id，买方不直连 shopping-cli 或另建本地 marketplace。
 
 Kiwi Network 搜索覆盖全球。调用 `kiwi_search` 时省略 `region`。有收货地和到货期限时，发现候选后再用这些条件确认交付。
 
