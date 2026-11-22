@@ -1,5 +1,3 @@
-import { thumbprintFromOpenInquiryIdentity } from "../commerce/receipt/receipts.js";
-import { McpError } from "./errors.js";
 /**
  * Copyright 2026 harrylabsj
  *
@@ -25,6 +23,9 @@ import { McpError } from "./errors.js";
  * 诚实失败：上下文缺失/商家不可达 → 追加可解释 summary，绝不编造还价结果。
  */
 
+import { asRecord } from "./procurement/requirements.js";
+import { thumbprintFromOpenInquiryIdentity } from "../commerce/receipt/receipts.js";
+import { McpError } from "./errors.js";
 import {
   buildA2AClient,
   buildAcceptEnvelope,
@@ -316,6 +317,24 @@ export class A2ANegotiator implements Negotiator {
     }) };
   }
 
+  async recoverNegotiation(
+    intent: Record<string, unknown>, step: NegotiationStep, rawCandidate: Record<string, unknown>, context: ProtocolTaskContext,
+  ): Promise<NegotiationStep | undefined> {
+    const candidate = rawCandidate as CandidateLike;
+    const { negotiation_id: negotiationId, a2a_endpoint: endpoint } = candidate.provenance ?? {};
+    const merchantId = String(candidate.merchant_id ?? "");
+    if (!this.recovery || typeof negotiationId !== "string" || typeof endpoint !== "string" || !merchantId) return undefined;
+    const { client } = await this.clientFor(endpoint);
+    const result = await this.recovery.recoverNegotiation(context, {
+      negotiationId, merchantId, endpoint, round: step.round, stage: step.action === "counter_offer" ? "counter" : "clarification",
+    }, id => client.getTask(id), this.timeoutMs, 1000);
+    if (!result) return undefined;
+    const merchantOffer = step.action === "counter_offer" ? merchantOfferFromReply(
+      result.reply, String(candidate.candidate_id ?? ""), intentQuantity(intent),
+    ) : undefined;
+    return { ...step, reply: JSON.stringify(result.reply), ...(merchantOffer ? { merchant_offer: merchantOffer } : {}) };
+  }
+
   async negotiate(
     taskId: string,
     intent: Record<string, unknown>,
@@ -397,7 +416,10 @@ export class A2ANegotiator implements Negotiator {
       }) : undefined;
       const verifiedPayload = verifiedQuote?.reply.payload;
       const verifiedItem = verifiedPayload?.type === "offer" ? verifiedPayload.terms.items?.[0]
-        : verifiedPayload?.type === "counter_offer" ? verifiedPayload.proposed_terms.items?.[0] : undefined;
+        : verifiedPayload?.type === "counter_offer" ? verifiedPayload.proposed_terms.items?.[0]
+        : verifiedPayload?.type === "conditional_offer" ? evaluateConditionalOffer(verifiedPayload, {
+            "aggregate.total_quantity": intentQuantity(intent),
+          }).items?.[0] : undefined;
       if (verifiedItem && (verifiedItem.sku !== itemSku || verifiedItem.quantity.value !== intentQuantity(intent) ||
           verifiedItem.quantity.unit !== (intentQuantityUnit(intent) ?? "piece"))) throw new ProtocolOperationConflict();
       const currentPrice = verifiedItem?.unit_price?.amount_minor;
@@ -414,6 +436,10 @@ export class A2ANegotiator implements Negotiator {
         quantity: intentQuantity(intent),
         quantityUnit: intentQuantityUnit(intent),
         counterPriceMinor: target,
+        priceBasis: (() => {
+          const basis = asRecord(intent.constraints).kiwi_procurement_target_price_basis;
+          return basis === "net" || basis === "gross" ? basis : undefined;
+        })(),
         summary: current.summary,
         now: this.now,
       });

@@ -1,0 +1,34 @@
+{
+  "mcpServers": {
+    "kiwi-company-procurement-buyer": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "./runtime/embedded-expert-launcher.mjs",
+        "kiwi-company-procurement-buyer"
+      ],
+      "runtime": {
+        "type": "node",
+        "version": "22"
+      },
+      "timeout": 30000,
+      "env": {
+        "LANG": "en_US.UTF-8",
+        "LC_ALL": "en_US.UTF-8"
+      },
+      "x-workbuddy": {
+        "displayName": {
+          "zh": "Kiwi 企业采购",
+          "en": "Kiwi Company Procurement"
+        },
+        "description": {
+          "zh": "本地管理公司采购事项、询价、比选和决策材料。",
+          "en": "Manage company sourcing cases, RFQs and evidence-based comparisons."
+        },
+        "auth": {
+          "type": "none"
+        }
+      }
+    }
+  }
+}

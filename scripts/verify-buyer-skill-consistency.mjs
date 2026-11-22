@@ -42,6 +42,8 @@ const SHARED_TOKENS = [
 /** 已支持双来源的副本：来源分区 + 状态映射 + 价格类型词表。 */
 const DUAL_SOURCE_FILES = [
   { path: "skills/kiwi-buyer/SKILL.md", lang: "zh" },
+  { path: "integrations/hosts/workbuddy/kiwi-company-procurement-expert/agents/kiwi-company-procurement.md", lang: "zh" },
+  { path: "integrations/hosts/workbuddy/kiwi-company-procurement-expert/skills/kiwi-company-source-and-quote/SKILL.md", lang: "zh" },
   {
     path: "integrations/hosts/workbuddy/kiwi-procurement-expert/agents/kiwi-procurement.md",
     lang: "zh",
@@ -65,6 +67,14 @@ const DUAL_SOURCE_FILES = [
 
 /** 已支持双来源、但只承担边界规则的副本（不做来源分区展示）。 */
 const BOUNDARY_FILES = [
+  {
+    path: "integrations/hosts/workbuddy/kiwi-company-procurement-expert/skills/kiwi-company-compare-and-clarify/SKILL.md",
+    require: ["kiwi_compare_quotes", "expected_offer_digest", "kiwi_negotiate"],
+  },
+  {
+    path: "integrations/hosts/workbuddy/kiwi-company-procurement-expert/skills/kiwi-company-decision-and-handoff/SKILL.md",
+    require: ["record_external_decision", "kiwi_get_procurement", "kiwi_handoff"],
+  },
   {
     path: "integrations/hosts/workbuddy/kiwi-procurement-expert/skills/kiwi-compare-and-negotiate/SKILL.md",
     require: ["merchant_listed_price", "page_reference", "to_be_quoted", "kiwi_negotiate"],

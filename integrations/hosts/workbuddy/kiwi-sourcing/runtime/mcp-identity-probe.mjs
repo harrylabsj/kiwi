@@ -64,7 +64,7 @@ function validInitialize(message){
     &&typeof message.result?.capabilities?.tools==='object';
 }
 
-export async function probeMcpIdentity({nodeBinary,packageRoot,fixtureHome,timeoutMs=15000}){
+export async function probeMcpIdentity({nodeBinary,packageRoot,fixtureHome,profile='legacy13',timeoutMs=15000}){
   if(![nodeBinary,packageRoot,fixtureHome].every(isAbsolute))throw new Error('ABSOLUTE_PATH_REQUIRED');
   if(!Number.isInteger(timeoutMs)||timeoutMs<100||timeoutMs>60000)throw new Error('TIMEOUT_INVALID');
   const command=join(packageRoot,'dist','cli.js');
@@ -97,7 +97,7 @@ export async function probeMcpIdentity({nodeBinary,packageRoot,fixtureHome,timeo
     }finally{db.close()}
     const env={
       HOME:dir,TMPDIR:dir,PATH:[dirname(nodeBinary),'/usr/bin','/bin'].join(delimiter),
-      NODE_ENV:'test',KIWI_CLIENT_ID:CLIENT_ID,KIWI_SESSION_TOKEN_FILE:tokenFile,KIWI_SESSION:SESSION,
+      NODE_ENV:'test',KIWI_BUYER_TOOL_PROFILE:profile,KIWI_CLIENT_ID:CLIENT_ID,KIWI_SESSION_TOKEN_FILE:tokenFile,KIWI_SESSION:SESSION,
     };
     const lines=[
       {jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-06-18',clientInfo:{name:'kiwi-identity-probe',version:'1.0.0'},capabilities:{}}},

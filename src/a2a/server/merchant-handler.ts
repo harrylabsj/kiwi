@@ -26,6 +26,7 @@
  * 的确定性 merchant 行为；未来可替换为 LLM 驱动的 Negotiation Engine（同一 handler 接缝）。
  */
 
+import { merchantProcurementTerms, readProcurementProjection, type MerchantProcurementProvider } from "./merchant-procurement.js";
 import { StreamGateError } from "../../merchant-core/customer-delivery/stream-gate.js";
 import { BoundedMap, BoundedSet } from "../../runtime/bounded-memory.js";
 import { checkedProductStock, checkedSourceEvidence, quoteFactsStillValid, recoverQuoteSourceSnapshot, type ProductSourceEvidence, type QuoteSourceSnapshot, type ResolvedProductFacts } from "./merchant-product-facts.js";
@@ -281,6 +282,7 @@ export interface MerchantHandlerOptions {
   offerPriceMinor?: number;
   /** 真实商品源（接 shopping-cli /products/{sku} 等开放商品层）；缺省用内置演示价。 */
   productSource?: MerchantProductSource;
+  procurementFacts?: MerchantProcurementProvider;
   /** 商品源故障时是否回退内置演示价（fail-open）；缺省 false = fail-closed
    *  （decline temporarily_unavailable）。仅本地 demo/测试形态显式开启。 */
   allowDemoPriceFallback?: boolean;
@@ -1865,11 +1867,17 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
               })
             : undefined;
           const quoteNote = quoteMessage(product);
+          const projection = readProcurementProjection(payload.requested_terms);
+          const companyFacts = projection ? options.procurementFacts?.(sku) : undefined;
+          const arrival = deliveryBefore();
+          const companyTerms = merchantProcurementTerms(companyFacts, projection, { price: effectivePriceMinor, currency,
+            quantity, unit: requestedUnit, arrival, stock: sourceConfirmed ? product.stock : undefined });
+          const procurement = projection ? { projection, facts_digest: contentDigest(companyFacts ?? null), arrival } : undefined;
           // 买家在 RFQ 里声明了到货时限时必须逐条回应，不能只回价格。
           const language = replyLanguageOf(envelope.public_message, buyerMessage);
           const deliveryNote = deliveryCommitmentNote(
             requestedDeliveryBeforeOf(envelope.payload),
-            deliveryBefore(),
+            arrival,
             language,
           );
           const publicMessage =
@@ -1885,7 +1893,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             payload: {
               type: "offer",
               offer_id: newOfferId(),
-              terms: offerTerms(
+              terms: { ...offerTerms(
                 {
                   sku,
                   unit: requestedUnit,
@@ -1893,11 +1901,11 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
                   quantity,
                   currency,
                   handoff_destination,
-                  deliveryBefore: deliveryBefore(),
+                  deliveryBefore: arrival,
                   ...quoteValidity(product, promotion.kind === "applied" ? promotion.endsAt : undefined),
                 },
                 now(),
-              ),
+              ), ...companyTerms },
             },
             ...(publicMessage !== undefined ? { public_message: publicMessage } : {}),
           });
@@ -1924,7 +1932,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
               quantity,
             ),
           );
-          await appendSent(reply, snapshotFor(sku, quantity, product, promotion));
+          await appendSent(reply, { ...snapshotFor(sku, quantity, product, promotion), ...(procurement ? { procurement } : {}) });
           const registeredSubject = await registerVerifiedCustomerIdentity(ctx, "rfq");
           await applyDelegationFromMetadata(ctx, registeredSubject?.subject_id);
           await indexHistoryOffer(ctx, reply, product);
@@ -2034,6 +2042,10 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           if (typeof sku !== "string" || sku.trim() === "" || typeof requestedUnit !== "string" || requestedUnit.trim() === "" || invalidQuantity(quantityRaw)) return declineReply("schema_invalid");
           const quantity = quantityRaw as number;
           const buyerCounterMinor = counter.proposed_terms?.items?.[0]?.unit_price?.amount_minor;
+          const companyPriceBasis = (counter.proposed_terms?.items?.[0]?.unit_price as { basis?: unknown } | undefined)?.basis;
+          if (companyPriceBasis !== undefined && (typeof sku !== "string" ||
+              !quoteSources.get(negotiationId)?.snapshot.procurement ||
+              options.procurementFacts?.(sku)?.native_basis !== companyPriceBasis)) return declineReply("schema_invalid");
           const floorMinor = floorMinorForSku(sku);
           if (floorMinor === null) return declineReply("temporarily_unavailable");
           const resolved = await resolveProductOrDecline(sku);
@@ -2198,6 +2210,14 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           ]
             .filter((part): part is string => part !== undefined && part.trim() !== "")
             .join(" ") || undefined;
+          const procurementProjection = quoteSources.get(negotiationId)?.snapshot.procurement?.projection;
+          const companyFacts = procurementProjection ? options.procurementFacts?.(sku) : undefined;
+          const arrival = deliveryBefore();
+          const procurement = procurementProjection ? { projection: procurementProjection, facts_digest: contentDigest(companyFacts ?? null), arrival } : undefined;
+          const companyTerms = (quotePrice: number) => merchantProcurementTerms(companyFacts, procurementProjection, {
+            price: quotePrice, currency, quantity, unit: requestedUnit, arrival,
+            stock: product.source_evidence !== undefined ? product.stock : undefined,
+          });
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
@@ -2212,7 +2232,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
               policy_digest: policyDigest(),
               product_fingerprint: productFingerprint({ sku, priceMinor, currency }),
               // base = 还价响应（已 clamp 到 [floor, list]）——单台即得到该价。
-              base_terms: offerTerms(
+              base_terms: { ...offerTerms(
                 {
                   sku,
                   unit: requestedUnit,
@@ -2220,11 +2240,11 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
                   quantity,
                   currency,
                   handoff_destination,
-                  deliveryBefore: deliveryBefore(),
+                  deliveryBefore: arrival,
                   ...quoteValidity(product, authorityPromotion.kind === "applied" ? authorityPromotion.endsAt : undefined),
                 },
                 now(),
-              ),
+              ), ...companyTerms(responsiveMinor) },
               // conditions 可空（§13：空 conditions 等价 base_terms）。促销价低于
               // 私有底价时不挂条件——不广告无法兑现的价，也不借 then_terms 泄露底价。
               conditions:
@@ -2236,7 +2256,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
                             { field: "aggregate.total_quantity", op: "gte", value: bulkThreshold },
                           ],
                         },
-                        then_terms: offerTerms(
+                        then_terms: { ...offerTerms(
                           {
                             sku,
                             unit: requestedUnit,
@@ -2244,11 +2264,11 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
                             quantity,
                             currency,
                             handoff_destination,
-                            deliveryBefore: deliveryBefore(),
+                            deliveryBefore: arrival,
                             ...quoteValidity(product, authorityPromotion.kind === "applied" ? authorityPromotion.endsAt : undefined),
                           },
                           now(),
-                        ),
+                        ), ...companyTerms(promotionalMinor) },
                       },
                     ]
                   : [],
@@ -2267,7 +2287,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             offer_id: String((reply.payload as { offer_id?: unknown }).offer_id ?? ""),
           });
           if (!advanced) return declineReply("state_conflict");
-          await appendSent(reply, snapshotFor(sku, quantity, product, authorityPromotion));
+          await appendSent(reply, { ...snapshotFor(sku, quantity, product, authorityPromotion), ...(procurement ? { procurement } : {}) });
           await indexHistoryOffer(ctx, reply, product);
           return envelopeReply(reply);
         }
@@ -2456,6 +2476,10 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           const refreshedFacts = await resolveProductOrDecline(saved.snapshot.sku, { force: true });
           if ("declined" in refreshedFacts) return declineReply("approval_required");
           if (!quoteFactsStillValid(saved.snapshot, refreshedFacts.product, Date.parse(now()))) return declineReply("approval_required");
+          if (saved.snapshot.procurement) {
+            const currentFacts = options.procurementFacts?.(saved.snapshot.sku);
+            if (saved.snapshot.procurement.facts_digest !== contentDigest(currentFacts ?? null)) return declineReply("approval_required");
+          }
           if (saved.snapshot.policy_digest !== policyDigest()) return declineReply("approval_required");
           const currentFloor = floorMinorForSku(saved.snapshot.sku);
           if (currentFloor === null) return declineReply("approval_required");

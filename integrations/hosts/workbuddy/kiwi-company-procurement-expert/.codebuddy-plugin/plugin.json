@@ -1,0 +1,70 @@
+{
+  "name": "kiwi-company-procurement-expert",
+  "version": "1.0.0",
+  "description": "Manage company procurement cases and compare Kiwi Network offers with accessible e-commerce evidence.",
+  "author": {
+    "name": "harrylabsj"
+  },
+  "homepage": "https://github.com/harrylabsj/kiwi",
+  "license": "Apache-2.0",
+  "agents": [
+    "./agents/kiwi-company-procurement.md"
+  ],
+  "skills": [
+    "./skills/kiwi-company-source-and-quote",
+    "./skills/kiwi-company-compare-and-clarify",
+    "./skills/kiwi-company-decision-and-handoff"
+  ],
+  "expertType": "agent",
+  "agentName": "kiwi-company-procurement",
+  "displayName": {
+    "zh": "Kiwi·企业采购",
+    "en": "Kiwi · Company Procurement"
+  },
+  "profession": {
+    "zh": "Kiwi采购智能体",
+    "en": "Kiwi Company Procurement Agent"
+  },
+  "displayDescription": {
+    "zh": "整理采购需求，核对Kiwi商家与电商报价的规格、税运、交期和开票条件，生成可追溯的比选与报审材料。",
+    "en": "Create procurement cases, compare Kiwi and e-commerce quotes, verify tax, delivery and invoicing, and prepare a decision brief."
+  },
+  "avatar": "avatars/kiwi-company-procurement.png",
+  "categoryId": "12-IndustryConsultant",
+  "defaultInitPrompt": {
+    "zh": "帮我整理一项公司采购需求",
+    "en": "Prepare a company purchasing request"
+  },
+  "plugin": "kiwi-company-procurement-expert",
+  "tags": [
+    {
+      "zh": "企业采购",
+      "en": "Company Procurement"
+    },
+    {
+      "zh": "询价比选",
+      "en": "Quote Comparison"
+    },
+    {
+      "zh": "采购建议",
+      "en": "Decision Brief"
+    }
+  ],
+  "quickPrompts": [
+    {
+      "zh": "帮我整理一项公司采购需求",
+      "en": "Prepare a company purchasing request"
+    },
+    {
+      "zh": "对比 Kiwi 商家和电商平台的报价",
+      "en": "Compare Kiwi and e-commerce quotes"
+    },
+    {
+      "zh": "根据已有报价生成采购建议书",
+      "en": "Prepare a procurement decision brief"
+    }
+  ],
+  "dependencies": {
+    "mcpServers": "./.mcp.json"
+  }
+}

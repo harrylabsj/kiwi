@@ -5,12 +5,12 @@ import {checkToolContract} from './tool-contract.mjs';
 // Local fixture-only probe. No model, business tool calls or real merchant.
 // This executes package code; callers must first verify provenance and every
 // executable byte. It cannot prove future authorization semantics by itself.
-export async function probeMcpSchema({nodeBinary, packageRoot, fixtureHome, baseline, locale='en', timeoutMs=15000}) {
+export async function probeMcpSchema({nodeBinary, packageRoot, fixtureHome, baseline, profile='legacy13', locale='en', timeoutMs=15000}) {
   if (![nodeBinary,packageRoot,fixtureHome].every(isAbsolute)) throw new Error('ABSOLUTE_PATH_REQUIRED');
   if (!['en','zh'].includes(locale)) throw new Error('LOCALE_INVALID');
   if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 60000) throw new Error('TIMEOUT_INVALID');
   const command=join(packageRoot,'dist','cli.js');
-  const env={HOME:fixtureHome,TMPDIR:fixtureHome,PATH:[dirname(nodeBinary),'/usr/bin','/bin'].join(delimiter),NODE_ENV:'test',KIWI_LANG:locale};
+  const env={HOME:fixtureHome,TMPDIR:fixtureHome,PATH:[dirname(nodeBinary),'/usr/bin','/bin'].join(delimiter),NODE_ENV:'test',KIWI_BUYER_TOOL_PROFILE:profile,KIWI_LANG:locale};
   const lines=[
     {jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-06-18',clientInfo:{name:'kiwi-contract-probe',version:'1.0.0'},capabilities:{}}},
     {jsonrpc:'2.0',method:'notifications/initialized'},
@@ -34,6 +34,6 @@ export async function probeMcpSchema({nodeBinary, packageRoot, fixtureHome, base
     if(item.id===2){count++;response=item}
   }
   if(count!==1 || response.error || !Array.isArray(response.result?.tools)) throw new Error('MCP_TOOLS_RESPONSE_INVALID');
-  checkToolContract(baseline,response.result.tools);
+  checkToolContract(baseline,response.result.tools,profile);
   return {toolCount:response.result.tools.length};
 }

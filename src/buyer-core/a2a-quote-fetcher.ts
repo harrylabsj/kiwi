@@ -26,6 +26,7 @@
  * 可解释 failure classification。
  */
 
+import { asRecord, REQUIREMENTS_KEY } from "./procurement/requirements.js";
 import { newNegotiationId } from "../negotiation/domain/identifiers.js";
 import type { A2AOutboundSigner } from "../a2a/client/types.js";
 import {
@@ -496,12 +497,15 @@ export class A2AQuoteFetcher implements QuoteFetcher {
           },
         };
       }
+      const projection = asRecord(intent.constraints)[REQUIREMENTS_KEY];
+      const requestedTerms = projection === undefined ? undefined : { [REQUIREMENTS_KEY]: projection };
       const negotiationId = newNegotiationId();
       const envelope = buildRfqEnvelope({
         negotiationId,
         sku,
         quantity: firstQuantity(intent),
         deliveryBefore: constraintsDeadline(intent),
+        requestedTerms,
         ...(publicMessage !== undefined ? { publicMessage } : {}),
         now: this.now,
       });
@@ -530,7 +534,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
       const exchange = await this.recovery.exchange({
         context, stage: "rfq", round: 0, merchantId, endpoint,
         binding: { intent, merchant, payload: envelope.payload, delegation },
-        build: (id) => buildRfqEnvelope({ negotiationId:id, sku, quantity:firstQuantity(intent), deliveryBefore:constraintsDeadline(intent), ...(publicMessage !== undefined ? { publicMessage } : {}), now:()=>context.createdAt }),
+        build: (id) => buildRfqEnvelope({ negotiationId:id, sku, quantity:firstQuantity(intent), deliveryBefore:constraintsDeadline(intent), requestedTerms, ...(publicMessage !== undefined ? { publicMessage } : {}), now:()=>context.createdAt }),
         send: (wire) => client.sendMessage(envelopeToMessage(wire, delegationMetadata)),
         get: (id) => client.getTask(id), timeoutMs:this.timeoutMs, pollIntervalMs:this.pollIntervalMs,
       });
