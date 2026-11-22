@@ -1,6 +1,7 @@
 {
   "name": "kiwi",
   "version": "0.8.0",
+  "homepage": "https://kiwi.harrylabsj.com",
   "description": "Kiwi buyer core sourcing & negotiation tools for OpenClaw (catalog discovery → A2A direct merchant → RFQ → negotiate → approval → handoff).",
   "type": "module",
   "main": "index.js",

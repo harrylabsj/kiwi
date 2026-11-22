@@ -1,5 +1,7 @@
 # kiwi-buyer-openclaw
 
+[Kiwi 官网](https://kiwi.harrylabsj.com)
+
 OpenClaw 原生插件：把 kiwi Buyer Core（与 `kiwi-buyer-mcp` 同一 `buildBuyerService` /
 `buildKiwiTools`，9 个高层工具）以 `kiwi_buyer_*` 前缀暴露给 OpenClaw（战略 v2.5
 §6.3 单核心多包装 / §6.8 三角色分离 —— Host→Kiwi Buyer，不管理商家本地运营）。
