@@ -14,6 +14,11 @@ openclaw plugins install clawhub:kiwi
 
 插件内置 skill `kiwi-buyer` 自动随插件加载；`@harrylabsj/kiwi` 作为运行时依赖随包安装。
 
+已有安装可运行 `openclaw plugins update kiwi`，然后重启 Gateway 并开启新会话。
+v0.8.0 固定使用 `@harrylabsj/kiwi@0.12.32`，保留 `kiwi` 插件 ID 和原有工具名。
+查看旧采购任务时继续使用原来的数据库路径、principal、buyer agent 和持久客户端标识。
+此前没有持久客户端标识的临时会话无法通过新增标识恢复。
+
 ## 本地开发（源码加载）
 
 1. 在 `~/.openclaw/openclaw.json` 的 `plugins.load.paths` 加：
@@ -31,7 +36,7 @@ openclaw plugins install clawhub:kiwi
 2. 插件目录 `npm install`（拉取 `@harrylabsj/kiwi`），重启 OpenClaw（或触发插件热加载）。
    插件内置 skill `kiwi-buyer` 自动随插件加载。
 
-## 配置（plugins.entries.kiwi-buyer-openclaw.config）
+## 配置（plugins.entries.kiwi.config）
 
 | 键 | 默认 | 说明 |
 |---|---|---|
@@ -40,7 +45,7 @@ openclaw plugins install clawhub:kiwi
 | `dbPath` | `~/.kiwi/openclaw.sqlite` | 持久 store（task/approval/agreement）|
 | `principal` | `openclaw:user` | Principal 标识 |
 | `buyerAgentId` | `buyer-agent:openclaw` | buyer agent id |
-| `clientId` | 无 | **每个 OpenClaw 实例必须持久化的唯一客户端身份**；缺失时仅临时会话，不能恢复旧任务，也不会共享固定默认值 |
+| `clientId` | `KIWI_CLIENT_ID`，未设置则为临时会话 | 每个 OpenClaw 实例使用唯一且持久的客户端标识；跨进程访问旧任务时沿用创建任务时的标识 |
 
 ## 9 个工具（§6.8 前缀 `kiwi_buyer_*`）
 
@@ -58,9 +63,14 @@ openclaw plugins install clawhub:kiwi
 
 ## 采购流
 
-`kiwi_buyer_search` → `kiwi_buyer_request_quotes` → `kiwi_buyer_get_task` →
-`kiwi_buyer_negotiate` → `kiwi_buyer_accept_agreement`（approval_required）→ 用户确认 →
-`kiwi_buyer_approve` → 重试 accept → `kiwi_buyer_get_agreement` → `kiwi_buyer_handoff`。
+购物和采购先用 `kiwi_buyer_search` 查 Kiwi Network。会话有网页搜索和取页工具时，
+技能另查互联网电商并分源展示，提供原始链接。缺少网页工具时明确标注互联网未检索。
+外部商品不会作为 Kiwi 询价候选。只有用户明确要求询价且商家支持实时询价时，才调用
+`kiwi_buyer_request_quotes`。
+
+询价后用 `kiwi_buyer_get_task` 查看进展，按用户指示用 `kiwi_buyer_negotiate` 磋商。
+接受非绑定协议和生成交接入口时，按当次操作的 `approval_id` 分别向用户确认，调用
+`kiwi_buyer_approve` 后再重试对应操作。交接前用 `kiwi_buyer_get_agreement` 核对协议。
 
 **边界**：buyer 只经 catalog 发现、A2A 直连 merchant；**不直连 shopping-cli**（那是
 服务器上 merchant 才碰的）。不处理支付（payment 恒 NEVER）。
