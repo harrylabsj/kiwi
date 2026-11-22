@@ -1,6 +1,6 @@
 {
   "name": "kiwi-procurement-expert",
-  "version": "1.1.9",
+  "version": "1.1.10",
   "description": "Discover suppliers for a specified product, compare sourced prices and delivery terms, and request nonbinding quotes within the buyer’s mandate.",
   "author": {
     "name": "harrylabsj",

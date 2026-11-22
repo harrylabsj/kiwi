@@ -148,6 +148,24 @@ export class KiwiCatalogMerchantIndex {
     diagnostics: NetworkSearchDiagnostics;
     failure?: unknown;
   }> {
+    const exact = await this.searchCatalog(query, opts);
+    // Catalog text matching can distinguish a typographic apostrophe from ASCII.
+    // Prefer an exact hit; only try the equivalent spelling after a complete miss.
+    const alternate = query.replace(/(?<=[\p{L}\p{N}])[‘’](?=[\p{L}\p{N}])/gu, "'");
+    if (alternate === query || exact.diagnostics.status !== "completed" || exact.diagnostics.result_state !== "no_match") {
+      return exact;
+    }
+    const retried = await this.searchCatalog(alternate, opts);
+    retried.diagnostics.notes.push("原词未命中，已按同一商品词的直撇号拼写补查。");
+    this.searchNotes = [...retried.diagnostics.notes];
+    return retried;
+  }
+
+  private async searchCatalog(query: string, opts?: { category?: string }): Promise<{
+    merchants: MerchantRecord[];
+    diagnostics: NetworkSearchDiagnostics;
+    failure?: unknown;
+  }> {
     const [listingsRes, agentsRes, publicationsRes] = await Promise.allSettled([
       this.source.searchListings({
         q: query,

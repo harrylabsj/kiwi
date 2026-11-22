@@ -554,3 +554,32 @@ describe("KiwiBuyerService.search：汇总与兼容口径", () => {
     expect(body.merchants[0]?.products).toHaveLength(1);
   });
 });
+
+describe("discovery with typographic apostrophes", () => {
+  const exact = "Women’s Desk Folder";
+  const alternate = "Women's Desk Folder";
+
+  it.each(["exact hit", "complete miss", "partial", "alternate unavailable"])("%s", async scenario => {
+    const queries: string[] = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      const q = url.searchParams.get("q");
+      if (url.pathname.endsWith("/listings/search")) queries.push(q ?? "");
+      const hasMatch = scenario === "exact hit" || (scenario === "complete miss" && q === alternate);
+      if (scenario === "alternate unavailable" && q === alternate) return new Response("{}", { status: 503 });
+      return stubCatalog({
+        agents: { body: hasMatch ? { results: [AGENT_V1], next_cursor: null } : EMPTY },
+        listings: { body: hasMatch ? { results: [listingResult()], next_cursor: null } : EMPTY },
+        publications: scenario === "partial" ? { status: 503 } : { body: EMPTY },
+      })(input, init);
+    };
+    const found = await makeIndex(fetchImpl).searchWithDiagnostics(exact);
+    if (scenario === "exact hit" || scenario === "partial") expect(queries).toEqual([exact]);
+    else expect(queries).toEqual([exact, alternate]);
+    if (scenario === "alternate unavailable") expect(found.diagnostics.result_state).toBe("undetermined");
+    if (scenario === "exact hit" || scenario === "complete miss") {
+      expect(found.diagnostics.result_state).toBe("has_candidates");
+      expect(found.merchants).toHaveLength(1);
+    }
+  });
+});
