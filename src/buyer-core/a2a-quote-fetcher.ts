@@ -1,3 +1,4 @@
+import { quoteQuantity } from "./quote-quantity.js";
 /**
  * Copyright 2026 harrylabsj
  *
@@ -194,18 +195,6 @@ function explicitIntentSku(intent: Record<string, unknown>): string | undefined 
   return typeof sku === "string" && sku.trim() !== "" ? sku : undefined;
 }
 
-function firstQuantity(intent: Record<string, unknown>): { value: number; unit?: string } {
-  const qty = firstItem(intent).quantity;
-  if (typeof qty === "object" && qty !== null) {
-    const value = (qty as Record<string, unknown>).value;
-    const unit = (qty as Record<string, unknown>).unit;
-    if (typeof value === "number" && value > 0) {
-      return { value, ...(typeof unit === "string" && unit !== "" ? { unit } : {}) };
-    }
-  }
-  return { value: 1 };
-}
-
 function constraintsDeadline(intent: Record<string, unknown>): string | undefined {
   const constraints = intent.constraints;
   if (typeof constraints === "object" && constraints !== null) {
@@ -346,7 +335,8 @@ export class A2AQuoteFetcher implements QuoteFetcher {
 
   /** 对每个 Merchant 独立发起真实 RFQ 并收集回复（部分失败语义）。 */
   async requestQuotes(intent: Record<string, unknown>, merchants: MerchantRecord[], context?: ProtocolTaskContext): Promise<QuoteCandidateInput[]> {
-    return Promise.all(merchants.map((merchant) => this.requestQuote(intent, merchant, context)));
+    const quantity = quoteQuantity(intent);
+    return Promise.all(merchants.map((merchant) => this.requestQuote(intent, merchant, quantity, context)));
   }
 
   /**
@@ -429,6 +419,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
   private async requestQuote(
     intent: Record<string, unknown>,
     merchant: MerchantRecord,
+    quantity: { value: number; unit: string },
     context?: ProtocolTaskContext,
   ): Promise<QuoteCandidateInput> {
     const { merchant_id: merchantId, agent_card_url: agentCardUrl } = merchant;
@@ -503,7 +494,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
       const envelope = buildRfqEnvelope({
         negotiationId,
         sku,
-        quantity: firstQuantity(intent),
+        quantity,
         deliveryBefore: constraintsDeadline(intent),
         requestedTerms,
         ...(publicMessage !== undefined ? { publicMessage } : {}),
@@ -534,7 +525,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
       const exchange = await this.recovery.exchange({
         context, stage: "rfq", round: 0, merchantId, endpoint,
         binding: { intent, merchant, payload: envelope.payload, delegation },
-        build: (id) => buildRfqEnvelope({ negotiationId:id, sku, quantity:firstQuantity(intent), deliveryBefore:constraintsDeadline(intent), requestedTerms, ...(publicMessage !== undefined ? { publicMessage } : {}), now:()=>context.createdAt }),
+        build: (id) => buildRfqEnvelope({ negotiationId:id, sku, quantity, deliveryBefore:constraintsDeadline(intent), requestedTerms, ...(publicMessage !== undefined ? { publicMessage } : {}), now:()=>context.createdAt }),
         send: (wire) => client.sendMessage(envelopeToMessage(wire, delegationMetadata)),
         get: (id) => client.getTask(id), timeoutMs:this.timeoutMs, pollIntervalMs:this.pollIntervalMs,
       });

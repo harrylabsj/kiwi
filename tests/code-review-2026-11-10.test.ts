@@ -21,9 +21,9 @@ describe("targetPriceMinor (P1-3)", () => {
     ).toBe(13500);
   });
 
-  it("derives from budget and quantity without floating minor output", () => {
+  it("uses the verified price for the default discount even with a larger budget", () => {
     const target = targetPriceMinor({ constraints: { budget: { amount_minor: 30000 } }, items: [{ quantity: { value: 2, unit: "piece" } }] }, 14907, 0.1);
-    expect(target).toBe(15000);
+    expect(target).toBe(13416);
     expect(Number.isSafeInteger(target)).toBe(true);
   });
 });

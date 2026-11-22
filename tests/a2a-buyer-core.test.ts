@@ -301,7 +301,7 @@ describe("Buyer MCP 端到端：预算还价 → 候选刷新 → 商家 accept"
           intent_id: "e2e-accept-1",
           intent_type: "purchase",
           items: [{ query: "Test Product", quantity: { value: 1, unit: "台" } }],
-          constraints: { currency: "CNY", budget: { currency: "CNY", amount_minor: 18000 } },
+          constraints: { currency: "CNY", budget: { currency: "CNY", amount_minor: 24000 }, target_unit_price: { currency: "CNY", amount_minor: 18000 } },
           context_projection: { disclosure_boundary: "commerce_required", projected_fields: ["items", "constraints"] },
         },
         merchant_ids: [search.merchants[0]!.merchant_id],
@@ -311,7 +311,7 @@ describe("Buyer MCP 端到端：预算还价 → 候选刷新 → 商家 accept"
       const negotiated = await call("kiwi_negotiate", {
         task_id: taskId,
         action: "counter_offer",
-        summary: "预算上限 180 元",
+        summary: "授权出价 180 元",
       });
       expect(negotiated.isError).toBeUndefined();
       const counter = capture.find((c) => c.action === "counter_offer");
@@ -396,7 +396,7 @@ describe("A2ANegotiator（A2A 直连 merchant CounterOffer）", () => {
     }
   });
 
-  it("预算驱动还价价与商家 accept：counter 用预算单价，accept 绑定商家最新条款", async () => {
+  it("授权还价与商家 accept：counter 用明确出价，accept 绑定商家最新条款", async () => {
     const { A2AQuoteFetcher } = await import("../src/buyer-core/a2a-quote-fetcher.js");
     const { A2ANegotiator } = await import("../src/buyer-core/a2a-negotiator.js");
     const { KiwiCatalogMerchantIndex } = await import("../src/buyer-core/merchant-index.js");
@@ -421,11 +421,11 @@ describe("A2ANegotiator（A2A 直连 merchant CounterOffer）", () => {
         pollIntervalMs: 50,
         timeoutMs: 3000,
       });
-      // 预算 180 元、数量 1：还价目标必须是 18000，而不是 18900×0.9=17010。
+      // 买方明确授权出价 180 元，低于 240 元预算；此出价可获得商家有效回复。
       const intent = {
         ...INTENT,
         items: [{ query: "Test Product", sku: "sku-001", quantity: { value: 1, unit: "台" } }],
-        constraints: { currency: "CNY", budget: { currency: "CNY", amount_minor: 18000 } },
+        constraints: { currency: "CNY", budget: { currency: "CNY", amount_minor: 24000 }, target_unit_price: { currency: "CNY", amount_minor: 18000 } },
       };
       const fetched = await fetcher.requestQuotes(intent, merchants, context);
       expect(fetched[0]?.status).toBe("succeeded");
@@ -438,7 +438,7 @@ describe("A2ANegotiator（A2A 直连 merchant CounterOffer）", () => {
       const step = await negotiator.negotiate(
         "task-a2a-001",
         intent,
-        { round: 1, action: "counter_offer", summary: "预算上限 180 元" },
+        { round: 1, action: "counter_offer", summary: "授权出价 180 元" },
         [fetched[0]!] as unknown as Array<Record<string, unknown>>,
         context,
       );

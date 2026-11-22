@@ -51,7 +51,7 @@ function fixture(stage: "rfq" | "counter" = "rfq", now: () => string = () => NOW
   const input: ProtocolExchange = { context, stage, round: stage === "rfq" ? 0 : 1,
     merchantId: "merchant-a647", endpoint: "http://127.0.0.1:1/rpc", binding: { actual: "request" },
     build: id => stage === "rfq" ? buildRfqEnvelope({ negotiationId: id, sku: "SKU", quantity: { value: 2, unit: "kg" }, now: () => NOW })
-      : buildCounterEnvelope({ negotiationId: id, sku: "SKU", quantity: 2, quantityUnit: "kg", counterPriceMinor: 0,
+      : buildCounterEnvelope({ negotiationId: id, sku: "SKU", quantity: 2, quantityUnit: "kg", counterPriceMinor: 0, currency: "CNY",
         respondingToOfferId: "off-prior", inReplyTo: "msg-prior", now: () => NOW }),
     send: async wire => { sends++; wires.push(wire); return task(working ? wire : respond(wire), working); },
     get: async () => { gets++; return task(respond(wires[0]!)); }, timeoutMs: 0, pollIntervalMs: 1 };

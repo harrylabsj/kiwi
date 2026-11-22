@@ -36,13 +36,13 @@ const CONTEXT = {
   intentBindingDigest: contentDigest({
     intent_id: "intent-access-1",
     intent_type: "purchase",
-    items: [{ query: "Widget", sku: "sku-1", quantity: { value: 1 } }],
+    items: [{ query: "Widget", sku: "sku-1", quantity: { value: 1, unit: "piece" } }],
   }),
 };
 const INTENT = {
   intent_id: "intent-access-1",
   intent_type: "purchase",
-  items: [{ query: "Widget", sku: "sku-1", quantity: { value: 1 } }],
+  items: [{ query: "Widget", sku: "sku-1", quantity: { value: 1, unit: "piece" } }],
 };
 
 const cleanups: Array<() => void> = [];

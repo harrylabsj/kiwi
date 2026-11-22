@@ -81,7 +81,7 @@ Kiwi Network 搜索覆盖全球。调用 `kiwi_search` 时省略 `region`。有�
 - `deadline` 只使用用户给定/确认且带时区的 RFC3339 时间；不知道就省略。币种不得凭商品所在地推断。
 - `context_projection.disclosure_boundary` 为 `commerce_required`，`projected_fields` 只列实际发送的采购字段；不要粘贴聊天历史。
 - 相同请求因传输错误重试时保持相同的幂等键和相同载荷。需求或商家范围变化使用新键；不得用新键盲目重发状态未知的请求。
-- 当前商家路由使用首个商品词检索，多个不同品类应分别发现供应商并拆成独立询价任务，不假设一个商家支持所有品类。
+- 每个询价任务只包含一种商品，即使同类的不同 SKU 也要分别询价。收到 single_item_required 时按已授权范围拆单；收到 quantity_required 时向买家确认数量和单位。
 
 需要具体 JSON 结构时读取 [询价示例](references/rfq-example.json)。示例是虚构数据，必须替换为用户已授权的需求和搜索返回的 merchant_ids。
 

@@ -121,7 +121,7 @@ function readPolicy(options: McpServeOptions, principal: string): Record<string,
   return raw;
 }
 
-export async function runMcpServe(args: string[]): Promise<number> {
+export async function runMcpServe(args: string[], { targetedNegotiation = false } = {}): Promise<number> {
   const opts: McpServeOptions = {};
   for (let i = 0; i < args.length; i += 1) {
     const flag = args[i];
@@ -230,7 +230,7 @@ export async function runMcpServe(args: string[]): Promise<number> {
     process.stderr.write(`${String(error)}\n`);
     return 2;
   }
-  const tools = buildKiwiTools(service, profile, { captureRoot: process.env.KIWI_PROCUREMENT_CAPTURE_DIRECTORY,
+  const tools = buildKiwiTools(service, profile, { targetedNegotiation, captureRoot: process.env.KIWI_PROCUREMENT_CAPTURE_DIRECTORY,
     confirm: message => server.confirm(message) });
   const server: McpServer = new McpServer({
     tools,

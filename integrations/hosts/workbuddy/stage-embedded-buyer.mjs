@@ -79,7 +79,7 @@ export async function stageEmbeddedBuyer(root, stage) {
   files.set(`${kiwi}/dist/cli.js`, [
     "import { runMcpServe } from './mcp/cli.js';",
     "if (process.argv[2] !== 'mcp' || process.argv[3] !== 'serve') process.exit(2);",
-    'process.exitCode = await runMcpServe(process.argv.slice(4));',
+    'process.exitCode = await runMcpServe(process.argv.slice(4), { targetedNegotiation: true });',
     '',
   ].join('\n'));
 

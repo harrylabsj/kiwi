@@ -220,6 +220,7 @@ export function createBuyerHttpServer(options: HttpAdapterOptions): Server {
             task_id: p.id ?? "",
             action: b.action === "clarification" ? "clarification" : "counter_offer",
             summary: String(b.summary ?? ""),
+            ...(b.candidate_id !== undefined ? { candidate_id: String(b.candidate_id) } : {}),
             ...(b.target_unit_price !== undefined
               ? {
                   target_unit_price: b.target_unit_price as {

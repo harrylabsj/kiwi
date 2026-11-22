@@ -17,7 +17,7 @@ const mcp=JSON.parse(readFileSync(join(bundle,'.mcp.json'),'utf8'));
 validateExpertDisplay(meta);
 assert(files.includes(meta.avatar), 'Avatar must be included in the expert ZIP');
 validateExpertAvatar(readFileSync(safeFile(bundle,meta.avatar)));
-assert.equal(meta.version,'1.2.5');assert.equal(meta.dependencies.mcpServers,'./.mcp.json');assert(!meta.dependencies.connectors?.length);
+assert.equal(meta.version,'1.2.7');assert.equal(meta.dependencies.mcpServers,'./.mcp.json');assert(!meta.dependencies.connectors?.length);
 assert.deepEqual(Object.keys(mcp.mcpServers),['kiwi-shopping-buyer']);
 const server=mcp.mcpServers['kiwi-shopping-buyer'];assert.equal(server.type,'stdio');assert.equal(server.command,'node');assert.deepEqual(server.args,[embeddedExpertLauncher,'kiwi-shopping-buyer']);assert.equal(server['x-workbuddy'].auth.type,'none');
 checkEmbeddedExpertRuntime();

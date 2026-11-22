@@ -1,3 +1,4 @@
+import { quoteQuantity } from "./quote-quantity.js";
 /**
  * Copyright 2026 harrylabsj
  *
@@ -1047,6 +1048,7 @@ export class KiwiBuyerService {
     }
     // M0 硬门（merchant-buddy 第 0 版 §4/§5）：仅有公开资料、无可路由 Agent 的
     // 商家不得进入 RFQ。服务层显式拒绝（不只靠宿主提示词），在创建任务/消息之前。
+    quoteQuantity(effectiveIntent);
     await this.assertInquiryAvailable(merchants);
     const policyId = this.policy.policy_id;
     const expiresAt = this.policy.expires_at;
@@ -1384,7 +1386,7 @@ export class KiwiBuyerService {
     questions?: { field: string; reason?: string }[];
     /**
      * counter_offer 的结构化目标单价（money 对象）。未提供时按意图
-     * target_unit_price → 预算/数量 → 商家当前价 ×(1-默认折扣) 推导。
+     * target_unit_price 或已验证商家报价计算；预算只用于校验上限。
      * 宿主必须与 summary 中的还价口径保持一致，避免"说 ≤150、发 143.10"。
      */
     target_unit_price?: { currency?: string; amount_minor: number };
@@ -1460,12 +1462,16 @@ export class KiwiBuyerService {
         ? { questions: normalizeClarificationQuestions(input.questions, input.summary) }
         : {}),
     };
+    let gated = input.candidate_id ? eligibleTargets.filter(candidate => candidate.candidate_id === input.candidate_id) : taskCandidates;
+    const allowedMerchants = this.policy.limits?.allowed_merchants;
+    if (gated.length === 1 && allowedMerchants && !allowedMerchants.includes(String(gated[0]!.merchant_id))) {
+      throw new McpError("delegation_denied", "该商家超出委托范围。");
+    }
     if (this.negotiator !== undefined) {
       // review P1-2（A316 补充校准）：counter 外发前的限额闸口——succeeded
       // 候选逐一过 limitViolation（结构化事实），仅放行未被约束阻断的候选；
       // 全部被阻断时显式拒绝（不存在合法还价对象）。clarification 无商业
       // 承诺，不过商业闸。
-      let gated = input.candidate_id ? taskCandidates.filter(candidate => candidate.candidate_id === input.candidate_id) : taskCandidates;
       if (input.action === "counter_offer") {
         const succeeded = gated.filter((c) => c.status === "succeeded");
         const passable = succeeded.filter(
@@ -1504,13 +1510,16 @@ export class KiwiBuyerService {
       reservedSlot = this.store.reserveNegotiationSlot(input.task_id, slotKind, maxRounds);
       step = { ...step, round: reservedSlot };
       input.onReserved?.(reservedSlot);
-      step = await this.negotiator.negotiate(
-        input.task_id,
-        intentForNegotiator,
-        step,
-        gated,
-        { ...this.protocolContext(task), beforeSend: input.beforeSend },
-      );
+      try {
+        step = await this.negotiator.negotiate(input.task_id, intentForNegotiator, step, gated, { ...this.protocolContext(task), beforeSend: input.beforeSend });
+      } catch (error) {
+        // Only a confirmed pre-dispatch refusal can safely release the reserved round.
+        if (error instanceof McpError && error.code === "clarification_needed" &&
+            (error.detail as { requestSent?: boolean } | undefined)?.requestSent === false) {
+          this.store.releaseNegotiationSlot(input.task_id, slotKind, reservedSlot);
+        }
+        throw error;
+      }
     } else {
       // 无外发 negotiator（本地确定性模式）同样占用槽位：跨进程并发也不
       // 能突破 max_rounds。
