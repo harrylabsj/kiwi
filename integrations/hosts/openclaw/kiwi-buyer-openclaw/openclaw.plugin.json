@@ -1,7 +1,7 @@
 {
   "id": "kiwi",
   "name": "Kiwi Buyer Plugin",
-  "version": "0.7.16",
+  "version": "0.8.0",
   "description": "Kiwi buyer core sourcing & negotiation tools (catalog discovery → A2A direct merchant → RFQ → negotiate → approval → handoff) for OpenClaw.",
   "configSchema": {
     "type": "object",
@@ -27,6 +27,10 @@
       "buyerAgentId": {
         "type": "string",
         "description": "buyer_agent_id；缺省 buyer-agent:openclaw"
+      },
+      "clientId": {
+        "type": "string",
+        "description": "此 OpenClaw 实例的持久、唯一客户端标识，用于重启后访问本买家原有任务。"
       }
     }
   },

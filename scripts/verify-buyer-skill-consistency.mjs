@@ -60,6 +60,7 @@ const DUAL_SOURCE_FILES = [
     path: "integrations/hosts/workbuddy/haina-ecommerce-expert/skills/online-shopping-assistant/SKILL.md",
     lang: "zh",
   },
+  { path: "integrations/hosts/openclaw/kiwi-buyer-openclaw/skills/kiwi-buyer/SKILL.md", lang: "zh" },
   // 跨仓（本机存在时校验；Hermes 插件仓与本仓同目录层级）。
   { path: "../hermes-plugin-kiwi/skills/kiwi-buyer/SKILL.md", lang: "en", optional: true },
   { path: "../hermes-plugin-kiwi/skills/kiwi-buyer/SKILL.zh-CN.md", lang: "zh", optional: true },
@@ -88,7 +89,6 @@ const BOUNDARY_FILES = [
 /** 尚未支持双来源的副本：必须显式标注，且不得使用新词表。 */
 const PENDING_FILES = [
   "integrations/hosts/deepseek-harness/SKILL.md",
-  "integrations/hosts/openclaw/kiwi-buyer-openclaw/skills/kiwi-buyer/SKILL.md",
   "integrations/plugins/kiwi-dsh-plugin/skills/kiwi-buyer/SKILL.md",
 ];
 

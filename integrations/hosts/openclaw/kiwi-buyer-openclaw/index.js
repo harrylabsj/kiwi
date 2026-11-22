@@ -53,14 +53,13 @@ const TOOLS = [
   "reject",
 ];
 
-/** 加载时仅用于提取工具元数据（description/inputSchema）的临时 service。 */
+/** 只提取工具元数据。Catalog 和协议状态在首次实际调用时初始化。 */
 const META_SERVICE = buildBuyerService({
   dbPath: ":memory:",
   principal: "meta",
   buyerAgentId: "meta",
   sessionId: "meta",
   policy: { ...DEFAULT_DELEGATION_POLICY, principal: "meta" },
-  catalogUrl: DEFAULT_CATALOG_URL,
 });
 const META_TOOLS = buildKiwiTools(META_SERVICE);
 
