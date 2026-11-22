@@ -291,6 +291,6 @@ describe("会话认证边界（fail-closed）", () => {
     const service = makeService(fetchImpl);
     const res = await callTool(service, "kiwi_follow_merchant", { merchant_id: "mkt-m0-002" });
     expect(res.isError).toBe(true);
-    expect(textOf(res)).toContain('follow response is missing field "follow"');
+    expect(textOf(res)).toBe("error internal_error: Tool operation failed");
   });
 });
