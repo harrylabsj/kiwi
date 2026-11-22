@@ -67,7 +67,7 @@ describe("K7 渠道订单事实 → 回执上报（B3）", () => {
     return { submitted, outbox, dispatcher, store, baseSource };
   };
 
-  it("bounds long legacy IDs and stops retrying a permanent rejection", async () => {
+  it.each([405, 410, 422])("bounds long legacy IDs and stops retrying HTTP %i", async (status) => {
     const channel = "a".repeat(24), ref = "b".repeat(110);
     const stamp = { value: NOW };
     const outbox = new ReceiptOutbox({ now: () => stamp.value });
@@ -81,13 +81,35 @@ describe("K7 渠道订单事实 → 回执上报（B3）", () => {
         calls++;
         expect(receipt.event_id).toBe(orderReceiptId(channel, ref));
         expect(receipt.event_id.length).toBeLessThanOrEqual(128);
-        throw new ReceiptHttpError(422);
+        throw new ReceiptHttpError(status);
       } } });
       await dispatcher.enqueueAndDeliver(event);
       stamp.value = "2030-01-01T00:00:00Z";
       await dispatcher.drain();
       expect(calls).toBe(1);
       expect(outbox.due()).toEqual([]);
+    } finally { outbox.close(); }
+  });
+
+  it.each([404, 408, 429, 503])("retries the same event after HTTP %i and recovery", async status => {
+    const clock = { value: NOW };
+    const outbox = new ReceiptOutbox({ now: () => clock.value });
+    const ids: string[] = [];
+    const dispatcher = new ReceiptDispatcher({ outbox, submitter: { async submit(receipt) {
+      ids.push(receipt.event_id);
+      if (ids.length === 1) throw new ReceiptHttpError(status);
+    } } });
+    try {
+      const event: OrderReceipt = { event_id: orderReceiptId("test", "order-1"), event_type: "merchant_order_created",
+        merchant_id: MERCHANT, occurred_at: NOW, order_channel: "test", order_ref: "order-1",
+        order_evidence: { checkout_session_ref: "checkout", channel_evidence: "order-1" } };
+      await dispatcher.enqueueAndDeliver(event);
+      await dispatcher.drain();
+      expect(ids).toEqual([event.event_id]);
+      clock.value = "2030-01-01T00:00:00Z";
+      expect(await dispatcher.drain()).toBe(1);
+      expect(ids).toEqual([event.event_id, event.event_id]);
+      expect(outbox.pendingCount()).toBe(0);
     } finally { outbox.close(); }
   });
 

@@ -395,6 +395,7 @@ export class ProcurementCases {
         // An automatic action has no human decision. Its exposed action ID
         // cannot authorize a retry after delegation changes to "ask".
         const needsNewApproval = !args.auto && this.store.read<ProcurementAction>(this.owner, "action", action.id, 1)?.status !== "PENDING";
+        // A retry also requires an unexpired authorization and the same active case revision.
         if (authorizationExpired || needsNewApproval || current.state !== "ACTIVE" || current.revision !== action.case_revision) {
           return { action: this.updateAction(action, { status: "REVOKED" }), dispatch: false };
         }
