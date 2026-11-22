@@ -1,11 +1,17 @@
 // Schema compatibility is necessary but is not evidence of authorization semantics.
-const names = ['kiwi_search','kiwi_request_quotes','kiwi_get_task','kiwi_negotiate','kiwi_accept_agreement','kiwi_get_agreement','kiwi_handoff','kiwi_approve','kiwi_reject','kiwi_follow_merchant','kiwi_unfollow_merchant','kiwi_list_follows','kiwi_get_follow_updates'];
+const legacyNames = ['kiwi_search','kiwi_request_quotes','kiwi_get_task','kiwi_negotiate','kiwi_accept_agreement','kiwi_get_agreement','kiwi_handoff','kiwi_approve','kiwi_reject','kiwi_follow_merchant','kiwi_unfollow_merchant','kiwi_list_follows','kiwi_get_follow_updates'];
+const companyNames = [...legacyNames, 'kiwi_prepare_procurement', 'kiwi_get_procurement', 'kiwi_compare_quotes', 'kiwi_get_comparison'];
+export function toolNames(profile = 'legacy13') {
+  if (profile === 'legacy13') return legacyNames;
+  if (profile === 'company-procurement-v1') return companyNames;
+  throw new Error('INVALID_BUYER_TOOL_PROFILE');
+}
 function canonical(v) {
   if (Array.isArray(v)) return v.map(canonical);
   if (v && typeof v === 'object') return Object.fromEntries(Object.keys(v).sort().map(k => [k, canonical(v[k])]));
   return v;
 }
-function normalize(tools) {
+function normalize(tools, names) {
   if (!Array.isArray(tools) || tools.length !== names.length) throw new Error('TOOL_SET_MISMATCH');
   const map = new Map();
   for (const tool of tools) {
@@ -22,7 +28,8 @@ export function enableQuoteHistory(baseline) {
   properties.reuse_history = { type: 'boolean' };
 }
 
-export function checkToolContract(baseline, candidate) {
+export function checkToolContract(baseline, candidate, profile) {
+  const names = toolNames(profile);
   if (!Array.isArray(baseline) || !Array.isArray(candidate)) throw new Error('TOOL_SET_MISMATCH');
   const normalizedCandidate = structuredClone(candidate);
   const region = normalizedCandidate.find(tool => tool?.name === 'kiwi_search')?.inputSchema?.properties?.region;
@@ -47,7 +54,7 @@ export function checkToolContract(baseline, candidate) {
     // Descriptions vary by client locale. All structural constraints are still compared.
     delete properties.reuse_history.description;
   }
-  const a=normalize(baseline), b=normalize(normalizedCandidate);
+  const a=normalize(baseline,names), b=normalize(normalizedCandidate,names);
   for (const name of names) if (a.get(name)!==b.get(name)) throw new Error(`TOOL_SCHEMA_MISMATCH:${name}`);
   return true;
 }

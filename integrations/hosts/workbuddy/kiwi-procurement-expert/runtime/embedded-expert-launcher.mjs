@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startVerifiedBackend } from './backend-client.mjs';
@@ -6,7 +6,7 @@ import { verifyFiles } from './bundle-verify.mjs';
 import { expertDataDirectory } from './expert-data.mjs';
 import { prepareInstanceData } from './instance-store.mjs';
 import { startProductionMcpServer } from './mcp-production-server.mjs';
-import { enableQuoteHistory } from './tool-contract.mjs';
+import { checkToolContract, enableQuoteHistory } from './tool-contract.mjs';
 
 const sourceRoot = fileURLToPath(new URL('.', import.meta.url)).replace(/\/$/, '');
 const sessionDirectory = join(sourceRoot, 'buyer');
@@ -19,7 +19,16 @@ const startupHoldCodes = new Set([
 async function main() {
   const serverName = process.argv[2] ?? 'kiwi-embedded-buyer';
   if (!/^[a-z][a-z0-9-]{0,63}$/.test(serverName)) throw new Error('EXPERT_SERVER_NAME_INVALID');
-  const dataDirectory = expertDataDirectory();
+  const configPath = join(sourceRoot, 'expert-config.json');
+  const config = existsSync(configPath) ? JSON.parse(readFileSync(configPath, 'utf8')) : undefined;
+  const company = config !== undefined;
+  if (company && (config.profile !== 'company-procurement-v1' ||
+      config.namespace !== '.kiwi-workbuddy-company-procurement-v1' || serverName !== 'kiwi-company-procurement-buyer')) {
+    throw new Error('TOOL_BASELINE_INVALID');
+  }
+  if (!company && serverName === 'kiwi-company-procurement-buyer') throw new Error('TOOL_BASELINE_INVALID');
+  const profile = config?.profile ?? 'legacy13';
+  const dataDirectory = expertDataDirectory(undefined, config?.namespace);
   const instance = prepareInstanceData(dataDirectory);
   const environment = { ...process.env };
   for (const key of ['KIWI_CLIENT_ID', 'KIWI_SESSION', 'KIWI_SESSION_TOKEN',
@@ -30,13 +39,22 @@ async function main() {
   environment.KIWI_CLIENT_ID = instance.instanceId;
   environment.KIWI_SESSION_TOKEN_FILE = instance.tokenFile;
 
+  if (company) {
+    for (const key of ['KIWI_A2A_SIGNING_KEY_DIR', 'KIWI_BUYER_AGENT', 'KIWI_CATALOG_SESSION', 'KIWI_DELEGATION_POLICY',
+      'KIWI_PRINCIPAL', 'KIWI_QUOTE_HISTORY_DELEGATION', 'KIWI_RECEIPT_CATALOG_URL', 'SHOPPING_BUYER_BOOTSTRAP_TOKEN']) delete environment[key];
+    // The private, independent namespace may receive pre-verified captures
+    // from an administrator or a trusted host adapter.
+    environment.KIWI_PROCUREMENT_CAPTURE_DIRECTORY = join(dataDirectory, 'captures');
+  }
   let baseline;
   try {
-    baseline = JSON.parse(readFileSync(join(sourceRoot, 'mcp-tools-0.12.12.json'), 'utf8'));
+    const chinese = /^zh/i.test(environment.KIWI_LANG ?? environment.LANG ?? environment.LC_ALL ?? '');
+    const file = company ? `mcp-tools-company-${chinese ? 'zh' : 'en'}.json` : 'mcp-tools-0.12.12.json';
+    baseline = JSON.parse(readFileSync(join(sourceRoot, file), 'utf8'));
+    checkToolContract(baseline, baseline, profile);
   } catch {
     throw new Error('TOOL_BASELINE_INVALID');
   }
-  if (!Array.isArray(baseline) || baseline.length !== 13) throw new Error('TOOL_BASELINE_INVALID');
   if (environment.KIWI_QUOTE_HISTORY_DELEGATION === 'true') {
     enableQuoteHistory(baseline);
   }
@@ -44,6 +62,7 @@ async function main() {
     input: process.stdin,
     output: process.stdout,
     baseline,
+    profile,
     serverName,
     onStatus: code => process.stderr.write(`KIWI_STATUS:${code}\n`),
     prepare: async () => {
@@ -64,6 +83,7 @@ async function main() {
       backendHome: instance.root,
       dataDirectory,
       baseline,
+      profile,
       clientCapabilities,
       onMessage,
       sourceRoot,

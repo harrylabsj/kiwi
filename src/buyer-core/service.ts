@@ -30,6 +30,9 @@
  * Negotiator 为可注入接口。v0.1 默认使用 Static 实现或由宿主注入。
  */
 
+import { ProcurementCases, fail as procurementError, type CaseRef, type ProcurementAction, type RfqRef } from "./procurement/cases.js";
+import { asRecord, COSTS_KEY, REQUIREMENTS_KEY, projectRequirements, validTimestamp } from "./procurement/requirements.js";
+import { missingBasis, type Source } from "./procurement/source-observation.js";
 import { contentDigest, sha256Hex } from "../negotiation/jcs.js";
 import { validateAcceptedNonbindingAgreement } from "../negotiation/domain/objects.js";
 import { randomBytes as cryptoRandomBytes } from "node:crypto";
@@ -297,6 +300,9 @@ export interface NegotiationStep {
 }
 
 export interface Negotiator {
+  recoverNegotiation?(
+    intent: Record<string, unknown>, step: NegotiationStep, candidate: Record<string, unknown>, context: ProtocolTaskContext,
+  ): Promise<NegotiationStep | undefined>;
   negotiate(
     taskId: string,
     intent: Record<string, unknown>,
@@ -468,6 +474,7 @@ interface QuoteRequestInput {
   merchant_ids?: string[];
   /** Resolve the previous quote's SKU only when the caller supplies no SKU. */
   reuse_history?: boolean;
+  beforeSend?: () => void;
 }
 
 /** 明确 SKU 的报价必须只包含该 SKU；商家换品/混入其他商品时拒绝接纳。 */
@@ -536,6 +543,7 @@ export class KiwiBuyerService {
   private readonly wakeAttemptAt = new Map<string, number>();
   private readonly wakeInFlight = new Map<string, Promise<boolean>>();
   private readonly now: () => string;
+  private procurement?: ProcurementCases;
 
   constructor(options: KiwiBuyerServiceOptions) {
     this.store = options.store;
@@ -560,6 +568,184 @@ export class KiwiBuyerService {
     this.followsClient = options.followsClient;
     this.staleWake = options.staleWake;
     this.staleWakeTimeoutMs = options.staleWakeTimeoutMs ?? 5000;
+  }
+
+  companyProcurement(captureRoot?: string): ProcurementCases {
+    this.procurement ??= new ProcurementCases(this.store.openProcurementStore(), `company-procurement-v1:${this.ownerHash}`, {
+      now: this.now,
+      captureRoot,
+      coverage: async query => {
+        const status = (await this.search({ query })).network_search.status;
+        return status === "searching" ? "partial" : status;
+      },
+      candidate: (task, id) => this.taskFor(task) === undefined ? undefined :
+        this.store.listCandidates(task).find(candidate => id === undefined || candidate.candidate_id === id),
+      discover: async (query, merchantId, sku) => {
+        const result = await this.search({ query });
+        const merchant = result.merchants.find(record => record.merchant_id === merchantId);
+        const listing = merchant?.products?.find(product => product.listing_id === sku || product.attributes?.sku === sku);
+        const available = merchant?.matching_skus?.includes(sku) || listing !== undefined;
+        const model = listing?.attributes?.model ?? listing?.attributes?.model_number;
+        return { coverage: result.network_search.status === "searching" ? "partial" : result.network_search.status,
+          match: merchant && available ? { name: merchant.name, inquiry_available: merchant.inquiry_available,
+            product: typeof model === "string" ? { model } : undefined } : undefined };
+      },
+    });
+    return this.procurement;
+  }
+
+  private procurementMode(action: ProcurementAction["operation"], merchant: string, allowAsk: boolean) {
+    const mode = this.policy.actions[action === "rfq" ? "inquiry_rfq" : action]?.mode;
+    const allowed = this.policy.limits?.allowed_merchants;
+    this.assertPolicyActive(Date.parse(this.now()));
+    if (mode === "never" || (allowed?.length && !allowed.includes(merchant))) {
+      throw new McpError("delegation_denied", "Procurement action is outside the delegation");
+    }
+    return allowAsk && mode === "auto";
+  }
+
+  async requestProcurementQuotes(input: QuoteRequestInput & { procurement_ref: RfqRef; approval_id?: string; idempotency_key: string }) {
+    const cases = this.companyProcurement();
+    const ref = input.procurement_ref;
+    const historical = cases.getCase(ref.case_id, ref.revision);
+    const source = historical.sources.find(entry => entry.id === ref.source_binding_id);
+    if (source?.channel !== "kiwi" || !source.merchant_id || source.inquiry_available !== true || input.merchant_ids?.length !== 1 ||
+        input.merchant_ids[0] !== source.merchant_id) procurementError("RFQ_REQUIRES_ONE_DISCOVERED_KIWI_MERCHANT");
+    const merchant = source.merchant_id;
+    const { basis } = historical;
+    const items = Array.isArray(input.intent.items) ? input.intent.items : [];
+    const item = asRecord(items[0]);
+    const quantity = asRecord(item.quantity);
+    if (items.length !== 1 || item.sku !== source.variant || quantity.value !== basis.quantity || quantity.unit !== basis.unit ||
+        missingBasis(basis).length || typeof item.query !== "string" || !item.query.trim() || item.query.length > 128) procurementError("RFQ_BASIS_MISMATCH");
+    const projection = projectRequirements(basis);
+    const intent = { intent_id: input.intent.intent_id, intent_type: input.intent.intent_type,
+      items: [{ query: item.query, sku: source.variant, quantity: { value: basis.quantity, unit: basis.unit } }],
+      constraints: { deadline: basis.delivery_before, currency: "CNY", [REQUIREMENTS_KEY]: projection } };
+    const invalid = validateCommerceIntent(intent);
+    if (invalid.length) procurementError(invalid.join("; "));
+    const maxQuantity = this.policy.limits?.max_quantity;
+    const auto = this.policy.policy_id !== "dp-default" && this.policy.actions.inquiry_rfq?.mode === "auto" && !ref.replaces_source_id;
+    const sourceKey = contentDigest([merchant, source.variant, historical.basis_digest]);
+    const payload = { ref, merchant, intent, requested_intent_digest: contentDigest(input.intent), source_key: sourceKey, ...(ref.replaces_source_id ? { replaces_source_id: ref.replaces_source_id } : {}) };
+    const guarded = cases.bindAction({ case_ref: ref, operation: "rfq", request_id: input.idempotency_key,
+      payload, approval_id: input.approval_id, auto, validate: current => {
+        this.procurementMode("rfq", merchant, true);
+        if (maxQuantity && (maxQuantity.unit !== basis.unit || (basis.quantity ?? Infinity) > maxQuantity.value)) {
+          throw new McpError("delegation_denied", "Procurement quantity exceeds delegation");
+        }
+        if (this.policy.limits?.allowed_currencies?.length && !this.policy.limits.allowed_currencies.includes("CNY")) {
+          throw new McpError("delegation_denied", "CNY is outside the delegation");
+        }
+        if (source.basis_digest !== current.basis_digest) procurementError("SOURCE_BASIS_CHANGED");
+        const count = cases.followupCount(current.id, sourceKey, "rfq");
+        if (!ref.replaces_source_id) {
+          if (source.task_id || count > 0) procurementError("USE_TARGETED_REQUOTE");
+          return;
+        }
+        const old = current.sources.find(entry => entry.id === ref.replaces_source_id);
+        if (!old?.task_id || old.merchant_id !== merchant || old.variant !== source.variant || old.basis_digest !== current.basis_digest ||
+            current.sources.some(entry => entry.replaces_source_id === old.id)) procurementError("REQUOTE_BINDING_MISMATCH");
+        if (count >= Math.min(3, 1 + (this.policy.limits?.max_rounds ?? 2))) procurementError("REQUOTE_LIMIT");
+        if (current.sources.length >= 20) procurementError("SOURCE_LIMIT");
+      } });
+    const action = guarded.action;
+    if (action.status === "DONE") return action.result;
+    if (action.status === "PENDING" || action.status === "APPROVED") return this.actionApproval(action);
+    const nativeKey = `company-rfq-${contentDigest([ref.case_id, input.idempotency_key])}`;
+    if (!guarded.dispatch && !this.store.findTaskByIdempotencyKey(this.ownerHash, nativeKey)) {
+      return action.result ?? { action_id: action.id, status: "UNKNOWN" };
+    }
+    const boundSource: Source = ref.replaces_source_id ? { ...source,
+      id: `source-${action.id}`, replaces_source_id: ref.replaces_source_id, task_id: undefined, candidate_id: undefined } : source;
+    try {
+      const result = await this.requestQuotes({ intent, merchant_ids: [merchant], idempotency_key: nativeKey, beforeSend: () => cases.assertDispatchable(action.id) });
+      const candidates = Array.isArray(result.task.candidates) ? result.task.candidates.map(asRecord) : [];
+      const candidate = candidates.find(entry => entry.status === "succeeded" && entry.merchant_id === merchant);
+      const taskId = String(result.task.task_id);
+      const status = result.task.status === "in_progress" ? "UNKNOWN" : "DONE";
+      return cases.completeAction(action.id, status, { ...result, task_id: taskId, action_id: action.id, status },
+        candidate || !ref.replaces_source_id ? { source: boundSource, task_id: taskId, candidate_id: typeof candidate?.candidate_id === "string" ? candidate.candidate_id : undefined } : undefined);
+    } catch (error) {
+      cases.completeAction(action.id, "UNKNOWN", { action_id: action.id, status: "UNKNOWN" });
+      throw error;
+    }
+  }
+
+  private actionApproval(action: ProcurementAction) {
+    return { approval_required: { approval_id: action.id }, operation: action.operation, payload: action.payload, expires_at: action.expires_at };
+  }
+
+  async negotiateProcurement(input: {
+    request_id: string; task_id: string; candidate_id: string; expected_offer_digest: string;
+    action: "clarification" | "counter_offer"; comparison_ref: { comparison_id: string; revision: number };
+    questions?: { field: string; reason?: string }[]; target_unit_price?: { currency: "CNY"; amount_minor: number; basis: "net" | "gross" };
+    approval_id?: string;
+  }) {
+    const cases = this.companyProcurement();
+    const { snapshot } = cases.getComparison(input.comparison_ref.comparison_id, input.comparison_ref.revision);
+    const ref: CaseRef = { case_id: snapshot.case_id, revision: snapshot.case_revision };
+    const historical = cases.getCase(ref.case_id, ref.revision);
+    const source = historical.sources.find(entry => entry.channel === "kiwi" && entry.task_id === input.task_id && entry.candidate_id === input.candidate_id);
+    const row = snapshot.data.rows.find(entry => entry.source_id === source?.id);
+    const { approval_id: _approval, ...payloadInput } = input;
+    if (!source?.merchant_id || row?.offer_digest !== input.expected_offer_digest || row.price_kind !== "KNP_OFFER")
+      procurementError("TARGET_REQUIRED_OR_OFFER_CHANGED");
+    const merchant = source.merchant_id;
+    const questions = input.questions?.map(question => ({ field: question.field, reason: question.reason }));
+    const target = input.target_unit_price;
+    const payload = { ...payloadInput, ref, source_key: contentDigest([merchant, source.variant, historical.basis_digest]),
+      merchant_id: merchant, proposed_terms: target ? { items: [{ sku: source.variant, quantity: { value: historical.basis.quantity, unit: historical.basis.unit },
+        unit_price: { currency: target.currency, amount_minor: target.amount_minor, basis: target.basis } }] } : undefined };
+    const guarded = cases.bindAction({ case_ref: ref, operation: input.action, request_id: input.request_id,
+      payload, approval_id: input.approval_id, auto: this.policy.policy_id !== "dp-default" && this.policy.actions[input.action]?.mode === "auto" &&
+        (input.action === "counter_offer" || questions?.every(question => !question.reason) === true), validate: current => {
+        this.procurementMode(input.action, merchant, true);
+        const candidate = this.store.listCandidates(input.task_id).find(entry => entry.candidate_id === input.candidate_id);
+        const provenance = asRecord(candidate?.provenance);
+        const terms = asRecord(provenance.latest_agreed_terms);
+        const costs = asRecord(asRecord(terms.price_terms)[COSTS_KEY]);
+        if (!this.taskFor(input.task_id) || !this.negotiator || current.basis_digest !== snapshot.basis_digest ||
+            candidate?.status !== "succeeded" || provenance.latest_terms_digest !== input.expected_offer_digest ||
+            !validTimestamp(terms.valid_until) || Date.parse(terms.valid_until) <= Date.parse(this.now())) procurementError("CURRENT_OFFER_REQUIRED");
+        if (input.action === "counter_offer" && (!target || costs.native_basis !== target.basis)) procurementError("EXPLICIT_PRICE_BASIS_REQUIRED");
+        if (input.action === "clarification" && (!questions?.length || questions.some(question => !row.questions.some(draft => draft.field === question.field))))
+          procurementError("BOUND_QUESTIONS_REQUIRED");
+        if (cases.actions(current.id).some(action => action.request_id !== input.request_id &&
+            action.payload.task_id === input.task_id && (action.status === "UNKNOWN" || action.status === "IN_FLIGHT")))
+          procurementError("RECONCILE_PREVIOUS_ACTION");
+      } });
+    const { action } = guarded;
+    if (action.status === "DONE") return action.result;
+    if (action.status === "PENDING" || action.status === "APPROVED") return this.actionApproval(action);
+    const summary = input.action === "clarification" ? "请核对当前报价中的以下条件。" : `目标商品单价 CNY ${target!.amount_minor} 分（${target!.basis}）`;
+    try {
+      if (!guarded.dispatch) {
+        const task = this.taskFor(input.task_id);
+        const candidate = task && this.store.listCandidates(input.task_id).find(entry => entry.candidate_id === input.candidate_id);
+        if (!action.round || !task || !candidate || !this.negotiator?.recoverNegotiation) {
+          return action.result ?? { action_id: action.id, status: "UNKNOWN" };
+        }
+        const taskBody = this.decodeTask(task);
+        const stored = (Array.isArray(taskBody.steps) ? taskBody.steps as NegotiationStep[] : [])
+          .find(step => step.action === input.action && step.round === action.round);
+        if (stored?.reply) return cases.completeAction(action.id, "DONE", { task: taskBody, step: stored, action_id: action.id, status: "DONE" });
+        const step = await this.negotiator.recoverNegotiation(asRecord(taskBody.intent),
+          { action: input.action, round: action.round, summary, questions }, candidate, this.protocolContext(task));
+        if (!step) return action.result ?? { action_id: action.id, status: "UNKNOWN" };
+        const result = this.recordNegotiationStep(task.task_id, step, input.action, action.round, input.expected_offer_digest);
+        return cases.completeAction(action.id, "DONE", { ...result, action_id: action.id, status: "DONE" });
+      }
+      const result = await this.negotiate({ task_id: input.task_id, action: input.action, candidate_id: input.candidate_id,
+        summary, questions, target_unit_price: target, procurement_price_basis: target?.basis,
+        expected_offer_digest: input.expected_offer_digest, onReserved: round => cases.setActionRound(action.id, round),
+        beforeSend: () => cases.assertDispatchable(action.id) });
+      const status = result.step.reply || result.step.merchant_offer ? "DONE" : "UNKNOWN";
+      return cases.completeAction(action.id, status, { ...result, action_id: action.id, status });
+    } catch (error) {
+      cases.completeAction(action.id, "UNKNOWN", { action_id: action.id, status: "UNKNOWN" });
+      throw error;
+    }
   }
 
   /**
@@ -947,7 +1133,7 @@ export class KiwiBuyerService {
         );
 
         catalogLookupCompleted = true;
-        const protocolContext = this.protocolContext(persisted, merchants);
+        const protocolContext = { ...this.protocolContext(persisted, merchants), beforeSend: input.beforeSend };
         // 一旦调用 quoteFetcher，就不能把抛错解释成“没发送”：adapter 可能已
         // 写入/发送部分 RFQ。没有 receipt 时保守落为 non-retryable unknown。
         dispatchStarted = true;
@@ -1187,6 +1373,11 @@ export class KiwiBuyerService {
 
   async negotiate(input: {
     task_id: string;
+    candidate_id?: string;
+    procurement_price_basis?: "net" | "gross";
+    expected_offer_digest?: string;
+    onReserved?: (round: number) => void;
+    beforeSend?: () => void;
     action: "counter_offer" | "clarification";
     summary: string;
     /** clarification 的结构化问题；缺省时由 summary 生成一条 general 问题。 */
@@ -1216,6 +1407,12 @@ export class KiwiBuyerService {
     if (task === undefined) throw new McpError("task_not_found", `task ${input.task_id} not found`);
     if (task.expires_at !== undefined && Date.parse(task.expires_at) < Date.parse(this.now())) {
       throw new McpError("task_expired", `task ${input.task_id} expired`);
+    }
+    const taskCandidates = this.store.listCandidates(input.task_id);
+    const eligibleTargets = taskCandidates.filter(candidate => candidate.status === "succeeded" || asRecord(candidate.provenance).a2a_endpoint !== undefined);
+    if (!input.candidate_id && eligibleTargets.length > 1) throw new McpError("invalid_params", "TARGET_REQUIRED");
+    if (input.candidate_id && !eligibleTargets.some(candidate => candidate.candidate_id === input.candidate_id)) {
+      throw new McpError("invalid_params", "TARGET_REQUIRED");
     }
     const rounds = this.currentRounds(task);
     const maxRounds = this.policy.limits?.max_rounds ?? 3;
@@ -1268,7 +1465,7 @@ export class KiwiBuyerService {
       // 候选逐一过 limitViolation（结构化事实），仅放行未被约束阻断的候选；
       // 全部被阻断时显式拒绝（不存在合法还价对象）。clarification 无商业
       // 承诺，不过商业闸。
-      let gated = this.store.listCandidates(input.task_id);
+      let gated = input.candidate_id ? taskCandidates.filter(candidate => candidate.candidate_id === input.candidate_id) : taskCandidates;
       if (input.action === "counter_offer") {
         const succeeded = gated.filter((c) => c.status === "succeeded");
         const passable = succeeded.filter(
@@ -1300,17 +1497,19 @@ export class KiwiBuyerService {
               constraints: {
                 ...((intent.constraints as Record<string, unknown> | undefined) ?? {}),
                 target_unit_price: explicitTarget,
+                ...(input.procurement_price_basis ? { kiwi_procurement_target_price_basis: input.procurement_price_basis } : {}),
               },
             };
       // 商业闸通过后才占用槽位（被委托阻断的调用不消耗轮次）。
       reservedSlot = this.store.reserveNegotiationSlot(input.task_id, slotKind, maxRounds);
       step = { ...step, round: reservedSlot };
+      input.onReserved?.(reservedSlot);
       step = await this.negotiator.negotiate(
         input.task_id,
         intentForNegotiator,
         step,
         gated,
-        this.protocolContext(task),
+        { ...this.protocolContext(task), beforeSend: input.beforeSend },
       );
     } else {
       // 无外发 negotiator（本地确定性模式）同样占用槽位：跨进程并发也不
@@ -1319,12 +1518,24 @@ export class KiwiBuyerService {
       step = { ...step, round: reservedSlot };
     }
 
+    return this.recordNegotiationStep(input.task_id, step, slotKind, reservedSlot, input.expected_offer_digest);
+  }
+
+  private recordNegotiationStep(taskId: string, step: NegotiationStep, action: NegotiationStep["action"], round?: number, expectedDigest?: string) {
     return this.store.transaction(() => {
+      const latest = this.taskFor(taskId);
+      if (latest === undefined) throw new McpError("task_not_found", `task ${taskId} not found`);
+      const latestDecoded = this.decodeTask(latest);
+      const prior = Array.isArray(latestDecoded.steps) ? latestDecoded.steps as NegotiationStep[] : [];
+      const recorded = prior.find(value => value.action === step.action && value.round === step.round);
+      if (recorded) return { task: latestDecoded, step: recorded };
       // 商家最新 offer-like 回复必须回写候选：否则 get_task 仍显示上一轮价，
       // accept 也会绑定旧候选（2026-10-30 保温杯会话：接受 ¥151.05，协议
       // digest 却指向 ¥159 初始报价）。
-      if (step.merchant_offer !== undefined) {
-        this.store.updateCandidateOffer(input.task_id, step.merchant_offer.candidate_id, {
+      const update = step.merchant_offer;
+      const candidate = update && this.store.listCandidates(taskId).find(entry => entry.candidate_id === update.candidate_id);
+      if (step.merchant_offer !== undefined && (!expectedDigest || asRecord(candidate?.provenance).latest_terms_digest === expectedDigest)) {
+        this.store.updateCandidateOffer(taskId, step.merchant_offer.candidate_id, {
           offer_id: step.merchant_offer.offer_id,
           merchant_reply_id: step.merchant_offer.reply_message_id,
           reply_text: step.merchant_offer.reply_text,
@@ -1336,18 +1547,12 @@ export class KiwiBuyerService {
       }
       // 并发下相邻槽位预留不改 payload；仍以事务内最新任务合并，避免覆盖
       // 其他完成步骤。落步成功即释放本槽位（步本身开始计入轮次）。
-      if (reservedSlot !== undefined) {
-        this.store.releaseNegotiationSlot(input.task_id, slotKind, reservedSlot);
+      if (round !== undefined) {
+        this.store.releaseNegotiationSlot(taskId, action, round);
       }
-      const latest = this.taskFor(input.task_id);
-      if (latest === undefined) throw new McpError("task_not_found", `task ${input.task_id} not found`);
-      const latestDecoded = this.decodeTask(latest) as Record<string, unknown>;
-      const prior: NegotiationStep[] = Array.isArray(latestDecoded.steps)
-        ? (latestDecoded.steps as NegotiationStep[])
-        : [];
       const currentStatus =
         typeof latestDecoded.status === "string" ? latestDecoded.status : "in_progress";
-      const updated = this.store.updateTask(input.task_id, {
+      const updated = this.store.updateTask(taskId, {
         status: currentStatus === "pending" ? "in_progress" : currentStatus,
         payload: JSON.stringify({
           ...latestDecoded,

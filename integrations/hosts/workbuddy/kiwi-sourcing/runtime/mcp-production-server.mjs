@@ -2,9 +2,9 @@ import {createInterface} from 'node:readline';
 import {randomUUID} from 'node:crypto';
 import {PREPARE_ERROR_MESSAGES} from './prepare-error-codes.mjs';
 
-const KNOWN=new Set(['kiwi_search','kiwi_request_quotes','kiwi_get_task','kiwi_negotiate','kiwi_accept_agreement','kiwi_get_agreement','kiwi_handoff','kiwi_approve','kiwi_reject','kiwi_follow_merchant','kiwi_unfollow_merchant','kiwi_list_follows','kiwi_get_follow_updates']);
+import {toolNames} from './tool-contract.mjs';
 const PROTOCOL='2025-06-18';
-const READ_ONLY_TOOLS=new Set(['kiwi_search','kiwi_get_task','kiwi_get_agreement','kiwi_list_follows','kiwi_get_follow_updates']);
+const READ_ONLY_TOOLS=new Set(['kiwi_search','kiwi_get_task','kiwi_get_agreement','kiwi_list_follows','kiwi_get_follow_updates','kiwi_get_procurement','kiwi_get_comparison']);
 const out=(output,message)=>{const ok=output.write(JSON.stringify(message)+'\n');return ok};
 const unavailable=text=>({isError:true,content:[{type:'text',text}]});
 const preparationPending=text=>({isError:true,structuredContent:{status:'retryable',code:'PREPARATION_IN_PROGRESS',requestSent:false},content:[{type:'text',text}]});
@@ -13,10 +13,11 @@ const responseError=(id,code,message)=>({jsonrpc:'2.0',id,error:{code,message}})
 // Transparent MCP transport only. Business policy, scope, approval, and action
 // outcomes belong to the verified Kiwi backend / calling expert. This adapter
 // must not invent approval, call kiwi_approve, or block a listed business tool.
-export function startProductionMcpServer({input,output,baseline,prepare,activate,serverName='kiwi-sourcing-production-launcher',onStatus=()=>{},onProtocolDiagnostic=()=>{},backendRequestTimeoutMs=30000,toolTimeoutMs=30000,prepareWaitTimeoutMs=25000,deferPreparation=false}){
-  if(!input||!output||!Array.isArray(baseline)||baseline.length!==13||typeof prepare!=='function'||typeof activate!=='function'||backendRequestTimeoutMs<1||toolTimeoutMs<1||prepareWaitTimeoutMs<0||prepareWaitTimeoutMs>=30000)throw new Error('SERVER_ARGUMENT_INVALID');
+export function startProductionMcpServer({input,output,baseline,prepare,activate,profile='legacy13',serverName='kiwi-sourcing-production-launcher',onStatus=()=>{},onProtocolDiagnostic=()=>{},backendRequestTimeoutMs=30000,toolTimeoutMs=30000,prepareWaitTimeoutMs=25000,deferPreparation=false}){
+  const KNOWN=new Set(toolNames(profile));
+  if(!input||!output||!Array.isArray(baseline)||baseline.length!==KNOWN.size||typeof prepare!=='function'||typeof activate!=='function'||backendRequestTimeoutMs<1||toolTimeoutMs<1||prepareWaitTimeoutMs<0||prepareWaitTimeoutMs>=30000)throw new Error('SERVER_ARGUMENT_INVALID');
   const baselineByName=new Map(baseline.map(tool=>[tool?.name,tool]));
-  if(baselineByName.size!==13||[...baselineByName.keys()].some(name=>!KNOWN.has(name)))throw new Error('TOOL_BASELINE_INVALID');
+  if(baselineByName.size!==KNOWN.size||[...baselineByName.keys()].some(name=>!KNOWN.has(name)))throw new Error('TOOL_BASELINE_INVALID');
   const abort=new AbortController(),reader=createInterface({input,crlfDelay:Infinity});
   let preparationErrorMessage='Latest verification failed; connector is stopped.';
   let phase='preparing',hostInitialized=false,hostReady=false,hostCanElicit=false,clientProtocolVersionClass='NOT_OBSERVED',backend,stopped=false,stopping=false,preparedResult,runTask,finishTask;
@@ -161,6 +162,7 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
       if(message.method!=='elicitation/create'){
         void sendResponse(responseError(message.id,-32601,'Server request not supported by the verified host adapter')).catch(()=>fail('BACKEND_WRITE_FAILED'));return;
       }
+      if(profile==='company-procurement-v1'&&!hostCanElicit){void sendResponse(responseError(message.id,-32601,'Host does not support interactive confirmation')).catch(()=>fail('BACKEND_WRITE_FAILED'));return;}
       if(backendRequests.size>=16){void sendResponse(responseError(message.id,-32000,'Host request capacity exceeded')).catch(()=>fail('BACKEND_WRITE_FAILED'));return;}
       const hostId=`kiwi-backend:${randomUUID()}`,timer=setTimeout(()=>finishBackendRequest(hostId,responseError(hostId,-32000,'Host confirmation timed out')),backendRequestTimeoutMs);timer.unref?.();
       backendRequests.set(hostId,{backendId:message.id,timer,send:sendResponse});emit({...message,id:hostId});return;
@@ -212,7 +214,7 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
       let active;
       try{active=await activate(prepared,{signal:abort.signal,clientCapabilities:{elicitation:hostCanElicit},onMessage:onBackendMessage})}catch(error){status(error?.message==='BACKEND_HANDSHAKE_TIMEOUT'?'TIMEOUT_BACKEND':'FAILED_BACKEND');throw new Error('BACKEND_VERIFY_FAILED',{cause:error})}
       if(stopped||abort.signal.aborted){active?.stop?.();return}
-      if(!active||typeof active.send!=='function'||!active.done||typeof active.stop!=='function'||active.toolCount!==13||active.protocolVersion!==PROTOCOL){status('FAILED_BACKEND');throw new Error('BACKEND_HANDLE_INVALID')}
+      if(!active||typeof active.send!=='function'||!active.done||typeof active.stop!=='function'||active.toolCount!==KNOWN.size||active.protocolVersion!==PROTOCOL){status('FAILED_BACKEND');throw new Error('BACKEND_HANDLE_INVALID')}
       backend=active;phase='ready';status('READY');
       for(const [key,pending] of queuedToolCalls){
         queuedToolCalls.delete(key);if(!activeToolCalls.has(key))continue;

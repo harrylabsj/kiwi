@@ -18,6 +18,7 @@ export interface ProtocolTaskContext {
   taskId: string;
   createdAt: string;
   intentBindingDigest?: string;
+  beforeSend?: () => void;
 }
 export class ProtocolOperationUnknown extends McpError {
   constructor() {
@@ -202,7 +203,7 @@ export class BuyerProtocolRecovery {
     if (!receipt?.remote_task_id) throw new ProtocolOperationUnknown();
     const reply = this.completedReply(complete, receipt, wire);
     const payload = reply.payload;
-    if ((payload.type !== "offer" && payload.type !== "counter_offer") || payload.offer_id !== input.offerId)
+    if ((payload.type !== "offer" && payload.type !== "counter_offer" && payload.type !== "conditional_offer") || payload.offer_id !== input.offerId)
       throw new ProtocolOperationConflict();
     return { reply, wire, endpoint: op.endpoint, merchantId: op.merchant_id };
   }
@@ -225,8 +226,9 @@ export class BuyerProtocolRecovery {
     const slot = this.slot(input.context, input.stage, input.round, input.merchantId);
     const opId = `msg_${contentDigest([slot, input.merchantId])}`;
     const negotiationId = input.negotiationId ?? `neg_${contentDigest([slot, input.merchantId])}`;
+    const { beforeSend, ...bindingContext } = input.context;
     const bindingDigest = contentDigest({
-      context: input.context,
+      context: bindingContext,
       merchant: input.merchantId,
       endpoint: input.endpoint,
       binding: input.binding,
@@ -254,6 +256,7 @@ export class BuyerProtocolRecovery {
       if (marker.digest && marker.digest !== bindingDigest) throw new ProtocolOperationConflict();
       throw new ProtocolOperationUnknown();
     }
+    beforeSend?.();
     try {
       this.idempotency.markInFlight({
         sender_identity: this.buyerId,
@@ -494,6 +497,21 @@ export class BuyerProtocolRecovery {
       await new Promise((r) => setTimeout(r, interval));
       task = undefined;
     }
+  }
+  async recoverNegotiation(
+    context: ProtocolTaskContext, target: { negotiationId: string; merchantId: string; endpoint: string;
+      round: number; stage: "counter" | "clarification" },
+    get: (id: string) => Promise<A2ATask>, timeout: number, interval: number,
+  ): Promise<ProtocolReply | undefined> {
+    this.requireContext(context);
+    const slot = this.slot(context, target.stage, target.round, target.merchantId);
+    const sent = this.events(target.negotiationId).find(event => event.event_kind === "message_sent" && metadata(event)?.operation_id === slot);
+    if (!sent) return undefined;
+    const op = metadata(sent);
+    if (!op || op.task_id !== context.taskId || op.task_created_at !== context.createdAt ||
+        op.intent_binding_digest !== context.intentBindingDigest || op.endpoint !== target.endpoint ||
+        op.merchant_id !== target.merchantId || sent.identity.sender_identity !== this.buyerId) throw new ProtocolOperationConflict();
+    return this.resume(sent, get, timeout, interval);
   }
   async recover(
     context: ProtocolTaskContext,

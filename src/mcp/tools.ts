@@ -26,6 +26,7 @@
  * 错误分类（McpError.code）作为跨宿主语义不变量（§6.10）。
  */
 
+import { installProcurementTools, type BuyerToolProfile, type ProcurementToolOptions } from "./procurement-tools.js";
 import type { McpCallToolResult, KiwiToolDefinition } from "./types.js";
 import { McpError } from "../buyer-core/errors.js";
 import { KiwiBuyerService } from "../buyer-core/service.js";
@@ -73,7 +74,7 @@ function approvalRequiredOrErr(error: unknown, extra: Record<string, unknown>): 
 }
 
 /** 构造全部高层工具。任意 handler 抛出的 McpError 都会被转成 isError 结果。 */
-export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] {
+export function buildKiwiTools(service: KiwiBuyerService, profile: BuyerToolProfile = "legacy13", options: ProcurementToolOptions = {}): KiwiToolDefinition[] {
   const tools: Array<KiwiToolDefinition & { raw?: boolean }> = [
     {
       name: "kiwi_search",
@@ -517,5 +518,6 @@ export function buildKiwiTools(service: KiwiBuyerService): KiwiToolDefinition[] 
       },
     },
   ];
-  return tools.map(({ raw: _raw, ...t }) => t);
+  const legacy = tools.map(({ raw: _raw, ...t }) => t);
+  return profile === "company-procurement-v1" ? installProcurementTools(legacy, service, options) : legacy;
 }

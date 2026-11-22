@@ -41,6 +41,7 @@ export interface RfqInput {
   sku: string;
   quantity: { value: number; unit?: string };
   deliveryBefore?: string;
+  requestedTerms?: Record<string, unknown>;
   /** Merchant-visible message on the first RFQ (e.g. a test/no-fulfillment marker). */
   publicMessage?: string;
   now: () => string;
@@ -68,8 +69,8 @@ export function buildRfqEnvelope(input: RfqInput): NegotiationEnvelope {
           quantity: { value: input.quantity.value, unit: input.quantity.unit ?? "piece" },
         },
       ],
-      ...(input.deliveryBefore !== undefined
-        ? { requested_terms: { delivery_before: input.deliveryBefore } }
+      ...(input.deliveryBefore !== undefined || input.requestedTerms !== undefined
+        ? { requested_terms: { ...input.requestedTerms, ...(input.deliveryBefore === undefined ? {} : { delivery_before: input.deliveryBefore }) } }
         : {}),
     },
   });
@@ -85,6 +86,7 @@ export interface CounterInput {
   quantity: number;
   quantityUnit?: string;
   counterPriceMinor: number;
+  priceBasis?: "net" | "gross";
   /** 人类可读摘要；写入 public_message，供商家后台展示还价理由。 */
   summary?: string;
   now: () => string;
@@ -114,7 +116,7 @@ export function buildCounterEnvelope(input: CounterInput): NegotiationEnvelope {
           {
             sku: input.sku,
             quantity: { value: input.quantity, unit: input.quantityUnit ?? "piece" },
-            unit_price: { currency: "CNY", amount_minor: input.counterPriceMinor },
+            unit_price: { currency: "CNY", amount_minor: input.counterPriceMinor, ...(input.priceBasis ? { basis: input.priceBasis } : {}) },
           },
         ],
       },

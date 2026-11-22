@@ -26,6 +26,7 @@
  * 合并为同一权威 store。
  */
 
+import { ProcurementStore } from "./procurement/store.js";
 import { mkdirSync, chmodSync, existsSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -154,6 +155,10 @@ export class TaskApprovalStore {
     this.db.exec("PRAGMA foreign_keys = ON");
     withInitRetry(() => this.db.exec("PRAGMA journal_mode = WAL"));
     withInitRetry(() => this.migrate());
+  }
+
+  openProcurementStore(): ProcurementStore {
+    return withInitRetry(() => this.transaction(() => new ProcurementStore(this.db, callback => this.transaction(callback))));
   }
 
   createReceiptOutbox(reporterScope: string): ReceiptOutbox {

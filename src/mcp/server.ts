@@ -26,6 +26,7 @@
  * 输入/输出均投影，不保存第二套状态机（§6.2）。
  */
 
+import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import {
   MCP_ERROR,
@@ -52,6 +53,26 @@ export class McpServer {
   private readonly serverInfo: { name: string; version: string };
   private initialized = false;
   private initRequested = false;
+  private canElicit = false;
+  private serving = false;
+  private readonly confirmations = new Map<string, (accepted: boolean) => void>();
+
+  confirm(message: string): Promise<boolean> {
+    if (!this.serving || !this.initialized || !this.canElicit || this.confirmations.size >= 8) return Promise.resolve(false);
+    const id = `kiwi-confirm-${randomUUID()}`;
+    return new Promise(resolve => {
+      const finish = (accepted: boolean) => {
+        clearTimeout(timer);
+        this.confirmations.delete(id);
+        resolve(accepted);
+      };
+      const timer = setTimeout(() => finish(false), 24000);
+      this.confirmations.set(id, finish);
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, method: "elicitation/create", params: {
+        message, requestedSchema: { type: "object", properties: { authorize: { type: "boolean", title: "Authorize this action / 授权本次操作" } }, required: ["authorize"] },
+      } }) + "\n");
+    });
+  }
 
   constructor(options: McpServerOptions) {
     this.tools = new Map(options.tools.map((t) => [t.name, t]));
@@ -66,9 +87,18 @@ export class McpServer {
     } catch {
       return this.error(null, MCP_ERROR.PARSE_ERROR, "parse error: not valid JSON");
     }
-    if (request.jsonrpc !== "2.0" || typeof request.method !== "string") {
+    if (request && request.jsonrpc === "2.0" && typeof request.id === "string" && !Object.hasOwn(request, "method")) {
+      const pending = this.confirmations.get(request.id);
+      if (pending) {
+        const { result, error } = request as unknown as JsonRpcResponse;
+        const reply = result as { action?: string; content?: { authorize?: unknown } } | undefined;
+        pending(error === undefined && reply?.action === "accept" && reply.content?.authorize === true);
+        return undefined;
+      }
+    }
+    if (!request || request.jsonrpc !== "2.0" || typeof request.method !== "string") {
       return this.error(
-        request.id,
+        request?.id ?? null,
         MCP_ERROR.INVALID_REQUEST,
         "invalid request: expected jsonrpc 2.0 request",
       );
@@ -119,8 +149,11 @@ export class McpServer {
   }
 
   private async handleInitialize(request: JsonRpcRequest): Promise<JsonRpcResponse> {
-    const params = (request.params ?? {}) as { protocolVersion?: string };
+    const params = (request.params ?? {}) as { protocolVersion?: string; capabilities?: { elicitation?: unknown } };
     const requested = params.protocolVersion;
+    const capability = params.capabilities?.elicitation;
+    this.canElicit = capability !== null && typeof capability === "object" &&
+      (Object.hasOwn(capability, "form") || Object.keys(capability).length === 0);
     if (
       typeof requested !== "string" ||
       !(MCP_PROTOCOL_VERSIONS as readonly string[]).includes(requested)
@@ -187,10 +220,28 @@ export class McpServer {
   /** 阻塞运行 stdio 循环（CLI 入口）。逐行读 stdin，逐行写 stdout。 */
   async serve(): Promise<void> {
     const rl = createInterface({ input: process.stdin });
+    this.serving = true;
+    let queue = Promise.resolve();
     for await (const line of rl) {
-      if (line.trim() === "") continue;
-      const response = await this.handleMessage(line);
-      if (response !== undefined) process.stdout.write(`${JSON.stringify(response)}\n`);
+      if (!line.trim()) continue;
+      // Keep normal requests ordered. An elicitation answer must reach the
+      // pending call while the request queue is waiting for it.
+      let responseId: string | undefined;
+      try {
+        const message = JSON.parse(line);
+        if (message?.jsonrpc === "2.0" && typeof message.id === "string" && !Object.hasOwn(message, "method")) responseId = message.id;
+      } catch { /* The queued request emits the parse error. */ }
+      if (responseId && this.confirmations.has(responseId)) {
+        await this.handleMessage(line);
+        continue;
+      }
+      queue = queue.then(async () => {
+        const response = await this.handleMessage(line);
+        if (response !== undefined) process.stdout.write(`${JSON.stringify(response)}\n`);
+      });
     }
+    this.serving = false;
+    for (const pending of this.confirmations.values()) pending(false);
+    await queue;
   }
 }

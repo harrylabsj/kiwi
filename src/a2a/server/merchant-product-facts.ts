@@ -1,3 +1,4 @@
+import type { ProcurementQuoteContext } from "./merchant-procurement.js";
 /** Internal source facts. No new public KNP/Listing schema is introduced. */
 export interface ProductSourceEvidence {
   system: string;
@@ -25,6 +26,7 @@ export interface QuoteSourceSnapshot extends ResolvedProductFacts {
   quantity: number;
   policy_digest: string;
   promotion: Record<string, unknown>;
+  procurement?: ProcurementQuoteContext;
 }
 
 export function checkedProductStock(stock: unknown): number | undefined {

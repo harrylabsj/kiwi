@@ -38,6 +38,7 @@
  * 否则 catalogUrl → A2A 直连 merchant 网络；本 server 负责契约面 + 持久任务/审批状态机。
  */
 
+import { buyerToolProfile } from "./procurement-tools.js";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -222,8 +223,16 @@ export async function runMcpServe(args: string[]): Promise<number> {
     // 该公钥的商家把普通询价也变成未验证身份）。
     a2aSigningKeyDir: opts.a2aSigningKeyDir ?? process.env.KIWI_A2A_SIGNING_KEY_DIR,
   });
-  const tools = buildKiwiTools(service);
-  const server = new McpServer({
+  let profile;
+  try {
+    profile = buyerToolProfile(process.env.KIWI_BUYER_TOOL_PROFILE);
+  } catch (error) {
+    process.stderr.write(`${String(error)}\n`);
+    return 2;
+  }
+  const tools = buildKiwiTools(service, profile, { captureRoot: process.env.KIWI_PROCUREMENT_CAPTURE_DIRECTORY,
+    confirm: message => server.confirm(message) });
+  const server: McpServer = new McpServer({
     tools,
     serverInfo: { name: "kiwi-buyer-mcp", version: KIWI_MCP_VERSION },
   });

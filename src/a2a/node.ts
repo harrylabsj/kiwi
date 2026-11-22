@@ -76,6 +76,7 @@ import {
   type A2aSigningIdentity,
 } from "./signing-key.js";
 import { defaultHandler } from "./server/handler.js";
+import { fileProcurementProvider } from "./server/merchant-procurement.js";
 import { createMerchantHandler } from "./server/merchant-handler.js";
 import { NegotiationApprovalStore } from "./server/negotiation-approvals.js";
 import { createDeepSeekNegotiationAdvisor } from "./server/negotiation-advisor.js";
@@ -955,6 +956,7 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
           sender: profile.agent_id,
           counterparty: "buyer:*",
           productSource: productSource as MerchantProductSource,
+          ...(process.env.KIWI_MERCHANT_PROCUREMENT_FACTS ? { procurementFacts: fileProcurementProvider(process.env.KIWI_MERCHANT_PROCUREMENT_FACTS) } : {}),
           ...(customerIdentityWriter !== undefined
             ? {
                 customerIdentity: {

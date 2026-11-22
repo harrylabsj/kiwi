@@ -6,6 +6,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { probeMcpIdentity } from './kiwi-sourcing/runtime/mcp-identity-probe.mjs';
 import { probeMcpSchema } from './kiwi-sourcing/runtime/mcp-schema-probe.mjs';
+import { toolNames } from './kiwi-sourcing/runtime/tool-contract.mjs';
 import { stageEmbeddedBuyer } from './stage-embedded-buyer.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -45,13 +46,12 @@ export function validateExpertAvatar(avatar) {
   assert(avatar.length <= 500 * 1024, 'Avatar exceeds 500 KB');
 }
 
-export function validateExpertToolReferences(instructions, requiredTools) {
-  const toolSource = readFileSync(join(root, 'src/mcp/tools.ts'), 'utf8');
-  const toolNames = new Set([...toolSource.matchAll(/name: "(kiwi_[a-z_]+)"/g)].map(match => match[1]));
+export function validateExpertToolReferences(instructions, requiredTools, profile = 'legacy13') {
+  const names = new Set(toolNames(profile));
   const usedTools = new Set(instructions.match(/\bkiwi_[a-z_]+\b/g));
-  for (const name of usedTools) assert(toolNames.has(name), `Unknown tool: ${name}`);
-  for (const name of requiredTools ?? toolNames) assert(usedTools.has(name), `Missing workflow for tool: ${name}`);
-  return toolNames.size;
+  for (const name of usedTools) assert(names.has(name), `Unknown tool: ${name}`);
+  for (const name of requiredTools ?? names) assert(usedTools.has(name), `Missing workflow for tool: ${name}`);
+  return names.size;
 }
 
 const runtimeSources = new Map([
@@ -68,7 +68,7 @@ export function checkEmbeddedExpertRuntime() {
   }
 }
 
-export async function packageEmbeddedExpert({bundle, files, output}) {
+export async function packageEmbeddedExpert({bundle, files, output, profile = 'legacy13'}) {
   assert(output.endsWith('.zip'), 'Output must be .zip');
   assert(!existsSync(output), 'Output already exists; choose a new path');
   assert(!output.startsWith(bundle + sep), 'Keep ZIP outside the bundle');
@@ -100,10 +100,11 @@ export async function packageEmbeddedExpert({bundle, files, output}) {
       fixtureHome,
     };
     for (const [locale, file] of [['en', 'mcp-tools-0.12.12.json'], ['zh', 'mcp-tools-0.12.12-zh.json']]) {
-      const baseline = JSON.parse(readFileSync(join(sourcingRuntime, file), 'utf8'));
-      assert.equal((await probeMcpSchema({...probe, baseline, locale})).toolCount, 13);
+      const path = profile === 'legacy13' ? join(sourcingRuntime, file) : join(stage, 'runtime', `mcp-tools-company-${locale}.json`);
+      const baseline = JSON.parse(readFileSync(path, 'utf8'));
+      assert.equal((await probeMcpSchema({...probe, baseline, locale, profile})).toolCount, toolNames(profile).length);
     }
-    assert.equal((await probeMcpIdentity(probe)).identity, 'supported');
+    assert.equal((await probeMcpIdentity({...probe, profile})).identity, 'supported');
 
     const entries = [...sources.keys(), ...embedded].sort();
     const archive = join(workspace, 'expert.zip');
