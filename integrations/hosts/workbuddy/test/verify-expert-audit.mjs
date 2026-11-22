@@ -44,9 +44,16 @@ await test('P1-4 / P2-1 · cold package entry, multi-item and missing quantity',
     const {tools} = await request('tools/list',{});
     assert.equal(tools.length,13);
     assert.ok(tools.find(t=>t.name==='kiwi_negotiate').inputSchema.properties.candidate_id);
-    const ready = await request('tools/call',{name:'kiwi_get_task',arguments:{task_id:'absent'}});
-    assert.match(ready.content[0].text,/task_not_found/);
-    console.log('Cold first backend reply (ms)',Math.round(performance.now()-start));
+    const rfq = {name:'kiwi_request_quotes',arguments:{intent,merchant_ids:[],idempotency_key:'cold-rfq'}};
+    let result = await request('tools/call',rfq);
+    if (result.structuredContent?.code === 'PREPARATION_IN_PROGRESS') {
+      assert.equal(result.structuredContent.requestSent,false);
+      const read = await request('tools/call',{name:'kiwi_get_task',arguments:{task_id:'absent'}});
+      assert.match(read.content[0].text,/task_not_found/);
+      result = await request('tools/call',rfq);
+    }
+    assert.deepEqual(result.structuredContent,{code:'clarification_needed',reason:'merchant_required'});
+    console.log('Cold first RFQ handled on one connection (ms)',Math.round(performance.now()-start));
     for (const [items,reason] of [[[item,{...item,sku:'LAMP-B'}],'single_item_required'],[[{query:'desk lamp'}],'quantity_required']]) {
       const result = await request('tools/call',{name:'kiwi_request_quotes',arguments:{
         intent:{...intent,items}, merchant_ids:['synthetic'],idempotency_key:'same-unused-key',

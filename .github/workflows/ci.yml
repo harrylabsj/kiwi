@@ -87,6 +87,8 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
+      - name: Build and verify the WorkBuddy shopping expert ZIP
+        run: node integrations/hosts/workbuddy/package-ecommerce-expert.mjs --out "$RUNNER_TEMP/haina-ecommerce-expert.zip"
       - name: Build and smoke-test the WorkBuddy company procurement ZIP
         run: node integrations/hosts/workbuddy/package-company-procurement-expert.mjs --out "$RUNNER_TEMP/kiwi-company-procurement-expert.zip"
       - name: Upload the tested WorkBuddy expert ZIP

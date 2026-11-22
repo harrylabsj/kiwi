@@ -1,7 +1,7 @@
 {
   "name": "haina-ecommerce-expert",
-  "version": "1.2.7",
-  "description": "Shopping decisions that start every purchase — single item or bulk — with kiwi_search, present Kiwi Network results in their own section, then other platforms, with authorized inquiries, non-binding negotiation, and sourced comparison.",
+  "version": "1.2.8",
+  "description": "Compare supplied links or screenshots, research a specified marketplace, or discover Kiwi merchants first for open-ended shopping. Request quotes and negotiate within the buyer’s mandate.",
   "author": {
     "name": "harrylabsj",
     "email": "1711496337@qq.com"
@@ -31,8 +31,8 @@
     "en": "Online Shopping Assistant"
   },
   "displayDescription": {
-    "zh": "任何购买都先发现 Kiwi 商家商品，按授权询价、澄清和磋商，并核对规格、价格与来源。",
-    "en": "Start every purchase with kiwi_search, discover Kiwi merchants first, request quotes and negotiate within your mandate, and compare sourced offers."
+    "zh": "按指定平台或给定材料核对规格和价格，开放选购先查 Kiwi 商家，并在授权范围内询价与磋商。",
+    "en": "Compare supplied materials or a specified marketplace. For open-ended shopping, discover Kiwi merchants first and negotiate within the buyer’s mandate."
   },
   "avatar": "avatars/expert.png",
   "categoryId": "07-SalesCommerce",

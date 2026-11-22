@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { lstatSync, mkdtempSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -17,7 +18,7 @@ const mcp=JSON.parse(readFileSync(join(bundle,'.mcp.json'),'utf8'));
 validateExpertDisplay(meta);
 assert(files.includes(meta.avatar), 'Avatar must be included in the expert ZIP');
 validateExpertAvatar(readFileSync(safeFile(bundle,meta.avatar)));
-assert.equal(meta.version,'1.2.7');assert.equal(meta.dependencies.mcpServers,'./.mcp.json');assert(!meta.dependencies.connectors?.length);
+assert.equal(meta.version,'1.2.8');assert.equal(meta.dependencies.mcpServers,'./.mcp.json');assert(!meta.dependencies.connectors?.length);
 assert.deepEqual(Object.keys(mcp.mcpServers),['kiwi-shopping-buyer']);
 const server=mcp.mcpServers['kiwi-shopping-buyer'];assert.equal(server.type,'stdio');assert.equal(server.command,'node');assert.deepEqual(server.args,[embeddedExpertLauncher,'kiwi-shopping-buyer']);assert.equal(server['x-workbuddy'].auth.type,'none');
 checkEmbeddedExpertRuntime();
@@ -28,5 +29,12 @@ console.log(`Validated ${meta.profession.zh} v${meta.version}: built-in MCP and 
 const args=process.argv.slice(2);if(args.length===1&&args[0]==='--check')process.exit(0);
 assert(args.length===2&&args[0]==='--out','Usage: node package-ecommerce-expert.mjs --check | --out /absolute/path.zip');
 const output=resolve(args[1]);
-await packageEmbeddedExpert({bundle, files, output});
+function verifyShoppingExpert(extracted, fixtureDirectory) {
+  const home = mkdtempSync(join(fixtureDirectory, 'shopping-home-'));
+  const result = spawnSync(process.execPath, [join(here, 'test/verify-expert-audit.mjs'), extracted], {
+    cwd: extracted, env: {HOME: home, TMPDIR: home, PATH: dirname(process.execPath)}, encoding: 'utf8', timeout: 90000,
+  });
+  assert.equal(result.status, 0, result.error?.message ?? (result.stdout + result.stderr));
+}
+await packageEmbeddedExpert({bundle, files, output, verifyExtracted:verifyShoppingExpert});
 console.log(`Created ${output}`);
