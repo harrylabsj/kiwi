@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -103,7 +103,16 @@ export async function packageEmbeddedExpert({bundle, files, output, profile = 'l
     for (const [locale, file] of [['en', 'mcp-tools-0.12.12.json'], ['zh', 'mcp-tools-0.12.12-zh.json']]) {
       const path = profile === 'legacy13' ? join(sourcingRuntime, file) : join(stage, 'runtime', `mcp-tools-company-${locale}.json`);
       const baseline = JSON.parse(readFileSync(path, 'utf8'));
-      if (profile === 'legacy13') enableTargetedNegotiation(baseline);
+      if (profile === 'legacy13') {
+        // The standalone connector retains its pinned schema. Embedded experts ship the current buyer.
+        const companyCatalog = join(here, 'kiwi-company-procurement-expert/runtime', `mcp-tools-company-${locale}.json`);
+        const followUpdates = JSON.parse(readFileSync(companyCatalog, 'utf8')).find(tool => tool.name === 'kiwi_get_follow_updates');
+        const index = baseline.findIndex(tool => tool.name === 'kiwi_get_follow_updates');
+        assert(followUpdates && index >= 0, 'Missing follow updates tool');
+        baseline[index] = followUpdates;
+        if (sources.has(`runtime/${file}`)) writeFileSync(join(stage, 'runtime', file), JSON.stringify(baseline));
+        enableTargetedNegotiation(baseline);
+      }
       assert.equal((await probeMcpSchema({...probe, baseline, locale, profile})).toolCount, toolNames(profile).length);
     }
     assert.equal((await probeMcpIdentity({...probe, profile})).identity, 'supported');
