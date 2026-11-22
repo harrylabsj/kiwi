@@ -12,10 +12,6 @@
         "version": "22"
       },
       "timeout": 30000,
-      "env": {
-        "LANG": "en_US.UTF-8",
-        "LC_ALL": "en_US.UTF-8"
-      },
       "x-workbuddy": {
         "displayName": {
           "zh": "Kiwi 采购",

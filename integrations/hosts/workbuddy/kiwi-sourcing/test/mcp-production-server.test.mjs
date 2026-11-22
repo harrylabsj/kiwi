@@ -215,3 +215,19 @@ test('tree and version failures get specific guidance instead of the generic sto
   } finally {await close(h)}
  }
 });
+
+test('backend schema diagnostics identify known tools without exposing arbitrary error details', async () => {
+  for (const tool of ['kiwi_search','untrusted-path-example']) {
+    const h = harness({activate:async()=>{throw new Error(`TOOL_SCHEMA_MISMATCH:${tool}`)}});
+    try {
+      await initialize(h);
+      await until(h.messages,()=>h.server.status==='failed');
+      await h.send({jsonrpc:'2.0',id:9,method:'tools/call',params:{name:'kiwi_search',arguments:{query:'fixture'}}});
+      const result = (await until(h.messages,m=>m.id===9)).result;
+      assert.equal(result.structuredContent.code,'TOOL_SCHEMA_MISMATCH');
+      assert.equal(result.structuredContent.requestSent,false);
+      assert.equal(result.content[0].text.includes(tool),tool==='kiwi_search');
+      assert.equal(h.statuses.includes(`TOOL_SCHEMA_MISMATCH:${tool}`),tool==='kiwi_search');
+    } finally {await close(h);}
+  }
+});

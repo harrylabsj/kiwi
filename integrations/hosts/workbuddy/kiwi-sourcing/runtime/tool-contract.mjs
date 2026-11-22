@@ -11,13 +11,24 @@ function canonical(v) {
   if (v && typeof v === 'object') return Object.fromEntries(Object.keys(v).sort().map(k => [k, canonical(v[k])]));
   return v;
 }
+// Only fixed reason codes and names from the selected profile enter diagnostics.
+function setMismatch(reason, knownName) {
+  const error = new Error('TOOL_SET_MISMATCH');
+  error.contractDetail = knownName ? `${reason}:${knownName}` : reason;
+  return error;
+}
 function normalize(tools, names) {
-  if (!Array.isArray(tools) || tools.length !== names.length) throw new Error('TOOL_SET_MISMATCH');
+  if (!Array.isArray(tools)) throw setMismatch('EXPECTED_LIST');
   const map = new Map();
   for (const tool of tools) {
-    if (!names.includes(tool?.name) || map.has(tool.name) || !tool.inputSchema || typeof tool.inputSchema !== 'object' || Array.isArray(tool.inputSchema)) throw new Error('TOOL_SET_MISMATCH');
+    if (!names.includes(tool?.name)) throw setMismatch('UNKNOWN_TOOL');
+    if (map.has(tool.name)) throw setMismatch('DUPLICATE_TOOL', tool.name);
+    if (!tool.inputSchema || typeof tool.inputSchema !== 'object' || Array.isArray(tool.inputSchema)) {
+      throw setMismatch('INVALID_SCHEMA', tool.name);
+    }
     map.set(tool.name, JSON.stringify(canonical(tool.inputSchema)));
   }
+  for (const name of names) if (!map.has(name)) throw setMismatch('MISSING_TOOL', name);
   return map;
 }
 // Embedded buyers pin these additive parameters. Older standalone buyers keep their frozen baseline.
@@ -28,11 +39,14 @@ const negotiationInputs = {
     properties: { currency: { type: 'string', pattern: '^[A-Z]{3}$' }, amount_minor: { type: 'integer', minimum: 1 } },
   },
 };
-export function enableTargetedNegotiation(baseline) {
+export function enableTargetedNegotiation(baseline, locale = 'en') {
   const tool = baseline.find(tool => tool.name === 'kiwi_negotiate');
-  if (!tool?.inputSchema?.properties) throw new Error('TOOL_BASELINE_INVALID');
-  tool.description = 'Select candidate_id for a multi-candidate task. Use target_unit_price for an authorized price in the verified currency. The budget is a ceiling.';
-  Object.assign(tool.inputSchema.properties, structuredClone(negotiationInputs));
+  const properties = tool?.inputSchema?.properties;
+  if (!properties || typeof properties !== 'object' || Array.isArray(properties)) throw setMismatch('INVALID_SCHEMA', 'kiwi_negotiate');
+  tool.description = locale === 'zh'
+    ? '多候选任务必须指定 candidate_id。已授权的还价用 target_unit_price 传递，与核实的报价币种一致。预算仅作为上限。'
+    : 'Select candidate_id for a multi-candidate task. Use target_unit_price for an authorized price in the verified currency. The budget is a ceiling.';
+  Object.assign(properties, structuredClone(negotiationInputs));
 }
 
 export function enableQuoteHistory(baseline) {
@@ -45,7 +59,8 @@ export function enableQuoteHistory(baseline) {
 
 export function checkToolContract(baseline, candidate, profile) {
   const names = toolNames(profile);
-  if (!Array.isArray(baseline) || !Array.isArray(candidate)) throw new Error('TOOL_SET_MISMATCH');
+  const a = normalize(baseline, names);
+  if (!Array.isArray(candidate)) throw setMismatch('EXPECTED_LIST');
   const normalizedCandidate = structuredClone(candidate);
   const region = normalizedCandidate.find(tool => tool?.name === 'kiwi_search')?.inputSchema?.properties?.region;
   const baselineRegion = baseline.find(tool => tool?.name === 'kiwi_search')?.inputSchema?.properties?.region;
@@ -57,7 +72,7 @@ export function checkToolContract(baseline, candidate, profile) {
     delete region.description;
   }
   const historyIsRequired = baseline.find(tool => tool.name === 'kiwi_request_quotes')?.inputSchema?.properties?.reuse_history !== undefined;
-  const properties = normalizedCandidate.find(tool => tool.name === 'kiwi_request_quotes')?.inputSchema?.properties;
+  const properties = normalizedCandidate.find(tool => tool?.name === 'kiwi_request_quotes')?.inputSchema?.properties;
   const history = properties?.reuse_history;
   if (history !== undefined && history?.type === 'boolean' &&
       Object.keys(history).some(key => key !== 'type' && key !== 'description')) {
@@ -69,7 +84,7 @@ export function checkToolContract(baseline, candidate, profile) {
     // Descriptions vary by client locale. All structural constraints are still compared.
     delete properties.reuse_history.description;
   }
-  const a=normalize(baseline,names), b=normalize(normalizedCandidate,names);
+  const b=normalize(normalizedCandidate,names);
   for (const name of names) if (a.get(name)!==b.get(name)) throw new Error(`TOOL_SCHEMA_MISMATCH:${name}`);
   return true;
 }

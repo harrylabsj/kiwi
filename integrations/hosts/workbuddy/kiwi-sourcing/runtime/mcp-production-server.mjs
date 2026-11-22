@@ -289,7 +289,10 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
         preparationCode = reason === 'BACKEND_HANDSHAKE_TIMEOUT' ? 'TIMEOUT_BACKEND'
           : publicReasons.includes(reason) ? reason
           : reason?.startsWith?.('TOOL_SCHEMA_MISMATCH:') ? 'TOOL_SCHEMA_MISMATCH' : 'FAILED_BACKEND';
-        preparationErrorMessage = `${preparationCode}: Backend verification failed; reconnect after checking the expert installation.`;
+        const tool = preparationCode === 'TOOL_SCHEMA_MISMATCH' ? reason.slice('TOOL_SCHEMA_MISMATCH:'.length) : undefined;
+        const diagnostic = KNOWN.has(tool) ? `${preparationCode}:${tool}` : preparationCode;
+        if (KNOWN.has(tool)) status(diagnostic);
+        preparationErrorMessage = `${diagnostic}: Backend verification failed; reconnect after checking the expert installation.`;
         status(preparationCode === 'TIMEOUT_BACKEND' ? preparationCode : 'FAILED_BACKEND');throw new Error('BACKEND_VERIFY_FAILED',{cause:error})}
       if(stopped||abort.signal.aborted){active?.stop?.();return}
       if(!active||typeof active.send!=='function'||!active.done||typeof active.stop!=='function'||active.toolCount!==KNOWN.size||active.protocolVersion!==PROTOCOL){preparationCode='FAILED_BACKEND';preparationErrorMessage='FAILED_BACKEND: Invalid backend handle; reconnect after checking the expert installation.';status(preparationCode);active?.stop?.();throw new Error('BACKEND_HANDLE_INVALID')}
