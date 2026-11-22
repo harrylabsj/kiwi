@@ -33,6 +33,18 @@ import { KiwiBuyerService } from "../buyer-core/service.js";
 import { DESTINATION_TYPES } from "../handoff/destination.js";
 import { tr } from "../i18n.js";
 
+function counterTarget(value: unknown): { currency: string; amount_minor: number } | undefined {
+  if (value === undefined) return undefined;
+  if (value && typeof value === "object" && "currency" in value && "amount_minor" in value) {
+    const { currency, amount_minor } = value;
+    if (typeof currency === "string" && /^[A-Z]{3}$/.test(currency) &&
+        typeof amount_minor === "number" && Number.isSafeInteger(amount_minor) && amount_minor > 0) {
+      return { currency, amount_minor };
+    }
+  }
+  throw new McpError("invalid_params", "请提供还价币种和正整数最小货币单位金额。");
+}
+
 function ok(text: string): McpCallToolResult {
   return { content: [{ type: "text", text }] };
 }
@@ -74,7 +86,8 @@ function approvalRequiredOrErr(error: unknown, extra: Record<string, unknown>): 
 }
 
 /** 构造全部高层工具。任意 handler 抛出的 McpError 都会被转成 isError 结果。 */
-export function buildKiwiTools(service: KiwiBuyerService, profile: BuyerToolProfile = "legacy13", options: ProcurementToolOptions = {}): KiwiToolDefinition[] {
+export function buildKiwiTools(service: KiwiBuyerService, profile: BuyerToolProfile = "legacy13", options: ProcurementToolOptions & { targetedNegotiation?: boolean } = {}): KiwiToolDefinition[] {
+  const targetedNegotiation = profile === "legacy13" && options.targetedNegotiation === true;
   const tools: Array<KiwiToolDefinition & { raw?: boolean }> = [
     {
       name: "kiwi_search",
@@ -233,8 +246,8 @@ export function buildKiwiTools(service: KiwiBuyerService, profile: BuyerToolProf
       name: "kiwi_negotiate",
       description:
         tr(
-          "Advance negotiation within the delegation boundary. Updates the same task_id; CounterOffer / Clarification; may produce a candidate_id; hard-bounded by DelegationPolicy max_rounds etc. Counter target is derived from intent.constraints.target_unit_price, else budget/quantity, else current price minus default discount; keep summary consistent with it. The latest merchant reply overwrites the candidate terms.",
-          "在委托边界内推进磋商。更新同一 task_id；CounterOffer / Clarification；可产生 candidate_id；受 DelegationPolicy max_rounds 等硬约束。counter_offer 的结构化目标价依次取 intent.constraints.target_unit_price、budget/数量、当前价×默认折扣——summary 必须与之一致；商家最新回复会回写候选条款。",
+          "Negotiate only with an unambiguous candidate. When supported, select candidate_id and pass the authorized target_unit_price with its currency. The budget is a ceiling.",
+          "仅向明确的候选磋商。工具公开相应字段时，用 candidate_id 选择候选，用含币种的 target_unit_price 传递授权出价。预算只用于校验上限。",
         ),
       inputSchema: {
         $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -244,18 +257,31 @@ export function buildKiwiTools(service: KiwiBuyerService, profile: BuyerToolProf
         properties: {
           task_id: { type: "string", minLength: 1 },
           action: { type: "string", enum: ["counter_offer", "clarification"] },
+          ...(targetedNegotiation ? {
+            candidate_id: { type: "string", minLength: 1 },
+            target_unit_price: {
+              type: "object", additionalProperties: false, required: ["currency", "amount_minor"],
+              properties: { currency: { type: "string", pattern: "^[A-Z]{3}$" }, amount_minor: { type: "integer", minimum: 1 } },
+            },
+          } : {}),
           summary: { type: "string", minLength: 1 },
         },
       },
       async handle(args) {
         try {
+          const target = counterTarget(args.target_unit_price);
           const result = await service.negotiate({
             task_id: String(args.task_id),
             action: args.action as "counter_offer" | "clarification",
+            ...(args.candidate_id !== undefined ? { candidate_id: String(args.candidate_id) } : {}),
+            ...(target ? { target_unit_price: target } : {}),
             summary: String(args.summary),
           });
           return ok(JSON.stringify(result));
         } catch (error) {
+          if (targetedNegotiation && args.candidate_id === undefined && error instanceof McpError && error.message === "TARGET_REQUIRED") {
+            return err(new McpError("clarification_needed", "请指定当前任务中获授权的候选。", { reason: "candidate_required" }));
+          }
           return err(error);
         }
       },

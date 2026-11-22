@@ -6,7 +6,7 @@ import { verifyFiles } from './bundle-verify.mjs';
 import { expertDataDirectory } from './expert-data.mjs';
 import { prepareInstanceData } from './instance-store.mjs';
 import { startProductionMcpServer } from './mcp-production-server.mjs';
-import { checkToolContract, enableQuoteHistory } from './tool-contract.mjs';
+import { checkToolContract, enableQuoteHistory, enableTargetedNegotiation } from './tool-contract.mjs';
 
 const sourceRoot = fileURLToPath(new URL('.', import.meta.url)).replace(/\/$/, '');
 const sessionDirectory = join(sourceRoot, 'buyer');
@@ -55,6 +55,7 @@ async function main() {
   } catch {
     throw new Error('TOOL_BASELINE_INVALID');
   }
+  if (!company) enableTargetedNegotiation(baseline);
   if (environment.KIWI_QUOTE_HISTORY_DELEGATION === 'true') {
     enableQuoteHistory(baseline);
   }
@@ -95,7 +96,11 @@ async function main() {
   process.once('SIGTERM', shutdown);
   process.once('SIGINT', shutdown);
   try {
-    await server.done;
+    const outcome = await server.done;
+    if (outcome.status === 'failed') {
+      process.stderr.write(`KIWI_LAUNCHER_HOLD:${outcome.code}\n`);
+      process.exitCode = 1;
+    }
   } finally {
     process.off('SIGTERM', shutdown);
     process.off('SIGINT', shutdown);

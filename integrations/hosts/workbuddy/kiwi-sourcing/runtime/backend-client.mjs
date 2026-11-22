@@ -47,7 +47,15 @@ export async function startVerifiedBackend({nodeBinary,sessionDirectory,backendH
   const buyerIdDirectory=isAbsolute(dataDirectory??'')?join(dataDirectory,'identity'):(isAbsolute(environment.HOME??'')?join(environment.HOME,'.kiwi'):sessionDirectory);
   const env={...selectEnvironment(environment,'backend'),KIWI_BUYER_TOOL_PROFILE:profile,HOME:backendHome,TMPDIR:backendHome,PATH:[dirname(nodeBinary),'/usr/bin','/bin'].join(delimiter),PYTHONDONTWRITEBYTECODE:'1'};
   const child=spawn(nodeBinary,[cli,'mcp','serve','--principal','workbuddy:local','--agent','buyer-agent:workbuddy','--buyer-id',catalogBuyerId(buyerIdDirectory),'--a2a-timeout-ms','15000'],{env,stdio:['pipe','pipe','pipe']});
-  child.stderr.resume();
+  // Classify known Node startup failures. Never forward stack traces, paths or credentials.
+  let childDiagnostic, tail = '';
+  child.stderr.on('data', chunk => {
+    if (childDiagnostic) return;
+    const text = tail + chunk.toString();
+    const code = text.match(/\b(ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|ERR_DLOPEN_FAILED|ERR_UNKNOWN_BUILTIN_MODULE)\b/)?.[1];
+    if (code) childDiagnostic = 'BACKEND_DEPENDENCY_FAILED';
+    tail = text.slice(-32);
+  });
   const sendToChild=message=>writeLine(child.stdin,JSON.stringify(message));
   const reader=createInterface({input:child.stdout,crlfDelay:Infinity}),waiters=new Map();let stopped=false,requestCounter=0;
   let resolveClose,rejectClose;const done=new Promise((resolve,reject)=>{resolveClose=resolve;rejectClose=reject});done.catch(()=>{});
@@ -60,7 +68,7 @@ export async function startVerifiedBackend({nodeBinary,sessionDirectory,backendH
   });
   child.once('error',()=>{rejectWaiters('BACKEND_START_FAILED');rejectClose?.(new Error('BACKEND_START_FAILED'))});
   child.once('close',(code,signal)=>{
-    stopped=true;reader.close();rejectWaiters('BACKEND_STOPPED');
+    stopped=true;reader.close();rejectWaiters(childDiagnostic ?? 'BACKEND_STOPPED');
     if(code===0&&!signal)resolveClose?.();else rejectClose?.(new Error('BACKEND_STOPPED'));
   });
   function rejectWaiters(code){for(const [id,w] of waiters){clearTimeout(w.timer);w.reject(new Error(code));waiters.delete(id)}}

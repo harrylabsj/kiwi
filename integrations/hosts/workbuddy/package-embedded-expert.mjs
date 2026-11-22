@@ -6,7 +6,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { probeMcpIdentity } from './kiwi-sourcing/runtime/mcp-identity-probe.mjs';
 import { probeMcpSchema } from './kiwi-sourcing/runtime/mcp-schema-probe.mjs';
-import { toolNames } from './kiwi-sourcing/runtime/tool-contract.mjs';
+import { toolNames, enableTargetedNegotiation } from './kiwi-sourcing/runtime/tool-contract.mjs';
 import { stageEmbeddedBuyer } from './stage-embedded-buyer.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -102,6 +102,7 @@ export async function packageEmbeddedExpert({bundle, files, output, profile = 'l
     for (const [locale, file] of [['en', 'mcp-tools-0.12.12.json'], ['zh', 'mcp-tools-0.12.12-zh.json']]) {
       const path = profile === 'legacy13' ? join(sourcingRuntime, file) : join(stage, 'runtime', `mcp-tools-company-${locale}.json`);
       const baseline = JSON.parse(readFileSync(path, 'utf8'));
+      if (profile === 'legacy13') enableTargetedNegotiation(baseline);
       assert.equal((await probeMcpSchema({...probe, baseline, locale, profile})).toolCount, toolNames(profile).length);
     }
     assert.equal((await probeMcpIdentity({...probe, profile})).identity, 'supported');

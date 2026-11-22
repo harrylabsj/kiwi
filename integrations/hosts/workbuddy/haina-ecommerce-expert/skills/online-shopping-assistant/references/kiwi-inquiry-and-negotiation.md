@@ -10,7 +10,7 @@
 
 ## 询价与任务回读
 
-1. 以短商品词 `kiwi_search`，从返回结果中选符合要求且可询价的真实 merchant ID；默认最多三家，不凭空补全。不同品类分别发现并拆分。
+1. 以短商品词 `kiwi_search`，从返回结果中选符合要求且可询价的真实 merchant ID；默认最多三家，不凭空补全。每次询价只包含一种商品，同类的不同 SKU 也分别询价。收到 single_item_required 时按已授权范围拆单；收到 quantity_required 时确认数量和单位。
 2. 已有授权且询价所需信息充分时调用 `kiwi_request_quotes(intent, merchant_ids, idempotency_key)`。`intent` 包含唯一 `intent_id`、`intent_type` 和 `items`；商品项含短 `query`、数量 `{value, unit}`。规格先用于本地整理：`attributes` / `constraints.mandatory_requirements` 当前**不会**发送给商家，也不能作为候选合格依据；需要在商家侧确认的硬性规格，应在候选展示或后续磋商中明确要求商家确认，不得声称“已在询价中声明”。货币、单位、税运和交期未知就留待确认，不猜。`constraints.budget` 与 `constraints.target_unit_price` 都用 money 对象，例如人民币 200 元为 `{"currency":"CNY","amount_minor":20000}`；裸数字会被冻结契约拒绝。不自动披露预算底线。
 3. 只发送非空、由搜索返回且已授权的 `merchant_ids`；缺少商家时服务返回 `clarification_needed`（reason `merchant_required`），不会创建任务。同一请求保持稳定幂等键；传输错误先 `kiwi_get_task` 回读已知 `task_id`，状态未知时不换键重发。没有 `task_id` 或无法判定结果时停止并说明，不擅自重复写操作。
 4. 用 `kiwi_get_task(task_id)` 查看状态、报价和错误；`partial_success` 保留成功项并说明失败项。明确区分公开资料价、页面参考价与实际商家报价；零报价不说已有报价。
@@ -27,7 +27,7 @@
 
 ## 澄清与还价
 
-- 用户明确授权后，对已有 Kiwi 任务调用 `kiwi_negotiate(task_id, action, summary)`；`action` 仅 `clarification` 或 `counter_offer`。该接口没有独立 merchant_id 参数，不能捏造逐商家参数或保证仅向某一商家发送。
+- 用户明确授权后，对已有 Kiwi 任务调用 `kiwi_negotiate(task_id, action, summary)`；`action` 仅 `clarification` 或 `counter_offer`。多候选时通过当前任务返回的 candidate_id 指定买方授权的对象。明确出价通过 target_unit_price 传递金额和已核实的币种。若宿主没有这些字段，停止无法唯一确定对象或条款的磋商。
 - 不超出授权的商家、预算、数量、轮数、币种和交期；按运行时的策略和上限执行。硬拒绝、审批拒绝或授权过期时停止，不更换任务绕过限制；每次操作后回读任务。报价过期、内容变化或授权范围变化时重新确认。
 - 将相同规格、数量、币种、税运口径的真实报价与互联网参考价分源比较；未知费用标未知。磋商结论为非绑定条款，不是订单、支付、库存锁定或履约承诺。
 

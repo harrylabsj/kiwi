@@ -133,17 +133,6 @@ export function targetPriceMinor(
       value = Number(raw);
     }
     if (value !== undefined) return value;
-    // 没有显式 target 时，用委托预算/数量推导目标单价。此前直接按当前价
-    // 打 10% 折扣：用户说"预算 ≤150"，实际发出去的还价却是 143.10，商家
-    // 后台看到的与买方口径不一致（2026-10-30 保温杯会话）。
-    const budget = (constraints as Record<string, unknown>).budget;
-    if (typeof budget === "object" && budget !== null) {
-      const amount = (budget as Record<string, unknown>).amount_minor;
-      const quantity = intentQuantity(intent);
-      if (typeof amount === "number" && Number.isFinite(amount) && amount > 0 && quantity > 0) {
-        return Math.max(1, Math.floor(amount / quantity));
-      }
-    }
   }
   // minor units 必须保持整数：×100/÷100 的两位小数舍入会产出非整数
   // amount_minor，随后被委托限额门的 Number.isSafeInteger 确定性拒绝。
@@ -347,6 +336,9 @@ export class A2ANegotiator implements Negotiator {
     }
     const isClarification = current.action === "clarification";
     const hasClaim = isClarification ? false : (this.recovery?.hasCounterClaim(taskId, current.round) ?? false);
+    if (candidates.length > 1) {
+      throw new McpError("clarification_needed", "请指定唯一的磋商候选。", { reason: "candidate_required" });
+    }
     const candidate = candidates.find(
       (c) => (c as CandidateLike).provenance?.a2a_endpoint !== undefined,
     ) as CandidateLike | undefined;
@@ -423,10 +415,26 @@ export class A2ANegotiator implements Negotiator {
       if (verifiedItem && (verifiedItem.sku !== itemSku || verifiedItem.quantity.value !== intentQuantity(intent) ||
           verifiedItem.quantity.unit !== (intentQuantityUnit(intent) ?? "piece"))) throw new ProtocolOperationConflict();
       const currentPrice = verifiedItem?.unit_price?.amount_minor;
+      const constraints = intent.constraints as {
+        target_unit_price?: { currency?: string }; budget?: { currency?: string; amount_minor: number };
+      } | undefined;
       const target = targetPriceMinor(intent, currentPrice, this.defaultDiscountRate);
       if (target === undefined) {
-        if(hasClaim)throw new ProtocolOperationUnknown();
-        return { ...current, summary: `${current.summary}（无目标价可还：意图无 target_unit_price 且商家回复无单价）` };
+        if (hasClaim) throw new ProtocolOperationUnknown();
+        return { ...current, summary: `${current.summary}（无目标价可还：请确认目标金额和币种）` };
+      }
+      // Historical tasks can have an authorized money target but no journaled price.
+      // Never infer a currency from free text or from the budget.
+      const currency = verifiedItem?.unit_price?.currency ?? constraints?.target_unit_price?.currency;
+      if (!currency || !/^[A-Z]{3}$/.test(currency) || (constraints?.target_unit_price && constraints.target_unit_price.currency !== currency) ||
+          (constraints?.budget && constraints.budget.currency !== currency)) {
+        if (hasClaim) throw new ProtocolOperationUnknown();
+        throw new McpError("clarification_needed", "请确认目标价、预算和报价的币种一致。", { reason: "currency_mismatch", requestSent: false });
+      }
+      if (!Number.isSafeInteger(target) || target < 0 ||
+          (constraints?.budget && target * intentQuantity(intent) > constraints.budget.amount_minor)) {
+        if (hasClaim) throw new ProtocolOperationUnknown();
+        throw new McpError("clarification_needed", "请确认预算内的目标单价。", { reason: "target_price_required", requestSent: false });
       }
       const envelope = buildCounterEnvelope({
         negotiationId,
@@ -440,6 +448,7 @@ export class A2ANegotiator implements Negotiator {
           const basis = asRecord(intent.constraints).kiwi_procurement_target_price_basis;
           return basis === "net" || basis === "gross" ? basis : undefined;
         })(),
+        currency,
         summary: current.summary,
         now: this.now,
       });
@@ -518,6 +527,7 @@ export class A2ANegotiator implements Negotiator {
           summary: `${current.summary}（商家需人工审批：还价已登记，等商家批准后再重试；不要连续提交，每次重试都会消耗一轮委托）`,
         };
       }
+      if (error instanceof McpError && error.code === "clarification_needed") throw error;
       if(error instanceof ProtocolOperationUnknown || error instanceof ProtocolOperationConflict || error instanceof BuyerReplyRejected)throw error;
       if(hasClaim)throw new ProtocolOperationUnknown();
       return {

@@ -87,6 +87,7 @@ export interface CounterInput {
   quantityUnit?: string;
   counterPriceMinor: number;
   priceBasis?: "net" | "gross";
+  currency: string;
   /** 人类可读摘要；写入 public_message，供商家后台展示还价理由。 */
   summary?: string;
   now: () => string;
@@ -116,7 +117,7 @@ export function buildCounterEnvelope(input: CounterInput): NegotiationEnvelope {
           {
             sku: input.sku,
             quantity: { value: input.quantity, unit: input.quantityUnit ?? "piece" },
-            unit_price: { currency: "CNY", amount_minor: input.counterPriceMinor, ...(input.priceBasis ? { basis: input.priceBasis } : {}) },
+            unit_price: { currency: input.currency, amount_minor: input.counterPriceMinor, ...(input.priceBasis ? { basis: input.priceBasis } : {}) },
           },
         ],
       },

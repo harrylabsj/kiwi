@@ -20,6 +20,21 @@ function normalize(tools, names) {
   }
   return map;
 }
+// Embedded buyers pin these additive parameters. Older standalone buyers keep their frozen baseline.
+const negotiationInputs = {
+  candidate_id: { type: 'string', minLength: 1 },
+  target_unit_price: {
+    type: 'object', additionalProperties: false, required: ['currency', 'amount_minor'],
+    properties: { currency: { type: 'string', pattern: '^[A-Z]{3}$' }, amount_minor: { type: 'integer', minimum: 1 } },
+  },
+};
+export function enableTargetedNegotiation(baseline) {
+  const tool = baseline.find(tool => tool.name === 'kiwi_negotiate');
+  if (!tool?.inputSchema?.properties) throw new Error('TOOL_BASELINE_INVALID');
+  tool.description = 'Select candidate_id for a multi-candidate task. Use target_unit_price for an authorized price in the verified currency. The budget is a ceiling.';
+  Object.assign(tool.inputSchema.properties, structuredClone(negotiationInputs));
+}
+
 export function enableQuoteHistory(baseline) {
   const properties = baseline.find(tool => tool?.name === 'kiwi_request_quotes')?.inputSchema?.properties;
   if (!properties || typeof properties !== 'object' || Array.isArray(properties)) {

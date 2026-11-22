@@ -190,8 +190,8 @@ describe("explicit SKU quote guard", () => {
     expect(candidates?.[0]?.terms).toBeUndefined();
   });
 
-  it("multi-item intent retains the existing first-item A2A boundary", async () => {
-    const result = await serviceFor("10223889834191").requestQuotes({
+  it("multi-item intent is rejected before dispatch", async () => {
+    await expect(serviceFor("10223889834191").requestQuotes({
       intent: {
         ...intent("10223889834191"),
         items: [
@@ -200,11 +200,7 @@ describe("explicit SKU quote guard", () => {
         ],
       },
       merchant_ids: ["merchant-1"],
-    });
-    const candidates = result.task.candidates as Array<{ status?: string }> | undefined;
-    // A2A/KNP currently sends and admits one requested line; the first item's
-    // SKU remains the binding boundary and existing behavior is unchanged.
-    expect(candidates?.[0]?.status).toBe("succeeded");
+    })).rejects.toMatchObject({ code: "clarification_needed", detail: { reason: "single_item_required" } });
   });
 
   it("keeps fuzzy intent behavior: merchant may choose the SKU when buyer supplied none", async () => {
