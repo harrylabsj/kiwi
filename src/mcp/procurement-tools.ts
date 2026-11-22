@@ -113,11 +113,39 @@ const schemas = {
   ] },
 };
 
+type OperationSchema = {
+  properties: Record<string, Schema>;
+  required: string[];
+};
+
+// Some MCP hosts discover arguments from root properties only. Advertise the
+// shared fields and selectors there, then validate each call against its exact branch.
+function advertisedSchema(input: Schema): Schema {
+  if (!Array.isArray(input.oneOf)) return input;
+  const variants = input.oneOf as OperationSchema[];
+  const properties: Record<string, Schema> = {};
+  const selectors = new Map<string, string[]>();
+  for (const variant of variants) {
+    for (const [name, field] of Object.entries(variant.properties)) {
+      if (typeof field.const !== "string") {
+        properties[name] = field;
+        continue;
+      }
+      const values = selectors.get(name) ?? [];
+      values.push(field.const);
+      selectors.set(name, values);
+    }
+  }
+  for (const [name, values] of selectors) properties[name] = choices(...values);
+  const required = variants[0]!.required.filter(name => variants.every(variant => variant.required.includes(name)));
+  return { ...schema2020, ...object(properties, required) };
+}
+
 function configure(name: string, description: string, inputSchema: Schema, run: (args: Record<string, unknown>) => unknown | Promise<unknown>): KiwiToolDefinition {
   const require = createRequire(import.meta.url);
   const Ajv = require("ajv/dist/2020.js") as typeof Ajv2020;
   const validate = new Ajv({ strict: false, ownProperties: true }).compile(inputSchema);
-  return { name, description, inputSchema, async handle(args): Promise<McpCallToolResult> {
+  return { name, description, inputSchema: advertisedSchema(inputSchema), async handle(args): Promise<McpCallToolResult> {
     try {
       if (!validate(args)) fail(`INVALID_PROCUREMENT_INPUT ${validate.errors?.[0]?.instancePath ?? ""} ${validate.errors?.[0]?.message ?? ""}`);
       const result = await run(args);

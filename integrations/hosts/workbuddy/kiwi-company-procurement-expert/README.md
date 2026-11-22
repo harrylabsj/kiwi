@@ -8,10 +8,10 @@ WorkBuddy 独立专家，面向公司采购。采购事项、比较快照和外�
 
 ```sh
 node integrations/hosts/workbuddy/package-company-procurement-expert.mjs --check
-node integrations/hosts/workbuddy/package-company-procurement-expert.mjs --out /absolute/path/kiwi-company-procurement-expert-1.0.0.zip
+node integrations/hosts/workbuddy/package-company-procurement-expert.mjs --out /absolute/path/kiwi-company-procurement-expert-1.0.1.zip
 ```
 
-提交 WorkBuddy 的文件是生成的 ZIP。包内运行时由共享管线从当前 checkout 构建并锁定文件摘要。打包器会探测中英文工具契约和主体隔离。采购外发的临时授权需要客户端支持 MCP 表单确认。缺少该能力时仍可执行事项、参考来源记录和比选。旧购物专家继续使用原有 13 工具契约。旧入口遇到多候选澄清或还价时返回 TARGET_REQUIRED，同一家商家的单候选任务继续使用原调用方式。
+提交 WorkBuddy 的文件是生成的 ZIP。包内运行时由共享管线从当前 checkout 构建并锁定文件摘要。打包器会验证中英文工具契约和主体隔离，并从解压后的正式提交包验证冷启动保存需求、复用请求编号及离线报价比选。采购外发的临时授权需要客户端支持 MCP 表单确认。缺少该能力时仍可执行事项、参考来源记录和比选。旧购物专家继续使用原有 13 工具契约。旧入口遇到多候选澄清或还价时返回 TARGET_REQUIRED，同一家商家的单候选任务继续使用原调用方式。
 
 ## 参考商家配置
 

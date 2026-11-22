@@ -5,9 +5,16 @@ import {PREPARE_ERROR_MESSAGES} from './prepare-error-codes.mjs';
 import {toolNames} from './tool-contract.mjs';
 const PROTOCOL='2025-06-18';
 const READ_ONLY_TOOLS=new Set(['kiwi_search','kiwi_get_task','kiwi_get_agreement','kiwi_list_follows','kiwi_get_follow_updates','kiwi_get_procurement','kiwi_get_comparison']);
+const LOCAL_CASE_OPERATIONS = new Set(['register_group', 'create', 'revise', 'record_external_decision', 'set_state']);
+function canWaitForBackend(profile, name, args) {
+  if (READ_ONLY_TOOLS.has(name)) return true;
+  if (profile !== 'company-procurement-v1' || typeof args.request_id !== 'string' || !args.request_id.trim()) return false;
+  if (name === 'kiwi_prepare_procurement') return LOCAL_CASE_OPERATIONS.has(args.operation);
+  return name === 'kiwi_compare_quotes';
+}
 const unavailable=text=>({isError:true,content:[{type:'text',text}]});
 const preparationPending=text=>({isError:true,structuredContent:{status:'retryable',code:'PREPARATION_IN_PROGRESS',requestSent:false},content:[{type:'text',text}]});
-const pendingSearchMessage='PREPARATION_IN_PROGRESS: Verification is still running in this connection. The read-only request was not sent. Retry in the same connection after it is ready; reconnecting can interrupt verification.';
+const pendingToolMessage='PREPARATION_IN_PROGRESS: Verification is still running in this connection. The request was not sent. Retry in the same connection after it is ready; reconnecting can interrupt verification.';
 const responseError=(id,code,message)=>({jsonrpc:'2.0',id,error:{code,message}});
 // Transparent MCP transport only. Business policy, scope, approval, and action
 // outcomes belong to the verified Kiwi backend / calling expert. This adapter
@@ -62,11 +69,16 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
     const {name, arguments: args} = pending.message.params;
     if (READ_ONLY_TOOLS.has(name)) return unavailable('Read interrupted; retry the query when connected.');
     const unknown = pending.sent;
+    const localRequestId = canWaitForBackend(profile, name, args ?? {}) ? args?.request_id : undefined;
+    const retry = localRequestId
+      ? 'Outcome unknown. Reconnect and retry the same operation with the original request_id.'
+      : 'Outcome unknown. Check the task before retrying; keep the original idempotency key.';
     return {
-      ...unavailable(unknown ? 'Outcome unknown. Check the task before retrying; keep the original idempotency key.' : 'Request was not sent.'),
+      ...unavailable(unknown ? retry : 'Request was not sent.'),
       structuredContent: {
         code: unknown ? 'OUTCOME_UNKNOWN' : 'REQUEST_NOT_SENT',
         ...(unknown ? {} : {requestSent:false}),
+        ...(localRequestId ? {request_id:localRequestId} : {}),
         ...(typeof args?.task_id === 'string' ? {task_id:args.task_id} : {}),
         ...(typeof args?.idempotency_key === 'string' ? {idempotency_key:args.idempotency_key} : {}),
       },
@@ -77,7 +89,7 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
     remember(timedOutClientIds,callKey);
     if (!pending.sent) {
       queuedToolCalls.delete(callKey);
-      answerTool(pending.id,preparationPending(pendingSearchMessage));
+      answerTool(pending.id,preparationPending(pendingToolMessage));
       return;
     }
     const readOnly = READ_ONLY_TOOLS.has(pending.message.params.name);
@@ -188,11 +200,11 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
       const pending={id:message.id,message,timer:null,sent:false,deadline:Date.now()+toolTimeoutMs};
       pending.timer=setTimeout(()=>expireCall(callKey,pending),toolTimeoutMs);pending.timer.unref?.();activeToolCalls.set(callKey,pending);
       if(phase==='preparing'){
-        if(READ_ONLY_TOOLS.has(name)&&prepareWaitTimeoutMs>0&&queuedToolCalls.size<32){
+        if(canWaitForBackend(profile,name,args)&&prepareWaitTimeoutMs>0&&queuedToolCalls.size<32){
           clearTimeout(pending.timer);pending.timer=setTimeout(()=>{
             if(!activeToolCalls.has(callKey)||pending.sent)return;
             remember(timedOutClientIds,callKey);queuedToolCalls.delete(callKey);
-            answerTool(message.id,preparationPending(pendingSearchMessage));
+            answerTool(message.id,preparationPending(pendingToolMessage));
           },Math.min(prepareWaitTimeoutMs,Math.max(1,pending.deadline-Date.now())));pending.timer.unref?.();queuedToolCalls.set(callKey,pending);
         }else answerTool(message.id,preparationPending('PREPARATION_IN_PROGRESS: Verification is still running; this request was not sent. Retry once the connector is ready.'));
         return;
@@ -284,9 +296,9 @@ export function startProductionMcpServer({input,output,baseline,prepare,activate
       backend=active;phase='ready';status('READY');
       for(const [key,pending] of queuedToolCalls){
         queuedToolCalls.delete(key);if(!activeToolCalls.has(key))continue;
-        if(abort.signal.aborted||Date.now()>=pending.deadline){remember(timedOutClientIds,key);answerTool(pending.id,preparationPending('PREPARATION_IN_PROGRESS: Verification finished after the bounded request window; this read-only request was not sent. Retry it once the connector is ready.'));continue}
+        if(abort.signal.aborted||Date.now()>=pending.deadline){remember(timedOutClientIds,key);answerTool(pending.id,preparationPending('PREPARATION_IN_PROGRESS: Verification finished after the bounded request window; this request was not sent. Retry it once the connector is ready.'));continue}
         clearTimeout(pending.timer);pending.timer=setTimeout(()=>expireCall(key,pending),pending.deadline-Date.now());pending.timer.unref?.();
-        if(!activeToolCalls.has(key)||abort.signal.aborted||Date.now()>=pending.deadline){pending.sent=false;remember(timedOutClientIds,key);answerTool(pending.id,preparationPending('PREPARATION_IN_PROGRESS: Verification finished after the bounded request window; this read-only request was not sent. Retry it once the connector is ready.'));continue}
+        if(!activeToolCalls.has(key)||abort.signal.aborted||Date.now()>=pending.deadline){pending.sent=false;remember(timedOutClientIds,key);answerTool(pending.id,preparationPending('PREPARATION_IN_PROGRESS: Verification finished after the bounded request window; this request was not sent. Retry it once the connector is ready.'));continue}
         pending.sent=true;await sendToolCall(pending)
       }
       active.done.then(()=>{if(!stopped)fail('BACKEND_EXITED')}).catch(()=>{if(!stopped)fail('BACKEND_FAILED')});
