@@ -142,6 +142,7 @@ function evaluateOption(
         ? {
             unit_price_minor: quote.unit_price_minor,
             pricing: quote.pricing,
+            line_discount_minor: input.line_discount_minor ?? 0,
             valid_until: quote.valid_until,
             price_source: quote.source,
           }
@@ -220,6 +221,7 @@ export function publicOptionProjection(option: ProposalOption): Record<string, u
     quantity: option.quantity,
     currency: option.currency,
     ...(option.unit_price_minor !== undefined ? { unit_price_minor: option.unit_price_minor } : {}),
+    ...(option.line_discount_minor ? { line_discount_minor: option.line_discount_minor } : {}),
     ...(option.pricing !== undefined ? { totals: option.pricing.totals } : {}),
     ...(option.valid_until !== undefined ? { valid_until: option.valid_until } : {}),
     adaptation: option.adaptation.map((entry) => ({

@@ -131,6 +131,21 @@ function index(routes: Routes, calls: string[] = []) {
 }
 
 describe("KiwiCatalogMerchantIndex：多商家应用身份一致性", () => {
+  it("scopes both lookups before applying the Catalog page limit", async () => {
+    const unrelated = Array.from({ length: 50 }, (_, i) => listingResult(AGENT_B, "other", `noise-${i}`));
+    const fetchImpl = (async (input: Parameters<typeof fetch>[0]) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/v1/listings/search") {
+        const scoped = url.searchParams.get("merchant_id") === MERCHANT;
+        return Response.json({ results: scoped ? [listingResult(AGENT_A, MERCHANT, "target")] : unrelated });
+      }
+      if (url.pathname === "/v1/agents/search") expect(url.searchParams.get("merchant_id")).toBe(MERCHANT);
+      return catalogFetch({ agents: [agentRecord(AGENT_A, MERCHANT, RUNTIME_ACCESS_A)] })(input);
+    }) as typeof fetch;
+    const lookup = new KiwiCatalogMerchantIndex({ baseUrl: CATALOG, fetchImpl });
+    expect((await lookup.resolveById(MERCHANT))?.matching_skus).toEqual(["target"]);
+  });
+
   it("同一 merchant_id 的两条 listing 来自不同应用：商品并列但路由/门禁 fail-closed", async () => {
     const indexUnderTest = index({
       listings: [

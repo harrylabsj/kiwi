@@ -39,6 +39,7 @@ export interface RfqPolicyConfig {
   allowed_payment_terms?: string[];
   /** 报价有效期上限（天）。 */
   max_valid_until_days?: number;
+  max_valid_until_seconds?: number;
   /**
    * 私有底价（minor units；只在本配置对象内存在，绝不进投影/错误/日志）。
    */
@@ -103,10 +104,10 @@ export function validateQuotePolicy(ctx: RfqPolicyContext, policy: RfqPolicyConf
       return deny();
     }
   }
-  if (policy?.max_valid_until_days !== undefined) {
-    const days = (Date.parse(ctx.validUntil) - Date.parse(ctx.nowIso)) / 86_400_000;
-    if (!Number.isFinite(days) || days < 0 || days > policy.max_valid_until_days) return deny();
-  }
+  const durationMs = Date.parse(ctx.validUntil) - Date.parse(ctx.nowIso);
+  const maxMs = Math.min((policy?.max_valid_until_days ?? Infinity) * 86_400_000,
+    (policy?.max_valid_until_seconds ?? Infinity) * 1000);
+  if (!Number.isFinite(durationMs) || durationMs > maxMs) return deny();
   if (Date.parse(ctx.validUntil) <= Date.parse(ctx.nowIso)) {
     return deny("报价有效期早于当前时间");
   }
@@ -146,9 +147,9 @@ export function rfqPolicyConfigFromMerchantPolicy(
     }
     if (Object.keys(bySku).length > 0) config.floor_price_minor_by_sku = bySku;
   }
-  // 运行策略的报价有效期上限（quote_ttl_seconds，秒）→ 天。
+  // 运行策略的报价有效期上限保持 quote_ttl_seconds 的秒精度。
   if (policy.quote_ttl_seconds !== undefined && policy.quote_ttl_seconds > 0) {
-    config.max_valid_until_days = Math.max(1, Math.floor(policy.quote_ttl_seconds / 86_400));
+    config.max_valid_until_seconds = policy.quote_ttl_seconds;
   }
   return Object.keys(config).length > 0 ? config : undefined;
 }

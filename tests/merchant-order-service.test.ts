@@ -1,6 +1,9 @@
 /**
  * 订单申报/来源核实/归因/退款/贡献（v0.2 §11–§13 / AC10–AC14）。
  */
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -46,6 +49,42 @@ function report() {
 }
 
 describe("MerchantOrderService", () => {
+  it("rolls back after a failed BEGIN on the same repository", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kiwi-lock-"));
+    const file = join(dir, "db");
+    const holder = new DatabaseSync(file);
+    const writer = new DatabaseSync(file);
+    try {
+      holder.exec("create table entries(n); begin immediate");
+      const repo = new OrderRepository({ db: writer, now: () => NOW });
+      expect(() => repo.transaction(() => {})).toThrow(/locked/);
+      holder.exec("rollback");
+      expect(() => repo.transaction(() => {
+        writer.exec("insert into entries values(1)");
+        throw new Error("abort");
+      })).toThrow("abort");
+      expect(holder.prepare("select * from entries").all()).toHaveLength(0);
+    } finally {
+      writer.close();
+      holder.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("separates attribution IDs across orders and refuses orphan assessments", () => {
+    const first = report();
+    const { order: second } = orders.createOrder({ identity: { ...identity, external_order_id: "second" },
+      evidenceSource: "manual_report", lines: orders.listLines(first.record_id) });
+    const allocations = [{ order_line_id: "line-1", opportunity_id: "same", quantity: 1,
+      amount_minor: 100, method: "manual_confirmation" as const }];
+    for (const id of [first.record_id, second.record_id, second.record_id]) {
+      orders.replaceAttributions(identity.merchant_id, id, allocations);
+    }
+    expect(db.prepare("select * from order_attributions_v2").all()).toHaveLength(2);
+    expect(() => service.assessContribution({ merchantId: identity.merchant_id, recordId: "missing",
+      contribution: { kind: "ACTUAL", costs: {}, completeness: "COMPLETE" } })).toThrow(/not found/);
+  });
+
   it("人工申报只写 manual_report，不提供工作台自证升级", () => {
     const order = report();
     expect(order.evidence_source).toBe("manual_report");
@@ -87,6 +126,9 @@ describe("MerchantOrderService", () => {
 
   it("贡献评估持久化，退款后净收入与贡献正确", () => {
     const order = report();
+    service.recordRefund({ merchantId: "merchant-1", recordId: order.record_id, refund: {
+      identity: { ...identity, external_refund_id: "refund-1" }, amount_minor: 200, version: 1, status: "active",
+    } });
     const saved = service.assessContribution({
       merchantId: "merchant-1",
       recordId: order.record_id,

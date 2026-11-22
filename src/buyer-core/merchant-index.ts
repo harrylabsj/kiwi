@@ -426,8 +426,7 @@ export class KiwiCatalogMerchantIndex {
    * 保温杯 预算82元"）未必命中 catalog 的 title/category LIKE，导致匹配不到、
    * 商家丢 agent_card_url（A2A 无法磋商）。此处按 merchant_id 直接解析：agents 面
    * 按 merchant_id/catalog_agent_id 匹配，listings 面按 merchant_id 匹配并补
-   * owner agent card，publications 面按 merchant_id 精确过滤。catalog 商家数小，
-   * 全量扫描可接受。
+   * owner agent card，publications 面按 merchant_id 精确过滤。列表均按输入的商家或 Agent 身份查询。
    *
    * M0：Agent/Listing 两侧都无命中、仅公开资料命中时返回 source_kind=
    * merchant_declared 的记录（无 agent_card_url）——service 层 RFQ 硬门据此
@@ -436,8 +435,12 @@ export class KiwiCatalogMerchantIndex {
   async resolveById(merchantId: string): Promise<MerchantRecord | undefined> {
     if (merchantId === undefined || merchantId === "") return undefined;
     const [agentsRes, listingsRes, publicationsRes] = await Promise.allSettled([
-      this.source.searchRecords({ include: "buyer_access" }),
-      this.source.searchListings({ limit: 50 }),
+      merchantId.startsWith("cagt_")
+        ? this.source.getRecord(merchantId).then((record) => [record])
+        : this.source.searchRecords({ merchant_id: merchantId, include: "buyer_access" }),
+      this.source.searchListings(merchantId.startsWith("cagt_")
+        ? { owner_agent_id: merchantId }
+        : { merchant_id: merchantId }),
       this.publications.searchPublications({ merchant_id: merchantId, limit: 50 }),
     ]);
     if (agentsRes.status === "rejected" && listingsRes.status === "rejected") throw agentsRes.reason;
@@ -505,7 +508,11 @@ export class KiwiCatalogMerchantIndex {
         category: listing.listing.category,
         region: listing.listing.regions?.[0],
         capabilities: [],
-        matching_skus: [listing.listing.source_product_ref ?? listing.listing.listing_id],
+        matching_skus: [...new Set(listings.filter((item) =>
+          item.listing.owner_agent_id === listing.listing.owner_agent_id &&
+          item.agent.catalog_agent_id === listing.listing.owner_agent_id &&
+          item.merchant.merchant_id === listing.merchant.merchant_id
+        ).map((item) => item.listing.source_product_ref ?? item.listing.listing_id))],
         delivery: listing.listing.commercial_hints?.lead_time_hint,
         // 即使没有 agent card/补查失败，也保留 listing join 的在线状态；缺失
         // 才会落到 isAgentFresh 的 legacy 兼容分支。

@@ -39,7 +39,7 @@
 import type { OrderRecordStore, OrderRecordSource } from "./order-record.js";
 import { ingestOrderRecord } from "./order-record.js";
 import type { ReceiptDispatcher } from "../commerce/receipt/dispatcher.js";
-import type { OrderReceipt } from "../commerce/receipt/receipts.js";
+import { orderReceiptId, type OrderReceipt } from "../commerce/receipt/receipts.js";
 
 /** 订单已创建的可接受状态词表（merchant 权威状态；Kiwi 不解释其余语义）。 */
 const ORDER_CREATED_STATUSES = new Set(["completed", "fulfilled", "confirmed", "shipped"]);
@@ -95,7 +95,7 @@ export function ingestAndReportOrderRecord(input: OrderReceiptReportInput): Orde
     return { status: "skipped", reason: "permalink has no channel host" };
   }
   const receipt: OrderReceipt = {
-    event_id: `merchant-order:${channel}:${record.order_id}`,
+    event_id: orderReceiptId(channel, record.order_id),
     event_type: "merchant_order_created",
     merchant_id: input.merchantId,
     order_channel: channel,

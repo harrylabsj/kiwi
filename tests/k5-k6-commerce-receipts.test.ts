@@ -111,7 +111,7 @@ describe("K5/K6 商家侧回执", () => {
       identityVerified: true,
     });
 
-  const makeHandler = (submitted: CommerceReceipt[]) =>
+  const makeHandler = (submitted: CommerceReceipt[], dispatcher?: ReceiptDispatcher) =>
     createMerchantHandler({
       productSource: {
         async getProduct() {
@@ -131,7 +131,7 @@ describe("K5/K6 商家侧回执", () => {
       counterparty: "buyer:*",
       commerceReceipts: {
         merchantId: MERCHANT,
-        dispatcher: {
+        dispatcher: dispatcher ?? {
           enqueueAndDeliver: async (receipt: CommerceReceipt) => {
             submitted.push(receipt);
           },
@@ -160,6 +160,27 @@ describe("K5/K6 商家侧回执", () => {
     expect(entry.event_id).toBe(`merchant-entry:${entry.event_id.split(":")[1]}`);
     // 无协议回执：入口事实独立于意向。
     expect(submitted.filter((r) => r.event_type === "merchant_agreement_issued")).toHaveLength(0);
+  });
+
+  it("recovers a missing outbox entry once and skips ledger reads on idle ticks and restarts", async () => {
+    await runWith(makeHandler([]), envelopeOf("rfq", {
+      type: "rfq", items: [{ sku: SKU, quantity: { value: 50, unit: "piece" } }],
+    }));
+    const outbox = new ReceiptOutbox({ dbPath: join(dir, "checkpoint.sqlite"), now: () => NOW });
+    try {
+      const dispatcher = new ReceiptDispatcher({ outbox, submitter: { submit: async () => {} } });
+      let reads = 0;
+      const read = ledger.readReceiptLedger.bind(ledger);
+      ledger.readReceiptLedger = (file) => { reads++; return read(file); };
+      const handler = makeHandler([], dispatcher);
+      handler.recoverReceipts?.();
+      expect(outbox.due()).toHaveLength(1);
+      handler.recoverReceipts?.();
+      makeHandler([], dispatcher).recoverReceipts?.();
+      expect(reads).toBe(1);
+    } finally {
+      outbox.close();
+    }
   });
 
   it("有效 accept → merchant_agreement_issued（binding=thumbprint，event_id 绑定协议号）", async () => {

@@ -82,6 +82,14 @@ describe("calculateCommercialQuote", () => {
     expect(duplicate).toMatchObject({ status: "approval_required", reason: "invalid_promotion" });
   });
 
+  it("compares the discounted line amount at the floor boundary", () => {
+    const quote = (discount: number) => calculateCommercialQuote(input({
+      quantity: 2, base_unit_price_minor: 10_000, private_floor_minor: 9_000, line_discount_minor: discount,
+    }));
+    expect(quote(2000).status).toBe("quoted");
+    expect(quote(2001)).toMatchObject({ status: "approval_required", reason: "below_private_floor" });
+  });
+
   it("低于私有 floor → approval_required，且不返回价格", () => {
     const result = calculateCommercialQuote(input({ private_floor_minor: 19_000 }));
     expect(result).toMatchObject({ status: "approval_required", reason: "below_private_floor" });

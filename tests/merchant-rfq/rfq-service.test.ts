@@ -66,6 +66,7 @@ function setup(
   options: {
     clock?: { value: string };
     priceUnit?: "minor" | "yuan";
+    ttl?: number;
     products?: MerchantCatalogProduct[];
     dataSource?: CommerceDataSource;
   } = {},
@@ -106,6 +107,7 @@ function setup(
     artifacts,
     coordinator,
     now,
+    quoteValiditySeconds: () => options.ttl,
     confirmationMinter: (input) => `cfm-${input.caseId}-${input.lineId}-${input.sku}`,
     candidateStatus: (candidateId) => approvals.get(candidateId)?.status,
     policyVersion: () => "policy-0-test",
@@ -307,6 +309,18 @@ describe("RFQ 事实与计价", () => {
     expect(view.case.stage).toBe("PRICED");
     expect(view.case.current_quote_id).toBe(quote.quote_id);
     s.db.close();
+  });
+
+  it.each([300, 86_399, 86_400, 90_000])("customer projection preserves a %i-second TTL", async (ttl) => {
+    const s = setup({ priceUnit: "yuan", ttl });
+    try {
+      const { quote } = await pricedCase(s);
+      const expected = new Date(Date.parse(T0) + ttl * 1000).toISOString();
+      expect(quote.valid_until).toBe(expected);
+      expect(JSON.parse(s.repo.getQuote(quote.quote_id, quote.revision)!.projection_json).valid_until).toBe(expected);
+    } finally {
+      s.db.close();
+    }
   });
 
   it("计价幂等：同键同输入重放；同键不同快照冲突", async () => {

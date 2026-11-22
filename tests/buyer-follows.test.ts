@@ -249,19 +249,16 @@ describe("kiwi_get_follow_updates（主动拉取公开动态）", () => {
     expect((events[0]?.payload as Record<string, unknown>).title).toBe("保温杯 316 不锈钢");
   });
 
-  it("水位语义透传：第一次有增量、第二次为空（客户端不缓存重放、不本地过滤）", async () => {
-    const { fetchImpl, calls } = stubCatalog((_url, callIndex) =>
-      callIndex === 0
-        ? { body: { ok: true, updates: [UPDATE_GROUP] } }
-        : { body: { ok: true, updates: [] } },
-    );
+  it("acknowledges only processed watermarks before fetching the next page", async () => {
+    const { fetchImpl, calls } = stubCatalog((url) => url.endsWith("/ack")
+      ? { body: { ok: true } } : { body: { ok: true, updates: [UPDATE_GROUP] } });
     const service = makeService(fetchImpl);
-    const first = await callTool(service, "kiwi_get_follow_updates", {});
-    expect((JSON.parse(textOf(first)) as { updates: unknown[] }).updates).toHaveLength(1);
-    // 上游推进水位后第二次拉取为空；客户端如实透传空结果，不重放上批事件。
-    const second = await callTool(service, "kiwi_get_follow_updates", {});
-    expect((JSON.parse(textOf(second)) as { updates: unknown[] }).updates).toEqual([]);
-    expect(calls).toHaveLength(2);
+    await callTool(service, "kiwi_get_follow_updates", {});
+    await callTool(service, "kiwi_get_follow_updates", { watermarks: {
+      [UPDATE_GROUP.merchant_id]: UPDATE_GROUP.last_seen_at,
+    } });
+    expect(calls.map((call) => call.method)).toEqual(["GET", "POST", "GET"]);
+    expect(calls[1]?.url).toMatch(/updates\/ack$/);
   });
 });
 

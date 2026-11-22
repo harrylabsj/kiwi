@@ -710,7 +710,7 @@ it("reports only completed checkout orders with a matching session and terms", a
     expect(orders.count()).toBe(0);
     state = "completed";
     sessionId = "cs_wrong";
-    await channel.getSession("cs_1");
+    expect((await channel.getSession("cs_1")).status).toBe("fail_closed");
     expect(orders.count()).toBe(0);
     sessionId = "cs_1";
     await channel.getSession("cs_1");
@@ -722,6 +722,33 @@ it("reports only completed checkout orders with a matching session and terms", a
     outbox.close();
     orders.close();
   }
+});
+
+it.each(["poll", "already-completed", "complete-response"])("rejects a mismatched terminal response on %s", async (route) => {
+  const server = new MockCheckoutServer();
+  server.createStatus = "ready_for_complete";
+  let mismatch = true;
+  const channel = makeChannel(async (input, init) => {
+    const response = await server.fetchImpl(input, init);
+    const method = init?.method ?? "GET";
+    if (mismatch && ((route === "complete-response" && String(input).endsWith("/complete")) ||
+        (route !== "complete-response" && method === "GET"))) {
+      return jsonResponse({ ...(await response.json() as Record<string, unknown>), status: "completed", session_id: "wrong-session" });
+    }
+    return response;
+  }, { authorizationProvider: new FakeAuthorizationProvider() });
+  const created = await channel.createSession(makePackage());
+  expect(created.status).toBe("ok");
+  if (created.status !== "ok") throw Error("missing checkout");
+  const result = route === "poll"
+    ? await channel.getSession(created.session_ref)
+    : await channel.requestCompletion(created.session_ref, validAuthorization());
+  expect(result).toMatchObject({ status: "fail_closed", code: "line_items_mismatch" });
+  mismatch = false;
+  server.sessions.get(created.session_ref)!.status = "ready_for_complete";
+  const next = await channel.getSession(created.session_ref);
+  expect(next.status).toBe("ok");
+  if (next.status === "ok") expect(next.session.status).toBe(created.session.status);
 });
 
 describe("UcpCheckoutChannel totals validation", () => {

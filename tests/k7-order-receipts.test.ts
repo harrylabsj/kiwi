@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { openOrderRecordStore } from "../src/handoff/order-record.js";
 import { ingestAndReportOrderRecord } from "../src/handoff/order-receipts.js";
-import { ReceiptOutbox, type CommerceReceipt, type OrderReceipt } from "../src/commerce/receipt/receipts.js";
+import { orderReceiptId, ReceiptHttpError, ReceiptOutbox, type CommerceReceipt, type OrderReceipt } from "../src/commerce/receipt/receipts.js";
 import { ReceiptDispatcher } from "../src/commerce/receipt/dispatcher.js";
 
 const NOW = "2026-11-08T04:00:00.000Z";
@@ -66,6 +66,30 @@ describe("K7 渠道订单事实 → 回执上报（B3）", () => {
     };
     return { submitted, outbox, dispatcher, store, baseSource };
   };
+
+  it("bounds long legacy IDs and stops retrying a permanent rejection", async () => {
+    const channel = "a".repeat(24), ref = "b".repeat(110);
+    const stamp = { value: NOW };
+    const outbox = new ReceiptOutbox({ now: () => stamp.value });
+    const legacy = `merchant-order:${channel}:${ref}`;
+    const event: OrderReceipt = { event_id: legacy, event_type: "merchant_order_created",
+      merchant_id: MERCHANT, occurred_at: NOW, order_channel: channel, order_ref: ref,
+      order_evidence: { checkout_session_ref: "checkout", channel_evidence: ref } };
+    let calls = 0;
+    try {
+      const dispatcher = new ReceiptDispatcher({ outbox, submitter: { async submit(receipt) {
+        calls++;
+        expect(receipt.event_id).toBe(orderReceiptId(channel, ref));
+        expect(receipt.event_id.length).toBeLessThanOrEqual(128);
+        throw new ReceiptHttpError(422);
+      } } });
+      await dispatcher.enqueueAndDeliver(event);
+      stamp.value = "2030-01-01T00:00:00Z";
+      await dispatcher.drain();
+      expect(calls).toBe(1);
+      expect(outbox.due()).toEqual([]);
+    } finally { outbox.close(); }
+  });
 
   it("成功创建的测试订单 → merchant_order_created（来源渠道+引用+可验证关联）", async () => {
     const f = makeFixture();

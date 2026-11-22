@@ -23,6 +23,7 @@
  * `findOverlaps()` 在事务内判定。
  */
 
+import { inImmediateTransaction } from "../storage/transaction.js";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -89,7 +90,6 @@ function rowToPlan(row: PlanRow): OperatingPlan {
 export class MerchantOperatingPlanRepository {
   private readonly db: DatabaseSync;
   private readonly now: () => string;
-  private inTx = false;
 
   constructor(options: OperatingPlanRepositoryOptions) {
     this.db = options.db;
@@ -98,19 +98,7 @@ export class MerchantOperatingPlanRepository {
 
   /** 写事务；内层调用加入外层事务，异常统一回滚。 */
   transaction<T>(work: () => T): T {
-    if (this.inTx) return work();
-    this.inTx = true;
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const result = work();
-      this.db.exec("COMMIT");
-      return result;
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
-    } finally {
-      this.inTx = false;
-    }
+    return inImmediateTransaction(this.db, work);
   }
 
   getById(merchantId: string, planId: string): OperatingPlan | undefined {

@@ -123,9 +123,10 @@ export interface RfqServiceDeps {
   candidateStatus?: (candidateId: string) => string | undefined;
   policyVersion: () => string;
   /**
-   * 报价有效期天数（缺省 7；模型工具面不暴露该参数，§13.1——调整走部署
+   * 报价有效期以秒为单位（缺省 7 天；模型工具面不暴露该参数，§13.1——调整走部署
    * 配置/策略）。函数注入：运行中策略热更新后，下一次计价即时生效。
    */
+  quoteValiditySeconds?: () => number | undefined;
   quoteValidityDays?: () => number | undefined;
   /** 新鲜度阈值覆盖（缺省 FRESHNESS_SECONDS；§6.3 试点参数）。 */
   freshnessSeconds?: FreshnessOverrides;
@@ -900,10 +901,8 @@ export class MerchantRfqService {
     const output = calculatePricing(pricingInput);
     // 硬策略（含底价兜底；拒绝只返回理由码）。报价有效期缺省 7 天（模型
     // 不可改变有效期——工具面不暴露该参数；调整走部署配置/策略，§13.1）。
-    // 有效期与策略的 max_valid_until_days 同源于 quote_ttl_seconds（cli 装配），
-    // 两侧同用向下取整到天，避免「策略 TTL < 缺省 7 天 → 计价必拒」的错配。
-    const validityDays = this.deps.quoteValidityDays?.() ?? 7;
-    const validUntil = new Date(Date.parse(this.deps.now()) + validityDays * 86_400_000).toISOString();
+    const validitySeconds = this.deps.quoteValiditySeconds?.() ?? (this.deps.quoteValidityDays?.() ?? 7) * 86_400;
+    const validUntil = new Date(Date.parse(this.deps.now()) + validitySeconds * 1_000).toISOString();
     const policyCtx: RfqPolicyContext = {
       merchantId: this.repo().merchantId,
       lines: pricingLines.map((l) => ({ sku: l.sku, quantity: l.quantity, unit: l.unit, unit_price_minor: l.unit_price_minor })),

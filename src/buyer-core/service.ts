@@ -265,7 +265,7 @@ export interface BuyerFollowsClient {
   unfollow(merchantId: string): Promise<{ merchant_id: string; following: false }>;
   listFollows(): Promise<BuyerFollowRecord[]>;
   /** 仅响应买家主动查询；水位语义在上游（返回什么再推进 last_seen_at）。 */
-  getUpdates(): Promise<BuyerFollowUpdateGroup[]>;
+  getUpdates(watermarks?: Record<string, string>): Promise<BuyerFollowUpdateGroup[]>;
 }
 export type { BuyerFollowRecord, BuyerFollowUpdateGroup };
 
@@ -930,8 +930,8 @@ export class KiwiBuyerService {
   }
 
   /** 主动拉取关注更新（仅响应买家主动询问；事件仅为商家公开动态）。 */
-  async getFollowUpdates(): Promise<{ updates: BuyerFollowUpdateGroup[] }> {
-    const updates = await this.withFollows((client) => client.getUpdates());
+  async getFollowUpdates(watermarks?: Record<string, string>): Promise<{ updates: BuyerFollowUpdateGroup[] }> {
+    const updates = await this.withFollows((client) => client.getUpdates(watermarks));
     return { updates };
   }
 

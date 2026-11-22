@@ -1036,7 +1036,11 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
       : defaultHandler();
 
   const retryReceipts = (): void => {
-    handler.recoverReceipts?.();
+    try {
+      handler.recoverReceipts?.();
+    } catch (error) {
+      process.stderr.write(`[kiwi] receipt ledger recovery deferred: ${String(error)}\n`);
+    }
     receiptDispatcher?.kick();
   };
   const receiptTimer = receiptDispatcher === undefined ? undefined : setInterval(retryReceipts, 60_000);

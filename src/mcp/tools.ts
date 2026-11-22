@@ -526,18 +526,18 @@ export function buildKiwiTools(service: KiwiBuyerService, profile: BuyerToolProf
       name: "kiwi_get_follow_updates",
       description:
         tr(
-          "Check public updates from followed merchants. Call only in response to an explicit buyer ask (e.g. 'any new updates from merchants I follow?'): returns the merchants' public updates incrementally by watermark (product_added / product_updated / faq_updated / service_notice / publication_withdrawn, public fields only), advancing the watermark after each call without loss or duplication. Pull-based subscription: merchants cannot push messages to the buyer, and this tool never receives merchant DMs on the buyer's behalf.",
-          "查看买家关注的商家有什么公开更新。仅响应买家主动询问（如“我关注的商家有什么新动态”）时调用：按水位增量返回商家公开动态（product_added / product_updated / faq_updated / service_notice / publication_withdrawn，仅公开字段），返回后水位推进、不丢不重。拉取式订阅：商家无法向买家推送消息，本工具也不代表买家接收任何商家私信。",
+          "Check public updates from followed merchants. Call only in response to an explicit buyer ask (e.g. 'any new updates from merchants I follow?'): returns the merchants' public updates incrementally by watermark (product_added / product_updated / faq_updated / service_notice / publication_withdrawn, public fields only), acknowledge processed groups on the next call using watermarks (merchant_id to last_seen_at). Pull-based subscription: merchants cannot push messages to the buyer, and this tool never receives merchant DMs on the buyer's behalf.",
+          "查看买家关注的商家有什么公开更新。仅响应买家主动询问（如“我关注的商家有什么新动态”）时调用：按水位增量返回商家公开动态（product_added / product_updated / faq_updated / service_notice / publication_withdrawn，仅公开字段），处理成功后下次用 watermarks 确认各商家的 last_seen_at；未确认的目录更新可重读。拉取式订阅：商家无法向买家推送消息，本工具也不代表买家接收任何商家私信。",
         ),
       inputSchema: {
         $schema: "https://json-schema.org/draft/2020-12/schema",
         type: "object",
         additionalProperties: false,
-        properties: {},
+        properties: { watermarks: { type: "object", maxProperties: 500, additionalProperties: { type: "string" } } },
       },
-      async handle() {
+      async handle(args) {
         try {
-          return ok(JSON.stringify(await service.getFollowUpdates()));
+          return ok(JSON.stringify(await service.getFollowUpdates(args.watermarks as Record<string, string> | undefined)));
         } catch (error) {
           return err(error);
         }
