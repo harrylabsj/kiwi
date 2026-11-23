@@ -9,11 +9,13 @@ describe("open inquiry replay protection", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "kiwi-inquiry-nonce-"));
     let now = 1_000_000;
     const first = new InquiryNonceStore(dir, { now: () => now, maxEntries: 1 });
-    const second = new InquiryNonceStore(dir, { now: () => now, maxEntries: 1 });
+    const unavailable: string[] = [];
+    const second = new InquiryNonceStore(dir, { now: () => now, maxEntries: 1, onUnavailable: (reason) => unavailable.push(reason) });
     try {
       expect(first.checkAndSet("session-a|private-test-nonce")).toBe(true);
       expect(second.checkAndSet("session-a|private-test-nonce")).toBe(false);
       expect(second.checkAndSet("session-b|other")).toBe(false);
+      expect(unavailable).toContain("capacity");
       expect(statSync(path.join(dir, "open-inquiry-nonces.sqlite")).mode & 0o777).toBe(0o600);
       now += 30 * 60_000 + 1;
       expect(second.checkAndSet("session-b|other")).toBe(true);

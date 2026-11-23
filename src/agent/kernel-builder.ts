@@ -208,8 +208,15 @@ export async function buildChatKernel(
   }
 
   const signerFile = process.env.KIWI_A2A_SIGNING_KEY_FILE?.trim();
-  const alipayCollectionReader = limits.nativeAlipayView === true && profile.role === "buyer" &&
-    canOpenPrivateAlipayView() && signerFile ? createNativeAlipayReader(loadA2aSigningIdentityFromFile(signerFile)) : undefined;
+  let alipayCollectionReader: ReturnType<typeof createNativeAlipayReader> | undefined;
+  if (limits.nativeAlipayView === true && profile.role === "buyer" && canOpenPrivateAlipayView() && signerFile) {
+    try {
+      alipayCollectionReader = createNativeAlipayReader(loadA2aSigningIdentityFromFile(signerFile));
+    } catch {
+      // Do not advertise private display with an unusable signer, or abort unrelated chat features.
+      process.stderr.write("[kiwi] 无法加载 KIWI_A2A_SIGNING_KEY_FILE，已停用支付宝私有收款指引。\n");
+    }
+  }
 
   return AgentKernel.open({
     profile,

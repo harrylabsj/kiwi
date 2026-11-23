@@ -10,7 +10,7 @@
 import { appendFileSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -29,6 +29,7 @@ import {
 } from "../src/agent/connector/fake-connector.js";
 import { createFakeChatModels } from "../src/agent/fake-chat-model.js";
 import { AgentKernel } from "../src/agent/kernel.js";
+import { buildChatKernel } from "../src/agent/kernel-builder.js";
 import { EnvKeyProvider, PrivateVault } from "../src/agent/memory/vault.js";
 import { AgentSessionError } from "../src/agent/session.js";
 import type { AgentHostEvent } from "../src/agent/host/events.js";
@@ -77,6 +78,24 @@ async function openKernel(
 }
 
 describe("main conversation and session persistence", () => {
+  it.runIf(process.platform === "darwin" || process.platform === "linux")("opens native chat even when the Alipay signing key cannot be loaded", async () => {
+    workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
+    const absent = path.join(workDir, "missing-key.json");
+    vi.stubEnv("KIWI_A2A_SIGNING_KEY_FILE", absent);
+    const write = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      const kernel = await buildChatKernel(testBuyerProfile(), workDir, undefined, undefined, undefined, undefined, { nativeAlipayView: true });
+      try {
+        expect((await kernel.handleUserText("/help")).text).toContain("/alipay <handoff_id> <negotiation_id>");
+        expect(await kernel.openAlipayCollection("handoff", "negotiation")).toContain("无法查看");
+        expect(write).toHaveBeenCalledWith(expect.stringContaining("已停用支付宝私有收款指引"));
+        expect(write.mock.calls.some(([message]) => String(message).includes(absent))).toBe(false);
+      } finally { await kernel.close(); }
+    } finally {
+      write.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
   it("passes explicit prompt-cache retention with the isolated host session id", async () => {
     workDir = mkdtempSync(path.join(tmpdir(), "kiwi-agent-"));
     const captured: Array<{ cacheRetention?: string; sessionId?: string }> = [];

@@ -5,7 +5,8 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
-import { assertResolvableTargetUrl, assertSafeTargetUrl } from "../a2a/client/url-policy.js";
+import { assertSafeTargetUrl } from "../a2a/client/url-policy.js";
+import { createPinnedFetch } from "../merchant-gateway/pinned-fetch.js";
 import type { A2aSigningIdentity } from "../a2a/signing-key.js";
 import { HttpMessageSigner } from "../trust/identity/index.js";
 import { ALIPAY_PRIVATE_PATH, type AlipayCollectionReadBinding } from "../cloud/alipay-collection-http.js";
@@ -27,41 +28,24 @@ export type NativeAlipayReader = (input: {
   expiresAt: string;
 }) => Promise<void>;
 
-export function createNativeAlipayReader(identity: A2aSigningIdentity): NativeAlipayReader {
+export function createNativeAlipayReader(identity: A2aSigningIdentity, launch?: (url: string) => Promise<void>): NativeAlipayReader {
+  const pinnedFetch = createPinnedFetch({ timeoutMs: 5000, maxResponseBytes: 768 * 1024 });
   return async ({ origin, binding, totalMinor, expiresAt }) => {
     const url = assertSafeTargetUrl(`${origin}${ALIPAY_PRIVATE_PATH}`, {});
     if (url.origin !== origin || url.protocol !== "https:") throw new Error("collection_unavailable");
     const now = Math.floor(Date.now() / 1000);
-    const body = Buffer.from(JSON.stringify(binding), "utf8");
+    const body = JSON.stringify(binding);
     const headers = { "content-type": "application/json", accept: "application/json" };
     const signed = new HttpMessageSigner({
       keyid: identity.keyid, algorithm: identity.algorithm, privateKey: identity.privateKeyPem,
       created: now, expires: now + 20, nonce: randomBytes(16).toString("hex"),
-    }).sign({ url: url.href, method: "POST", body, headers });
-    await assertResolvableTargetUrl(url, {});
-    const res = await fetch(url, {
-      method: "POST", body, headers: { ...headers, ...signed }, redirect: "error", signal: AbortSignal.timeout(5000),
-    });
-    if (!res.ok || res.body === null || !res.headers.get("content-type")?.startsWith("application/json")) {
+    }).sign({ url: url.href, method: "POST", body: Buffer.from(body, "utf8"), headers });
+    const res = await pinnedFetch(url, { method: "POST", body, headers: { ...headers, ...signed }, redirect: "error" });
+    if (!res.ok || res.body === null || res.headers.get("content-type")?.split(";", 1)[0]?.trim() !== "application/json") {
       await res.body?.cancel();
       throw new Error("collection_unavailable");
     }
-    const reader = res.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let size = 0;
-    try {
-      for (;;) {
-        const result = await reader.read();
-        if (result.done) break;
-        size += result.value.length;
-        if (size > 768 * 1024) throw new Error("collection_unavailable");
-        chunks.push(result.value);
-      }
-    } finally {
-      await reader.cancel().catch(() => undefined);
-      reader.releaseLock();
-    }
-    const details = JSON.parse(Buffer.concat(chunks, size).toString("utf8")) as PrivateDetails | null;
+    const details = await res.json() as PrivateDetails | null;
     if (details === null || typeof details !== "object" || details.version !== binding.version ||
         details.totalMinor !== totalMinor || details.currency !== "CNY" || Date.parse(details.expiresAt) !== Date.parse(expiresAt) ||
         !(Date.parse(expiresAt) > Date.now()) || typeof details.recipient !== "string" || details.recipient.length > 128 ||
@@ -69,7 +53,7 @@ export function createNativeAlipayReader(identity: A2aSigningIdentity): NativeAl
         (details.qrPngBase64 !== undefined && (typeof details.qrPngBase64 !== "string" ||
           !/^[a-zA-Z0-9+/]+={0,2}$/.test(details.qrPngBase64))) ||
         (details.account === undefined && details.qrPngBase64 === undefined)) throw new Error("collection_unavailable");
-    await openPrivateAlipayView(details);
+    await openPrivateAlipayView(details, launch);
   };
 }
 

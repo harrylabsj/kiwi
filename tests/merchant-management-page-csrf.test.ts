@@ -203,6 +203,24 @@ describe("merchant workbench CSRF recovery", () => {
     });
   });
 
+  it("warns in the approval confirmation when the approved unit price exceeds the buyer counter", async () => {
+    const elements: Record<string, Element> = {};
+    const confirmations: string[] = [];
+    const context = createPageContext(elements, async () => Response.json(null));
+    context["window"] = { confirm: (message: string) => { confirmations.push(message); return false; } };
+    await loadPage(context);
+    await runInContext(`
+      var form = {
+        elements: { approved_minor: { valueAsNumber: 800 }, alipay_total_minor: { valueAsNumber: 1600 }, confirm_final_total: { checked: true } },
+        querySelector: function (selector) { return selector === "button" ? {} : { textContent: "SKU-1" }; },
+        getAttribute: function () { return "700"; }
+      };
+      $("view").querySelectorAll = function () { return [form]; };
+      bindAlipayApprovals();
+      form.onsubmit({ preventDefault() {} });`, context);
+    expect(confirmations).toEqual([expect.stringContaining("批准单价高于买家原还价")]);
+  });
+
   it("applies the same recovery to the tabular upload endpoint", async () => {
     const elements: Record<string, Element> = {};
     const sentTokens: string[] = [];

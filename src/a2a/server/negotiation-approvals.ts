@@ -106,6 +106,7 @@ export interface ConsumeInput {
 }
 
 const DEFAULT_TTL_SECONDS = 3_600;
+const SIGNED_COUNTER_PENDING_TTL_SECONDS = 15 * 60;
 /** 终态记录保留期：pending/approved 永不按时间修剪。 */
 const TERMINAL_RETENTION_MS = 30 * 86_400_000;
 const LOCK_STALE_MS = 10_000;
@@ -216,6 +217,37 @@ export class NegotiationApprovalStore {
       Number.isFinite(Date.parse(record.expires_at)) &&
       Date.parse(record.expires_at) <= nowMs
     );
+  }
+
+  /** Keep a signed buyer's unchanged counter in the same review, including its terminal disposition. */
+  reviewSignedCounter(input: PendingApprovalInput): {
+    status: "pending" | "rejected" | "expired" | "consumed";
+  } | { status: "approved"; record: NegotiationApprovalRecord } {
+    return this.withLock(() => {
+      const shape = this.read();
+      const record = [...shape.records].reverse().find((candidate) =>
+        candidate.negotiation_id === input.negotiation_id && candidate.sku === input.sku);
+      const now = this.now();
+      const nowMs = Date.parse(now);
+      // An otherwise matching live authorization still provides the legacy commercial
+      // price floor for a changed counter; it cannot bind an Alipay total to that counter.
+      if (record === undefined || record.currency !== input.currency || record.quantity !== input.quantity ||
+          record.unit !== input.unit || (record.buyer_offer_minor !== input.buyer_offer_minor &&
+            (record.status !== "approved" || this.expired(record, nowMs)))) {
+        this.recordPendingLocked({ ...input, ttl_seconds: SIGNED_COUNTER_PENDING_TTL_SECONDS });
+        return { status: "pending" };
+      }
+      if ((record.status === "pending" || record.status === "approved") && this.expired(record, nowMs)) {
+        record.status = "expired";
+        record.updated_at = now;
+        this.write(this.pruneTerminal(shape.records));
+      }
+      if (record.status !== "approved") return { status: record.status };
+      record.status = "consumed";
+      record.updated_at = now;
+      this.write(this.pruneTerminal(shape.records));
+      return { status: "approved", record };
+    });
   }
 
   /** 记录一笔超额还价（同 negotiation+sku 的 pending 只保留最新一条）。 */
@@ -380,6 +412,12 @@ export class NegotiationApprovalStore {
       throw new Error("no pending negotiation approval matches the request");
     }
     const now = this.now();
+    if (this.expired(record, Date.parse(now))) {
+      record.status = "expired";
+      record.updated_at = now;
+      this.write(this.pruneTerminal(shape.records));
+      throw new Error("approval pending has expired");
+    }
     record.status = "rejected";
     record.rejected_by = input.rejected_by ?? "merchant";
     if (reason !== undefined && reason !== "") record.rejected_reason = reason;

@@ -38,7 +38,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { a2aCardSigningIdentity, createA2aNodeCore, createA2aAuthVerifier } from "../a2a/node.js";
 import { isOpenInquiryIdentity } from "../a2a/open-inquiry-identity.js";
-import { InquiryNonceStore } from "../a2a/inquiry-nonce-store.js";
+import { InquiryNonceStore, type NonceStoreUnavailable } from "../a2a/inquiry-nonce-store.js";
 import { AlipayCollectionStore } from "../merchant-core/collection/alipay-store.js";
 import { NegotiationApprovalStore } from "../a2a/server/negotiation-approvals.js";
 import { createNegotiationOps } from "../merchant/negotiation-ops.js";
@@ -587,6 +587,23 @@ export async function bootstrapCloudRuntime(
       : undefined;
   const openInquiryPolicy = new OpenInquiryLocalPolicy(config.dataDir, config.publicOrigin);
   let inquiryNonces: InquiryNonceStore | undefined;
+  const lastNonceWarning = new Map<NonceStoreUnavailable | "open", number>();
+  function warnNonceUnavailable(reason: NonceStoreUnavailable | "open"): void {
+    const time = Date.now();
+    const last = lastNonceWarning.get(reason);
+    if (last !== undefined && time - last < 60_000) return;
+    lastNonceWarning.set(reason, time);
+    log(`[kiwi-cloud] WARNING a2a_nonce_store_unavailable reason=${reason}; signed requests fail closed\n`);
+  }
+  function checkCloudNonce(key: string): boolean {
+    try {
+      inquiryNonces ??= new InquiryNonceStore(config.dataDir, { onUnavailable: warnNonceUnavailable });
+    } catch {
+      warnNonceUnavailable("open");
+      return false;
+    }
+    return inquiryNonces.checkAndSet(key);
+  }
   let collectionStore: AlipayCollectionStore | undefined;
   const authVerifier = createA2aAuthVerifier({
     mode: config.a2aAuth.mode,
@@ -595,15 +612,9 @@ export async function bootstrapCloudRuntime(
     signingKeyId: signingIdentity?.keyid ?? config.publicOrigin,
     advertisedBase: config.publicOrigin,
     ...(config.a2aAuth.mode === "signature" ? {
-      signatureNonceStore: { checkAndSet: (key: string) => {
-        try { inquiryNonces ??= new InquiryNonceStore(config.dataDir); return inquiryNonces.checkAndSet(`signed:${key}`); }
-        catch { return false; }
-      } },
+      signatureNonceStore: { checkAndSet: (key: string) => checkCloudNonce(`signed:${key}`) },
       openInquiryEnabled: () => !config.a2aKillSwitch && openInquiryPolicy.isEnabled(),
-      openInquiryNonceStore: { checkAndSet: (key: string) => {
-        try { inquiryNonces ??= new InquiryNonceStore(config.dataDir); return inquiryNonces.checkAndSet(key); }
-        catch { return false; }
-      } },
+      openInquiryNonceStore: { checkAndSet: checkCloudNonce },
     } : {}),
     // 云端必须按声明 origin 重建目标 URI：平台网关会改写入站 Host（M0 事实 #4）。
     authoritySource: "declared",

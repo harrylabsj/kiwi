@@ -45,6 +45,7 @@ import { contentDigest } from "../negotiation/jcs.js";
 import { resolveOutboundSigner, type A2AOutboundSignerLike } from "./signing-key.js";
 import { evaluateConditionalOffer } from "../negotiation/condition/evaluator.js";
 import { detectLocale, type KiwiLocale } from "../i18n.js";
+import { isAlipayCollectionAgreement, parseAlipayCollectionTerms } from "../handoff/alipay-collection.js";
 
 export const NEGOTIATE_CAPABILITY = "com.harrylabsj.kiwi.shopping.negotiation";
 export const NEGOTIATE_SKU = "sku-001";
@@ -84,9 +85,11 @@ export interface NegotiateOptions {
   /**
    * 买方最高可接受单价（minor 单位，硬预算上限）。协商结果（求值后 terms 的
    * 成交价）超过它 → 拒绝 accept（fail-closed，绝不成交超预算协议）。
-   * 缺省用 dealPriceMinor（买方还价目标）兜底。
+   * 缺省按总预算约束；两种预算都没配置时才用 dealPriceMinor 兜底。
    */
   maxPriceMinor?: number;
+  /** 私有总预算（minor），同时约束商品小计与支付宝含费应付总额。不发送给商家。 */
+  maxTotalMinor?: number;
   /**
    * 本地开发 loopback 放行（透传给 AgentDiscovery；缺省 false，fail-closed）。
    * 仅显式传 true 允许发现阶段访问 127.0.0.1 / ::1 / localhost 上的 Agent Card
@@ -133,6 +136,8 @@ export interface NegotiateResult {
   /** Actual direct KNP channel used for the validated, signed acceptance (not the discovery card URL). */
   acceptedChannelUrl?: string;
   merchantApprovalResume?: MerchantApprovalResume;
+  /** Explicit merchant disposition or receipt of a quote (which uses the approval). */
+  merchantApprovalResolution?: "rejected" | "expired" | "consumed" | "quoted";
   steps: string[];
   agreement?: Record<string, unknown>;
   /** 磋商商业要点（自然语言渲染用）。 */
@@ -141,6 +146,7 @@ export interface NegotiateResult {
     quantity: number;
     offerPriceMinor?: number;
     dealPriceMinor?: number;
+    payableTotalMinor?: number;
     deliveryBefore: string;
     /** 商家显示名（Veyquo / veyquo.com）——沟通用名字，不用 catalog_agent_id。 */
     merchantName?: string;
@@ -150,6 +156,11 @@ export interface NegotiateResult {
 
 const minorPrice = (minor: number | undefined): string =>
   minor === undefined ? "?" : (minor / 100).toFixed(2);
+
+function payablePrice(minor: number): string {
+  const n = BigInt(minor);
+  return `${n / 100n}.${String(n % 100n).padStart(2, "0")}`;
+}
 
 /** 把一轮磋商结果渲染成人类可读的自然语言总结（跟随用户语言，缺省 detectLocale）。 */
 export function summarizeNegotiation(
@@ -164,6 +175,7 @@ export function summarizeNegotiation(
   const offerPrice = minorPrice(f?.offerPriceMinor);
   const dealPrice = minorPrice(f?.dealPriceMinor);
   const agreementId = String(a?.agreement_id ?? "");
+  const payable = f?.payableTotalMinor === undefined ? undefined : payablePrice(f.payableTotalMinor);
 
   if (!result.ok) {
     return locale === "zh"
@@ -176,8 +188,13 @@ export function summarizeNegotiation(
       `· 发现商家 ${f?.merchantName ?? result.catalogAgentId} 并验证其 Agent Card（${result.agentCardUrl}），确认在线可用`,
       `· 询价：采购 ${quantity} 件 ${sku}，要求 ${delivery} 前交货`,
       `· 商家首次报价：${offerPrice} 元/件`,
-      `· 还价后商家给出条件价：总采购量 ≥ 100 件时按 ${dealPrice} 元/件成交`,
-      `· 采购量满足条件，双方达成非绑定协议（agreement ${agreementId}）`,
+      ...(payable === undefined ? [
+        `· 还价后商家给出条件价：总采购量 ≥ 100 件时按 ${dealPrice} 元/件成交`,
+        `· 采购量满足条件，双方达成非绑定协议（agreement ${agreementId}）`,
+      ] : [
+        `· 商家确认单价：${dealPrice} 元/件；支付宝应付总额（含适用费用）：${payable} 元`,
+        `· 双方达成非绑定协议（agreement ${agreementId}）`,
+      ]),
       `协议性质：nonbinding — 不创建订单、不锁库存、不授权支付（§41 #25/#26/#27）`,
     ].join("\n");
   }
@@ -186,8 +203,13 @@ export function summarizeNegotiation(
     `· Discovered merchant ${f?.merchantName ?? result.catalogAgentId} and verified its Agent Card (${result.agentCardUrl}) — online and reachable`,
     `· RFQ: ${quantity} units of ${sku}, delivery by ${delivery}`,
     `· Merchant's initial offer: ${offerPrice} ${NEGOTIATE_CURRENCY}/unit`,
-    `· After the counter, the merchant offered a conditional price: ${dealPrice} ${NEGOTIATE_CURRENCY}/unit when total quantity ≥ 100`,
-    `· Quantity meets the condition; non-binding agreement reached (agreement ${agreementId})`,
+    ...(payable === undefined ? [
+      `· After the counter, the merchant offered a conditional price: ${dealPrice} ${NEGOTIATE_CURRENCY}/unit when total quantity ≥ 100`,
+      `· Quantity meets the condition; non-binding agreement reached (agreement ${agreementId})`,
+    ] : [
+      `· Merchant confirmed ${dealPrice} CNY/unit; total payable via Alipay (including applicable fees): ${payable} CNY`,
+      `· Non-binding agreement reached (agreement ${agreementId})`,
+    ]),
     `Agreement is nonbinding — no order, no inventory reservation, no payment authorization (§41 #25/#26/#27)`,
   ].join("\n");
 }
@@ -313,10 +335,16 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
   const idempotency = new IdempotencyStore({ dir, now });
   const steps: string[] = [];
   let handle: ChannelHandle | null = null;
+  let approvalQuoted = false;
   const negotiationId = resume?.negotiationId ?? newNegotiationId();
   const bearer = resolveOutboundBearer(options);
 
   try {
+    if (!Number.isSafeInteger(quantity) || quantity <= 0 ||
+        [options.maxPriceMinor, options.maxTotalMinor].some((n) =>
+          n !== undefined && (!Number.isSafeInteger(n) || n < 0))) {
+      throw new Error("数量或预算不能无损表示为整数件或整数分，未发送磋商请求");
+    }
     const outboundSigner = resolveOutboundSigner(options.outboundSigner);
     const catalogTarget = resume?.catalogAgentId ?? options.catalogAgentId;
     if (resume !== undefined && (options.allowMerchantApprovalResume !== true ||
@@ -419,17 +447,27 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
     const condRes = await send(counter);
     const conditional = extractKnpEnvelope(condRes.task, counter);
     if (conditional === null || conditional.action !== "conditional_offer") {
-      if (conditional === null && options.allowMerchantApprovalResume === true && outboundSigner !== undefined &&
-          condRes.task?.status.message?.parts.some((part) => part.kind === "data" &&
-            part.data?.decline === true && part.data.reason_code === "approval_required")) {
-        return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, merchantApprovalResume: {
-          negotiationId, catalogAgentId, channelUrl: channelCandidate.url, signerKeyId: outboundSigner.keyid,
-          offerMessageId, offerId, ...(offerPriceMinor !== undefined ? { offerPriceMinor } : {}),
-          sku, quantity, counterPriceMinor, deliveryBefore,
-        } };
+      if (conditional === null && options.allowMerchantApprovalResume === true && outboundSigner !== undefined) {
+        const declines = condRes.task?.status.message?.parts.filter((part) =>
+          part.kind === "data" && part.data?.decline === true && part.data.reason_code === "approval_required") ?? [];
+        const decline = declines.length === 1 ? declines[0] : undefined;
+        const status = decline?.kind === "data" ? decline.data?.approval_status : undefined;
+        if (status === "pending") {
+          return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, merchantApprovalResume: {
+            negotiationId, catalogAgentId, channelUrl: channelCandidate.url, signerKeyId: outboundSigner.keyid,
+            offerMessageId, offerId, ...(offerPriceMinor !== undefined ? { offerPriceMinor } : {}),
+            sku, quantity, counterPriceMinor, deliveryBefore,
+          } };
+        }
+        if (status === "rejected" || status === "expired" || status === "consumed") {
+          return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, merchantApprovalResolution: status };
+        }
       }
       return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "未收到 conditional_offer 回复" };
     }
+    // Receipt of a conditional offer ends this local resume, even if we decline the quote.
+    approvalQuoted = resume !== undefined;
+    const resolution = approvalQuoted ? { merchantApprovalResolution: "quoted" as const } : {};
     // review 2-6：先过冻结校验器再求值——此前未校验的 then_terms（float
     // amount_minor、缺 unit_price 等）直接进入 evaluateConditionalOffer，
     // 成交价取自未校验数据。校验失败按协议错误拒绝成交（报文带 schema 错误
@@ -444,6 +482,7 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
         catalogAgentId,
         agentCardUrl,
         steps,
+        ...resolution,
         error: `商家 conditional_offer 未通过冻结校验：${err instanceof Error ? err.message : String(err)}`,
       };
     }
@@ -459,24 +498,40 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
     const agreedTerms = evaluateConditionalOffer(conditionalPayload, {
       "aggregate.total_quantity": quantity,
     });
-    // This API quotes one SKU/quantity and maxPriceMinor is a unit-price ceiling, not a total budget.
-    // Do not invent multi-item purchasing semantics or let an empty/partial term set imply a deal.
+    // A total-only budget bounds the unit price too, without discarding any remaining cents
+    // from the actual all-in limit. With neither limit, use the buyer's counter as before.
     const agreedItems = agreedTerms.items ?? [];
     const item = agreedItems[0];
-    const priceCeiling = options.maxPriceMinor ?? counterPriceMinor;
+    const units = BigInt(quantity);
+    const explicitTotal = options.maxTotalMinor === undefined ? undefined : BigInt(options.maxTotalMinor);
+    const priceCeiling = options.maxPriceMinor ?? (explicitTotal === undefined ? counterPriceMinor : Number(explicitTotal / units));
     if (agreedItems.length !== 1 || item === undefined || item.sku !== sku ||
         item.quantity?.value !== quantity || item.quantity?.unit !== "piece" ||
         item.unit_price?.currency !== NEGOTIATE_CURRENCY ||
         !Number.isSafeInteger(item.unit_price?.amount_minor) ||
         (item.unit_price?.amount_minor ?? -1) < 0 || !Number.isSafeInteger(priceCeiling) || priceCeiling < 0) {
-      return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps,
+      return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, ...resolution,
         error: "商家成交条款缺定价证据或不匹配当前单SKU/quantity/unit/currency询价（不支持多item），拒绝 accept" };
     }
     const dealPriceMinor = item.unit_price!.amount_minor;
     if (dealPriceMinor > priceCeiling) {
-      return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps,
-        error: `商家成交价 ${(dealPriceMinor / 100).toFixed(2)} 元/件 超过买方预算上限 ` +
-          `${(priceCeiling / 100).toFixed(2)} 元/件，已拒绝成交` };
+      return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, ...resolution,
+        error: `商家成交价 ${payablePrice(dealPriceMinor)} 元/件超过买方预算上限，已拒绝成交` };
+    }
+    const subtotal = BigInt(dealPriceMinor) * units;
+    const collection = parseAlipayCollectionTerms(agreedTerms);
+    if (isAlipayCollectionAgreement(agreedTerms) && (collection === null ||
+        BigInt(collection.total_minor) < subtotal || Date.parse(collection.expires_at) <= Date.parse(now()))) {
+      return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, ...resolution,
+        error: "支付宝收款条款无效、已过期或应付总额低于商品小计，已拒绝成交" };
+    }
+    const allIn = collection === null ? subtotal : BigInt(collection.total_minor);
+    const totalCeiling = options.maxPriceMinor === undefined && explicitTotal !== undefined
+      ? explicitTotal : BigInt(priceCeiling) * units;
+    if (allIn > totalCeiling || (explicitTotal !== undefined && allIn > explicitTotal)) {
+      return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, ...resolution,
+        error: collection === null ? "商家商品小计超过买方预算上限，已拒绝成交"
+          : `商家支付宝应付总额 ${payablePrice(collection.total_minor)} 元超过买方预算上限，已拒绝成交` };
     }
 
     // 6. AcceptNonbinding → Agreement。
@@ -491,7 +546,7 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
     const acceptRes = await send(accept);
     const agreementRaw = extractAgreement(acceptRes.task);
     if (agreementRaw === null) {
-      return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "未收到 agreement artifact" };
+      return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, ...resolution, error: "未收到 agreement artifact" };
     }
     const checkedAgreement = validateAcceptedNonbindingAgreement(agreementRaw);
     if (checkedAgreement.negotiation_id !== negotiationId ||
@@ -509,6 +564,7 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
       catalogAgentId,
       agentCardUrl,
       ...(outboundSigner !== undefined ? { acceptedChannelUrl: channelCandidate.url } : {}),
+      ...resolution,
       steps,
       agreement,
       facts: {
@@ -516,6 +572,7 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
         quantity,
         offerPriceMinor,
         dealPriceMinor,
+        ...(collection === null ? {} : { payableTotalMinor: collection.total_minor }),
         deliveryBefore,
         merchantName,
       },
@@ -527,6 +584,7 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
       catalogAgentId: "",
       agentCardUrl: "",
       steps,
+      ...(approvalQuoted ? { merchantApprovalResolution: "quoted" as const } : {}),
       error: err instanceof Error ? err.message : String(err),
     };
   } finally {

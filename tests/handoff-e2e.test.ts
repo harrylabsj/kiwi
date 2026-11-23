@@ -21,7 +21,11 @@ import path from "node:path";
 import { migrateMemorySchema } from "../src/agent/memory/schema.js";
 import { FakeCommerceConnector, fakeConnectorProduct } from "../src/agent/connector/fake-connector.js";
 import { BuyerTaskStore } from "../src/agent/buyer/task-store.js";
-import { buildBuyerTools, resolveTaskAlipayCollection, type BuyerToolDeps } from "../src/agent/buyer/buyer-tools.js";
+import { AgentKernel } from "../src/agent/kernel.js";
+import { ensurePathsForDir } from "../src/agent/agent-db.js";
+import { createFakeChatModels } from "../src/agent/fake-chat-model.js";
+import { EnvKeyProvider, PrivateVault } from "../src/agent/memory/vault.js";
+import { abandonMerchantApprovalResume, buildBuyerTools, resolveTaskAlipayCollection, type BuyerToolDeps } from "../src/agent/buyer/buyer-tools.js";
 import {
   WriteApprovalCandidateStore,
   executeApprovedCandidate,
@@ -108,6 +112,8 @@ const capture: CapturedInbound[] = [];
 afterEach(async () => {
   for (const s of stacks.splice(0)) await s.stop().catch(() => undefined);
   capture.length = 0;
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
 
@@ -152,6 +158,8 @@ function setupBuyer(
     mode?: "autopilot" | "supervised";
     alipayCollectionAvailable?: boolean;
     outboundSigner?: BuyerToolDeps["outboundSigner"];
+    storage?: Pick<E2eHarness, "store" | "ledger" | "idempotency">;
+    vault?: PrivateVault;
     /**
      * A659：受控 CatalogSource fixture——只覆盖交易来源面（origin/getListing）；
      * discovery 面（searchCandidates/getCandidate）委托既有 ShoppingCliCatalog
@@ -171,11 +179,11 @@ function setupBuyer(
     `INSERT INTO principals (principal_id, owner_id, role, locale, timezone, memory_schema_version, created_at, updated_at)
      VALUES (?, 'buyer-001', 'buyer', 'zh-CN', 'Asia/Shanghai', 3, ?, ?)`,
   ).run(PRINCIPAL, T0, T0);
-  const store = new BuyerTaskStore({ db, principalId: PRINCIPAL, now: () => T0 });
+  const store = options.storage?.store ?? new BuyerTaskStore({ db, principalId: PRINCIPAL, now: () => T0, vault: options.vault });
   const connector = new FakeCommerceConnector([fakeConnectorProduct()]);
   const approvals = new WriteApprovalCandidateStore({ db, principalId: PRINCIPAL, now: () => T0 });
-  const ledger = new HandoffEventStore({ dir, now: () => T0 });
-  const idempotency = new HandoffIdempotencyStore({ dir, now: () => T0 });
+  const ledger = options.storage?.ledger ?? new HandoffEventStore({ dir, now: () => T0 });
+  const idempotency = options.storage?.idempotency ?? new HandoffIdempotencyStore({ dir, now: () => T0 });
   const mode = { value: (options.mode ?? "autopilot") as "autopilot" | "supervised" };
   const pendingHooks = new Map<
     string,
@@ -289,6 +297,45 @@ it("requires explicit human approval and shows only bound masked collection fact
   }
 });
 
+it("kernel only opens a delivered, unexpired collection bound to its selected task", async () => {
+  const dir = trackedMkdtemp("kiwi-alipay-kernel-");
+  const paths = ensurePathsForDir(dir);
+  const reader = vi.fn(async () => {});
+  let now = T0;
+  const kernel = await AgentKernel.open({
+    profile: testBuyerProfile(), paths, ...createFakeChatModels(), now: () => now,
+    connector: new FakeCommerceConnector([fakeConnectorProduct()]), alipayCollectionReader: reader,
+  });
+  const buyer = setupBuyer("", { alipayCollectionAvailable: true, storage: {
+    store: kernel.buyerTasks!,
+    ledger: new HandoffEventStore({ dir: path.dirname(paths.db), now: () => now }),
+    idempotency: new HandoffIdempotencyStore({ dir: path.dirname(paths.db), now: () => now }),
+  } });
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 204 })));
+  try {
+    const expiresAt = "2026-08-05T12:30:00+08:00";
+    const task_id = await seedCollection(buyer, undefined, expiresAt);
+    const handoff = await buyer.getTool("handoff_agreement").execute("t", { task_id });
+    const { candidate_id } = handoff.details as { candidate_id: string };
+    expect(await kernel.openAlipayCollection(candidate_id, "n")).toContain("无法查看");
+    expect(reader).not.toHaveBeenCalled();
+    buyer.approvals.markApproved(candidate_id);
+    expect((await executeApprovedCandidate(buyer.approvals, candidate_id, buyer.pendingHooks.get(candidate_id)!)).kind).toBe("executed");
+    const delivered = buyer.ledger.events("n").find((event) => event.event_kind === "handoff_delivered")!;
+    expect(await kernel.openAlipayCollection(delivered.handoff_id!, "wrong-negotiation")).toContain("无法查看");
+    expect(reader).not.toHaveBeenCalled();
+    expect(await kernel.openAlipayCollection(delivered.handoff_id!, "n")).toContain("已在本机浏览器打开");
+    expect(reader).toHaveBeenCalledExactlyOnceWith({ origin: "https://1.1.1.1", totalMinor: 1234, expiresAt,
+      binding: { negotiationId: "n", offerId: "o", agreementId: "a", version: COLLECTION_VERSION, termsDigest: expect.any(String) },
+    });
+    now = expiresAt;
+    expect(await kernel.openAlipayCollection(delivered.handoff_id!, "n")).toContain("无法查看");
+    expect(reader).toHaveBeenCalledTimes(1);
+  } finally {
+    await kernel.close();
+  }
+});
+
 it("refuses native collection without private display, exact origin, current expiry or unmodified parameters", async () => {
   const capable = setupBuyer("", { alipayCollectionAvailable: true });
   const generic = setupBuyer("");
@@ -306,9 +353,11 @@ it("refuses native collection without private display, exact origin, current exp
   expect(capable.ledger.events("n")).toHaveLength(0);
 });
 
-it("resumes a signed native task after merchant approval and hands off exactly the accepted collection", async () => {
+async function startSignedAlipayStack(vault?: PrivateVault) {
   const origin = "https://1.1.1.1";
-  const merchantApprovals = new NegotiationApprovalStore(trackedMkdtemp("kiwi-alipay-merchant-"));
+  let approvalTime = Date.now();
+  const merchantApprovals = new NegotiationApprovalStore(trackedMkdtemp("kiwi-alipay-merchant-"),
+    () => new Date(approvalTime).toISOString());
   const signer = generateA2aSigningIdentity("test-independent-buyer");
   const verifier = new HttpMessageSignatureVerifier({ resolver: (keyid) => keyid === signer.keyid ? {
     ...signer,
@@ -327,7 +376,7 @@ it("resumes a signed native task after merchant approval and hands off exactly t
     productSource: { async getProduct() {
       return { price: 850, currency: "CNY", unit: "piece", stock: 1000, source_evidence: { system: "fixture" } };
     } },
-    merchantPolicy: { price_floors: { "sku-001": 810 }, max_auto_discount_percent: 5 },
+    merchantPolicy: { price_floors: { "sku-001": 810 }, sku_max_discount_percent: { "sku-001": 4 } },
     negotiationApprovals: merchantApprovals,
     alipayCollection: { origin, current: () => ({ enabled: true, version: COLLECTION_VERSION, recipient: "张三示例" }) },
   });
@@ -342,19 +391,26 @@ it("resumes a signed native task after merchant approval and hands off exactly t
     return directFetch(`${stack.merchantUrl}${url.pathname}${url.search}`, init);
   };
   vi.stubGlobal("fetch", proxyFetch);
-  const transport = vi.spyOn(pinnedTransport, "createPinnedFetch").mockImplementation(() => proxyFetch);
-  try {
-    const buyer = setupBuyer(stack.catalogUrl, { alipayCollectionAvailable: true, outboundSigner: createA2aOutboundSigner(signer) });
+  vi.spyOn(pinnedTransport, "createPinnedFetch").mockImplementation(() => proxyFetch);
+  const buyer = setupBuyer(stack.catalogUrl, { alipayCollectionAvailable: true, outboundSigner: createA2aOutboundSigner(signer), vault });
+  return { buyer, merchantApprovals, requests, advanceApprovals: (ms: number) => { approvalTime += ms; } };
+}
+
+it("resumes a signed native task after merchant approval and hands off exactly the accepted collection", async () => {
+    const { buyer, merchantApprovals, requests } = await startSignedAlipayStack();
     const task_id = await createReadyTask(buyer.store, {
       intent: { category: "sku-001", quantity: 2, target_unit_price: 750 },
-      constraints: { max_unit_price: 810 },
+      constraints: { max_total_price: 1630.01 },
     });
     const negotiate = buyer.getTool("negotiate_buyer_task");
     expect(toolText(await negotiate.execute("neg-1", { task_id }))).toContain("merchant_approval_pending");
     expect(buyer.store.getTask(task_id)?.status).toBe("ready");
     const pending = merchantApprovals.list("pending")[0]!;
-    merchantApprovals.approve({ approval_id: pending.approval_id, approved_minor: 81_000, alipay_total_minor: 163_000 });
-    expect(toolText(await negotiate.execute("neg-2", { task_id }))).toContain("selected_nonbinding");
+    merchantApprovals.approve({ approval_id: pending.approval_id, approved_minor: 81_000, alipay_total_minor: 163_001 });
+    const text = toolText(await negotiate.execute("neg-2", { task_id }));
+    expect(text).toContain("selected_nonbinding");
+    expect(text).toContain('"payableTotalMinor":163001');
+    expect(text).toContain("支付宝应付总额（含适用费用）：1630.01 元");
     expect(buyer.store.getTask(task_id)?.status).toBe("selected_nonbinding");
     expect(requests.map((request) => request.action)).toEqual(["rfq", "counter_offer", "counter_offer", "accept_nonbinding"]);
     expect(new Set(requests.map((request) => request.envelope.negotiation_id))).toEqual(new Set([pending.negotiation_id]));
@@ -362,7 +418,7 @@ it("resumes a signed native task after merchant approval and hands off exactly t
     expect(requests[1]?.envelope.in_reply_to).toBe(requests[2]?.envelope.in_reply_to);
     expect(requests.every((request) => request.senderIdentity === "buyer:independent-test")).toBe(true);
     const handoff = await buyer.getTool("handoff_agreement").execute("t", { task_id });
-    expect(toolText(handoff)).toMatch(/张\*\*\*.*CNY 1630\.00/);
+    expect(toolText(handoff)).toMatch(/张\*\*\*.*CNY 1630\.01/);
     expect(handoff.details).toMatchObject({ status: "pending_approval" });
     const { candidate_id } = handoff.details as { candidate_id: string };
     buyer.approvals.markApproved(candidate_id);
@@ -372,16 +428,74 @@ it("resumes a signed native task after merchant approval and hands off exactly t
     expect(binding.kind).toBe("collection");
     if (binding.kind !== "collection") throw new Error("signed collection binding missing");
     const events = buyer.ledger.events(binding.link.negotiationId);
-    expect(events.find((event) => event.event_kind === "handoff_delivered")?.destination)
-      .toMatchObject({ ref: binding.link.url, final_url: binding.link.url });
+    const delivered = events.find((event) => event.event_kind === "handoff_delivered");
+    expect(delivered?.destination).toMatchObject({ ref: binding.link.url, final_url: binding.link.url });
+    expect(approval).toMatchObject({ kind: "executed", output: {
+      handoff_id: delivered?.handoff_id, negotiation_id: pending.negotiation_id,
+      text: expect.stringContaining(`/alipay ${delivered?.handoff_id} ${pending.negotiation_id}`),
+    } });
     const create = events.find((event) => event.event_kind === "handoff_candidate_created");
     expect(create?.outcome).toMatchObject({ kind: "ok", result: { candidate: {
       creates_order: false, authorizes_payment: false, reserves_inventory: false,
     } } });
-  } finally {
-    transport.mockRestore();
-    vi.unstubAllGlobals();
+});
+
+it.each([
+  { constraints: { max_total_price: 1620 }, single: 81_000, total: 163_000, error: "支付宝应付总额 1630.00 元超过买方预算上限", vaulted: true },
+  { constraints: { max_unit_price: 900, max_total_price: 1620 }, single: 81_000, total: 163_000, error: "支付宝应付总额 1630.00 元超过买方预算上限" },
+  { constraints: { max_unit_price: 810 }, single: 81_000, total: 163_000, error: "支付宝应付总额 1630.00 元超过买方预算上限" },
+  { constraints: {}, single: 81_000, total: 162_001, error: "支付宝应付总额 1620.01 元超过买方预算上限" },
+  { constraints: { max_total_price: 1620 }, single: 81_001, total: 162_002, error: "成交价 810.01 元/件超过买方预算上限" },
+])("rejects a $single/$total collection before accept when constraints are $constraints", async ({ constraints, single, total, error, vaulted }) => {
+  const vault = vaulted ? new PrivateVault(new EnvKeyProvider("a".repeat(64))) : undefined;
+  const { buyer, merchantApprovals, requests } = await startSignedAlipayStack(vault);
+  const task_id = await createReadyTask(buyer.store, {
+    intent: { category: "sku-001", quantity: 2, target_unit_price: 810 }, constraints,
+  });
+  if (vaulted) {
+    expect(buyer.store.getTask(task_id)?.constraints).toEqual({ max_total_price_vault_ref: expect.any(String) });
   }
+  const negotiate = buyer.getTool("negotiate_buyer_task");
+  expect(toolText(await negotiate.execute("neg-1", { task_id }))).toContain("merchant_approval_pending");
+  const [pending] = merchantApprovals.list("pending");
+  merchantApprovals.approve({ approval_id: pending!.approval_id, approved_minor: single, alipay_total_minor: total });
+  expect(toolText(await negotiate.execute("neg-2", { task_id }))).toContain(error);
+  expect(buyer.store.getTask(task_id)?.status).toBe("ready");
+  expect(buyer.store.taskEvents(task_id)).toContainEqual(expect.objectContaining({
+    type: "merchant_approval_resume_closed", payload: { negotiation_id: pending!.negotiation_id, reason: "quoted" },
+  }));
+  expect(requests.map((request) => request.action)).toEqual(["rfq", "counter_offer", "counter_offer"]);
+});
+
+it.each(["rejected", "expired", "abandoned"] as const)("does not keep resuming a %s review", async (disposition) => {
+  const { buyer, merchantApprovals, requests, advanceApprovals } = await startSignedAlipayStack();
+  const task_id = await createReadyTask(buyer.store);
+  const negotiate = buyer.getTool("negotiate_buyer_task");
+  expect(toolText(await negotiate.execute("neg-1", { task_id }))).toContain("merchant_approval_pending");
+  const [original] = merchantApprovals.list("pending");
+  expect(toolText(await negotiate.execute("neg-2", { task_id }))).toContain("merchant_approval_pending");
+  expect(merchantApprovals.list()).toEqual([original]);
+  if (disposition === "abandoned") {
+    expect(abandonMerchantApprovalResume(buyer.store, task_id)).toBe(true);
+    expect(abandonMerchantApprovalResume(buyer.store, task_id)).toBe(false);
+    expect(merchantApprovals.list()).toEqual([original]);
+  } else {
+    if (disposition === "rejected") {
+      merchantApprovals.reject({ approval_id: original!.approval_id, reason: "private test note" });
+    } else {
+      advanceApprovals(15 * 60_000);
+    }
+    const terminal = toolText(await negotiate.execute("neg-terminal", { task_id }));
+    expect(terminal).toContain(`merchant_approval_${disposition}`);
+    expect(terminal).toContain("未重新提交");
+    expect(terminal).not.toContain("private test note");
+    expect(merchantApprovals.list()).toEqual([expect.objectContaining({ approval_id: original!.approval_id, status: disposition })]);
+  }
+  expect(buyer.store.getTask(task_id)?.status).toBe("ready");
+  const before = requests.length;
+  expect(toolText(await negotiate.execute("neg-new", { task_id }))).toContain("merchant_approval_pending");
+  expect(requests.slice(before).map((request) => request.action)).toEqual(["rfq", "counter_offer"]);
+  expect(requests[before]?.envelope.negotiation_id).not.toBe(original!.negotiation_id);
 });
 
 /** 从 created 事件内嵌文档重建候选（kernel launchHandoff 同法）。 */

@@ -1436,3 +1436,47 @@ This document revision does not change the KNP wire version (`1.0`). It:
 - removes digest signature-stripping ambiguity;
 - separates spec publication from independent/cross-vendor interop claims;
 - points to the actual canonical contract schema path.
+
+# Appendix D — Optional Kiwi Manual Alipay Collection
+
+This Kiwi-specific extension does not change the frozen KNP wire version or make
+an agreement binding. A merchant can attach it to the effective `term_set` of a
+single-SKU CNY offer for an independently verified buyer (not an anonymous or
+open-inquiry session). The product must have stock and source evidence and no
+merchant-provided checkout destination. The merchant owner must have enabled
+collection and explicitly approved both the unit price and the all-in total.
+
+The term set contains `handoff_destination` as a string and
+`kiwi_alipay_collection` as an object with exactly these fields:
+
+- `version`: UUID of the merchant's current collection configuration.
+- `recipient_summary`: masked name (`***` or one Unicode letter followed by `***`).
+- `total_minor`: positive safe integer in CNY fen, including applicable shipping,
+  taxes and other fees; at least the line subtotal.
+- `currency`: `"CNY"`.
+- `expires_at`: RFC 3339 timestamp, no later than the quote or approval expiry.
+
+`handoff_destination` is the merchant's canonical HTTPS URL, on the accepted
+negotiation channel's origin, with path
+`/collect/alipay/<negotiation_id>/<offer_id>/<version>` and no query or fragment.
+The same destination is copied to the accepted non-binding agreement's top-level
+`handoff_destination`, and both the destination and collection metadata are
+covered by the agreed term set's `terms_digest`. This URL is a public notice,
+never a payment URL. Raw recipient details, account and QR never appear in KNP.
+
+The buyer checks the effective unit price and all-in amount against its local
+budget before `accept_nonbinding`; budget values are not sent to the merchant.
+Only a native buyer with private display and explicit human handoff approval
+may fetch private instructions. `POST /buyer/v1/collection/alipay` binds the
+signed buyer to the accepted negotiation, offer, version, agreement and terms
+digest. Configuration replacement or disablement invalidates an older version;
+an expired quote or collection cannot be used. Kiwi does not order, reserve,
+authorize payment or confirm funds received.
+
+For a verified buyer's counter needing manual review, the A2A decline data
+retains `decline: true` and `reason_code: "approval_required"` and may carry
+`approval_status: "pending" | "rejected" | "expired" | "consumed"`. Only `pending`
+confirms an open review. A new message for the same negotiation, SKU, amount,
+quantity, unit and currency checks that review without creating another one.
+Pending review lasts 15 minutes; terminal results do not requeue it. No private
+merchant rejection notes or thresholds are disclosed.
