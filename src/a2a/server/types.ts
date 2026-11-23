@@ -106,7 +106,7 @@ export interface AuthResult {
    * 相关的还有 identity_rejected（身份绑定冲突）与 replay_detected（重放）。
    */
   protocolCode?:
-    "authentication_required" | "authorization_failed" | "identity_rejected" | "replay_detected";
+    "authentication_required" | "authorization_failed" | "identity_rejected" | "replay_detected" | "temporarily_unavailable";
   /** 失败原因（内部日志用，不回显给远端；§4.5）。 */
   reason?: string;
   /**

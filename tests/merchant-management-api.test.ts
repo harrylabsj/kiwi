@@ -296,10 +296,10 @@ describe("支付宝收款设置", () => {
     });
     const changes = operationsDb.prepare("SELECT * FROM alipay_collection_audit_changes WHERE version = ?");
     expect(changes.get(saved.json.version as string)).toEqual({
-      version: saved.json.version, recipient_changed: 1, account_changed: Number(current.account_masked !== null), qr_changed: 1,
+      version: saved.json.version, initial: Number(current.version === null), recipient_changed: 1, account_changed: Number(current.account_masked !== null), qr_changed: 1,
     });
     expect(changes.get(disabled.json.version as string)).toEqual({
-      version: disabled.json.version, recipient_changed: 0, account_changed: 0, qr_changed: 0,
+      version: disabled.json.version, initial: 0, recipient_changed: 0, account_changed: 0, qr_changed: 0,
     });
   });
 
@@ -1379,4 +1379,22 @@ describe("Workbench /merchant/api/v1 — WP12 表格导入（CSV/xlsx 解析与�
     expect(draft.status).toBe(200);
     expect(draft.json["preview"]).toMatchObject({ rows_total: 2, added: 2 });
   });
+});
+
+
+it("marks initial collection setup without reinterpreting older audit flags", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec(`CREATE TABLE alipay_collection_audit_changes (
+      version TEXT PRIMARY KEY, recipient_changed INTEGER, account_changed INTEGER, qr_changed INTEGER
+    ); INSERT INTO alipay_collection_audit_changes VALUES ('legacy-version', 1, 1, 0)`);
+    const store = new AlipayCollectionStore(db, "fixture-merchant");
+    const config = { enabled: true, recipient: "测试收款人", account: "test@example.invalid" };
+    const first = store.replace(null, config, "owner", "2026-11-23T00:00:00Z");
+    const second = store.replace(first.version, { ...config, enabled: false }, "owner", "2026-11-23T00:01:00Z");
+    const audit = db.prepare("SELECT * FROM alipay_collection_audit_changes WHERE version = ?");
+    expect(audit.get(first.version)).toMatchObject({ initial: 1, recipient_changed: 1, account_changed: 1, qr_changed: 0 });
+    expect(audit.get(second.version)).toMatchObject({ initial: 0, recipient_changed: 0, account_changed: 0, qr_changed: 0 });
+    expect(audit.get("legacy-version")).toMatchObject({ initial: null, recipient_changed: 1, account_changed: 1, qr_changed: 0 });
+  } finally { db.close(); }
 });

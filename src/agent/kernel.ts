@@ -54,7 +54,7 @@ import {
   recordOpenEvidence,
 } from "../handoff/index.js";
 import { abandonMerchantApprovalResume, buildBuyerTools, resolveTaskAlipayCollection } from "./buyer/buyer-tools.js";
-import type { NativeAlipayReader } from "./alipay-native-view.js";
+import { AlipayReadTemporarilyUnavailable, type NativeAlipayReader } from "./alipay-native-view.js";
 import { validateHandoffCandidate } from "../handoff/candidate.js";
 import { TaskScheduler, type TickBudget, type TickResult } from "./buyer/scheduler.js";
 import { BuyerTaskStore } from "./buyer/task-store.js";
@@ -1005,7 +1005,13 @@ export class AgentKernel {
         return "已在本机浏览器打开私有收款指引。请在支付宝核对收款人和金额；Kiwi 不确认到账。";
       }
       return unavailable;
-    } catch { return unavailable; }
+    } catch (error) {
+      if (error instanceof AlipayReadTemporarilyUnavailable) {
+        const wait = error.retryAfterSeconds;
+        return `商家暂时无法验证收款指引请求，请${wait === undefined ? "稍后" : `等待 ${wait} 秒后`}重试同一条 /alipay 命令。`;
+      }
+      return unavailable;
+    }
   }
 
   /** 模拟 OS/browser/deep-link handler 启动（LAUNCHED；不证明页面加载）。 */

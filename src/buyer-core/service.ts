@@ -52,6 +52,7 @@ import type {
   BuyerFollowUpdateGroup,
 } from "../discovery/catalog-source/buyer-follows.js";
 import { McpError } from "./errors.js";
+import { assertGenericA2AAcceptTerms, assertGenericA2AAgreement, assertNoAlipayAccept } from "./a2a-accept-terms.js";
 import {
   failedSearchDiagnostics,
   legacySearchDiagnostics,
@@ -1640,12 +1641,14 @@ export class KiwiBuyerService {
     if (acceptedTermsDigest(preCandidate) !== termsDigest) {
       throw new McpError("approval_denied", "候选条款已变化，需重新获取报价");
     }
+    const provenance = asRecord(preCandidate.provenance);
+    const isA2A = typeof provenance.a2a_endpoint === "string" && provenance.a2a_endpoint !== "";
+    if (isA2A) assertGenericA2AAcceptTerms(provenance);
+    else assertNoAlipayAccept(provenance.latest_agreed_terms);
     const existingAgreement = this.store.findAgreementByTerms(input.task_id, termsDigest);
     let merchantAgreement: Record<string, unknown> | undefined;
     let receiptBinding: string | undefined;
     if (existingAgreement === undefined) {
-      const provenance = (preCandidate.provenance as Record<string, unknown> | undefined) ?? {};
-      const isA2A = typeof provenance.a2a_endpoint === "string" && provenance.a2a_endpoint !== "";
       if (isA2A) {
         // A2A must receive the merchant's agreement artifact. An offer-like
         // reply that is not a conditional_offer cannot be remotely accepted by
@@ -1657,7 +1660,7 @@ export class KiwiBuyerService {
         // accept_nonbinding object as a conditional_offer (conditions: []).
         // Both are remote-acceptable; do not require a synthetic conditional
         // round or a price change just to obtain the merchant agreement.
-        if (provenance.latest_offer_type !== "conditional_offer" && provenance.latest_offer_type !== "offer" && provenance.latest_offer_type !== "counter_offer" && provenance.latest_offer_type !== "counter_offer") {
+        if (provenance.latest_offer_type !== "conditional_offer" && provenance.latest_offer_type !== "offer" && provenance.latest_offer_type !== "counter_offer") {
           throw new McpError(
             "invalid_params",
             "A2A candidate latest reply is not an acceptable offer/conditional_offer; refusing to create a local agreement",
@@ -1693,6 +1696,7 @@ export class KiwiBuyerService {
             { reconciliation_required: true, merchant_agreement: accepted.agreement },
           );
         }
+        assertGenericA2AAgreement(checkedAgreement);
         merchantAgreement = checkedAgreement as unknown as Record<string, unknown>;
         receiptBinding = accepted.receiptBinding;
       }

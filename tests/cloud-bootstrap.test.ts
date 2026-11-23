@@ -190,13 +190,13 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
     const body = JSON.stringify({ jsonrpc: "2.0", id: "nonce-fixture", method: "SendMessage", params: {
       message: { role: "ROLE_USER", parts: [{ text: `咨询 ${TEST_SKU}` }], messageId: "msg_nonce_fixture" },
     } });
-    const signedRequest = (nonce: string) => {
+    const signedRequest = (nonce: string, pathname = "/a2a", requestBody = body) => {
       const headers = { "content-type": "application/json", "A2A-Version": "1.0" };
       const signed = new HttpMessageSigner({ keyid: buyer.keyid, algorithm: buyer.algorithm,
         privateKey: buyer.privateKeyPem, nonce }).sign({
-        url: `${env.KIWI_CLOUD_PUBLIC_ORIGIN}/a2a`, method: "POST", body: Buffer.from(body), headers,
+        url: `${env.KIWI_CLOUD_PUBLIC_ORIGIN}${pathname}`, method: "POST", body: Buffer.from(requestBody), headers,
       });
-      return () => fetch(`http://127.0.0.1:${port}/a2a`, { method: "POST", body, headers: { ...headers, ...signed } });
+      return () => fetch(`http://127.0.0.1:${port}${pathname}`, { method: "POST", body: requestBody, headers: { ...headers, ...signed } });
     };
     const nonceFile = path.join(dataDir, "open-inquiry-nonces.sqlite");
     mkdirSync(nonceFile); // Test-only storage initialization failure.
@@ -204,10 +204,19 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
     try {
       for (const nonce of ["1".repeat(32), "2".repeat(32)]) {
         const res = await signedRequest(nonce)();
-        expect(res.status).toBe(401);
-        expect(await res.json()).toMatchObject({ error: { data: { protocol_code: "replay_detected" } } });
+        expect(res.status).toBe(503);
+        expect(res.headers.get("retry-after")).toBe("60");
+        expect(await res.json()).toMatchObject({ error: { data: { protocol_code: "temporarily_unavailable", retry_after: 60 } } });
       }
-      expect(logs.filter((line) => line.includes("a2a_nonce_store_unavailable reason=open"))).toHaveLength(1);
+      const privateRead = await signedRequest("4".repeat(32), "/buyer/v1/collection/alipay", JSON.stringify({
+        negotiationId: "unknown-negotiation", offerId: "unknown-offer", version: "01890aa1-0000-7000-8000-123456789abc",
+        agreementId: "unknown-agreement", termsDigest: `sha256:${"a".repeat(64)}`,
+      }))();
+      expect(privateRead.status).toBe(503);
+      expect(privateRead.headers.get("retry-after")).toBe("60");
+      expect(privateRead.headers.get("cache-control")).toBe("no-store");
+      expect(await privateRead.json()).toEqual({ error: "temporarily_unavailable", retry_after: 60 });
+      expect(logs.filter((line) => line.includes("a2a_nonce_store_unavailable reason=open scope=signed"))).toHaveLength(1);
       expect(logs.join("")).not.toContain(nonceFile);
     } finally { await instance.close(); }
     rmSync(nonceFile, { recursive: true });

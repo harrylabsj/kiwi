@@ -22,12 +22,18 @@
  * 重复出现即 replay_detected。
  */
 
+export type NonceWriteResult = "fresh" | "duplicate" | "unavailable";
+/** Back off before creating a fresh signature; recovery can take longer. */
+export const NONCE_RETRY_AFTER_SECONDS = 60;
+
 export interface NonceStore {
   /**
    * 记录一次 nonce 使用。返回 true 表示首次见到（fresh）；false 表示已用过
    * （replay）。实现必须原子（同一 key 并发只会有一个 true）。
    */
   checkAndSet(key: string): boolean;
+  /** Persistent stores distinguish outages from an actual replay. */
+  record?(key: string): NonceWriteResult;
 }
 
 /**

@@ -26,8 +26,8 @@ export class OpenInquiryVerifier implements AuthVerifier {
         headers: ctx.headers ?? {}, body: ctx.body ?? Buffer.alloc(0), nonceStore: this.nonceStore });
       if (result.ok) return { authenticated: true, identity: result.sessionIdentity,
         identityVerified: true, trustLevel: "T0" };
-      // Never downgrade a bad or replayed open-session signature to anonymous.
-      return { authenticated: false, protocolCode: "authorization_failed" };
+      // Never downgrade a failed open-session signature to anonymous.
+      return { authenticated: false, protocolCode: result.code ?? "authorization_failed" };
     }
     return await this.delegate.verify(ctx);
   }

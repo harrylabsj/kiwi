@@ -63,6 +63,7 @@ import type { AgentProfile } from "../../config/profile.js";
 import type { CommerceClient } from "../../commerce/types.js";
 import type { KiwiCatalogSource } from "../../discovery/catalog-source/index.js";
 import type { CommerceConnector } from "../connector/types.js";
+import { VaultKeyError } from "../memory/vault.js";
 import type { AgentMode } from "../mode.js";
 import type { WriteApprovalCandidateStore } from "../merchant/action-candidate.js";
 import type { CredentialBroker } from "../merchant/credential-broker.js";
@@ -87,6 +88,14 @@ type Tool = KiwiTool;
 
 function textResult(text: string, details?: unknown): AgentToolResult<unknown> {
   return { content: [{ type: "text", text }], details };
+}
+
+function alipayDeliveryResult(status: "delivered" | "already_delivered", handoffId: string, negotiationId: string) {
+  const prefix = status === "delivered" ? "支付宝交接已记录" : "该支付宝协议已交付，未重复交接";
+  return {
+    ok: true, status, handoff_id: handoffId, negotiation_id: negotiationId,
+    text: `${prefix}；请在原生终端输入 /alipay ${handoffId} ${negotiationId} 查看。${ALIPAY_COLLECTION_NOTICE}`,
+  };
 }
 
 function errorText(err: unknown): string {
@@ -432,14 +441,17 @@ async function executeNegotiateBuyerTask(
   try {
     maxTotal = store.resolveBudget(task.constraints);
     if (maxTotal === undefined && task.constraints.max_total_price_vault_ref !== undefined) {
-      throw new Error("vault budget unavailable");
+      throw new BuyerTaskError("validation", "invalid vaulted budget");
     }
-  } catch {
-    throw new BuyerTaskError("vault_unavailable", "无法读取任务的私有总预算；未发送磋商请求");
+  } catch (error) {
+    const code = error instanceof BuyerTaskError ? error.code
+      : error instanceof VaultKeyError ? "vault_decryption_failed" : "vault_unavailable";
+    throw new BuyerTaskError(code, `无法读取任务的私有总预算（${code}）；未发送磋商请求`);
   }
   const result = await negotiateWithAgent({
     catalog: deps.catalog,
-    allowMerchantApprovalResume: deps.alipayCollectionAvailable === true,
+    allowMerchantApprovalResume: true,
+    alipayCollectionAvailable: deps.alipayCollectionAvailable === true,
     ...(resume === undefined ? {} : { resume }),
     allowLoopback: deps.allowLoopback === true,
     // CD #27：listing → owner_agent_id → getRecord → fresh verify 全链，
@@ -1560,7 +1572,12 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
           );
         if (priorDelivery !== undefined) {
           if (collection.kind === "collection") {
-            return textResult("该支付宝协议已交付过，请在原生终端手动查看；未重复交接。", { status: "already_delivered" });
+            const handoffId = priorDelivery.handoff_id;
+            if (handoffId === undefined) {
+              return textResult("该支付宝协议已交付过，但缺少交接 ID；请核对本机交接记录。", { status: "already_delivered" });
+            }
+            const result = alipayDeliveryResult("already_delivered", handoffId, collection.link.negotiationId);
+            return textResult(result.text, result);
           }
           return textResult(
             `该协议已交付过（handoff ${priorDelivery.handoff_id ?? "unknown"}，` +
@@ -2448,11 +2465,7 @@ async function executeHandoffForCandidate(
   if (collection.kind === "collection") {
     if (result.kind === "delivered" || result.kind === "already_delivered") {
       const handoffId = result.kind === "delivered" ? result.handoff.handoff_id : result.handoff_id;
-      const negotiationId = collection.link.negotiationId;
-      return {
-        ok: true, status: result.kind, handoff_id: handoffId, negotiation_id: negotiationId,
-        text: `支付宝交接已记录；请在原生终端输入 /alipay ${handoffId} ${negotiationId} 查看。${ALIPAY_COLLECTION_NOTICE}`,
-      };
+      return alipayDeliveryResult(result.kind, handoffId, collection.link.negotiationId);
     }
     return { ok: false, status: result.kind, text: "支付宝收款入口未交付；请重新核对协议及其有效期。" };
   }

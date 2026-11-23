@@ -29,3 +29,38 @@ describe("open inquiry replay protection", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+
+it("keeps independent durable quotas and recognizes unexpired shared-table entries after upgrade", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "kiwi-inquiry-nonce-scopes-"));
+  let now = 1_000_000;
+  const failures: string[] = [];
+  const opts = { now: () => now, maxEntries: 1, onUnavailable: (reason: string, scope: string) => failures.push(`${scope}:${reason}`) };
+  try {
+    const legacy = new InquiryNonceStore(dir, opts);
+    try {
+      expect(legacy.checkAndSet("signed:legacy-request")).toBe(true);
+    } finally { legacy.close(); }
+    const current = new InquiryNonceStore(dir, opts);
+    try {
+      expect(current.record("signed:legacy-request", "signed")).toBe("duplicate");
+      expect(current.record("open-1", "open_inquiry")).toBe("fresh");
+      expect(current.record("open-2", "open_inquiry")).toBe("unavailable");
+      expect(current.record("open-1", "open_inquiry")).toBe("duplicate");
+      expect(current.record("signed:verified-1", "signed")).toBe("fresh");
+      expect(current.record("signed:verified-2", "signed")).toBe("unavailable");
+      expect(current.record("signed:verified-1", "signed")).toBe("duplicate");
+      expect(failures).toEqual(["open_inquiry:capacity", "signed:capacity"]);
+    } finally { current.close(); }
+    expect(current.record("signed:verified-2", "signed")).toBe("unavailable");
+    expect(failures.at(-1)).toBe("signed:storage");
+    const reopened = new InquiryNonceStore(dir, opts);
+    try {
+      expect(reopened.record("signed:verified-1", "signed")).toBe("duplicate");
+      expect(reopened.record("open-1", "open_inquiry")).toBe("duplicate");
+      now += 30 * 60_000;
+      expect(reopened.record("signed:legacy-request", "signed")).toBe("fresh");
+      expect(reopened.record("open-2", "open_inquiry")).toBe("fresh");
+    } finally { reopened.close(); }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

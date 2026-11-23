@@ -38,7 +38,8 @@ import { DatabaseSync } from "node:sqlite";
 
 import { a2aCardSigningIdentity, createA2aNodeCore, createA2aAuthVerifier } from "../a2a/node.js";
 import { isOpenInquiryIdentity } from "../a2a/open-inquiry-identity.js";
-import { InquiryNonceStore, type NonceStoreUnavailable } from "../a2a/inquiry-nonce-store.js";
+import type { NonceWriteResult } from "../trust/identity/nonce.js";
+import { InquiryNonceStore, type NonceScope, type NonceStoreUnavailable } from "../a2a/inquiry-nonce-store.js";
 import { AlipayCollectionStore } from "../merchant-core/collection/alipay-store.js";
 import { NegotiationApprovalStore } from "../a2a/server/negotiation-approvals.js";
 import { createNegotiationOps } from "../merchant/negotiation-ops.js";
@@ -587,22 +588,29 @@ export async function bootstrapCloudRuntime(
       : undefined;
   const openInquiryPolicy = new OpenInquiryLocalPolicy(config.dataDir, config.publicOrigin);
   let inquiryNonces: InquiryNonceStore | undefined;
-  const lastNonceWarning = new Map<NonceStoreUnavailable | "open", number>();
-  function warnNonceUnavailable(reason: NonceStoreUnavailable | "open"): void {
+  const lastNonceWarning = new Map<string, number>();
+  function warnNonceUnavailable(reason: NonceStoreUnavailable | "open", scope: NonceScope): void {
     const time = Date.now();
-    const last = lastNonceWarning.get(reason);
+    const signal = `${reason}|${scope}`;
+    const last = lastNonceWarning.get(signal);
     if (last !== undefined && time - last < 60_000) return;
-    lastNonceWarning.set(reason, time);
-    log(`[kiwi-cloud] WARNING a2a_nonce_store_unavailable reason=${reason}; signed requests fail closed\n`);
+    lastNonceWarning.set(signal, time);
+    log(`[kiwi-cloud] WARNING a2a_nonce_store_unavailable reason=${reason} scope=${scope}; requests fail closed\n`);
   }
-  function checkCloudNonce(key: string): boolean {
+  function checkCloudNonce(key: string, scope: "signed" | "open_inquiry"): NonceWriteResult {
     try {
       inquiryNonces ??= new InquiryNonceStore(config.dataDir, { onUnavailable: warnNonceUnavailable });
     } catch {
-      warnNonceUnavailable("open");
-      return false;
+      warnNonceUnavailable("open", scope);
+      return "unavailable";
     }
-    return inquiryNonces.checkAndSet(key);
+    return inquiryNonces.record(scope === "signed" ? `signed:${key}` : key, scope);
+  }
+  function cloudNonceStore(scope: "signed" | "open_inquiry") {
+    return {
+      record: (key: string) => checkCloudNonce(key, scope),
+      checkAndSet: (key: string) => checkCloudNonce(key, scope) === "fresh",
+    };
   }
   let collectionStore: AlipayCollectionStore | undefined;
   const authVerifier = createA2aAuthVerifier({
@@ -612,9 +620,9 @@ export async function bootstrapCloudRuntime(
     signingKeyId: signingIdentity?.keyid ?? config.publicOrigin,
     advertisedBase: config.publicOrigin,
     ...(config.a2aAuth.mode === "signature" ? {
-      signatureNonceStore: { checkAndSet: (key: string) => checkCloudNonce(`signed:${key}`) },
+      signatureNonceStore: cloudNonceStore("signed"),
       openInquiryEnabled: () => !config.a2aKillSwitch && openInquiryPolicy.isEnabled(),
-      openInquiryNonceStore: { checkAndSet: checkCloudNonce },
+      openInquiryNonceStore: cloudNonceStore("open_inquiry"),
     } : {}),
     // 云端必须按声明 origin 重建目标 URI：平台网关会改写入站 Host（M0 事实 #4）。
     authoritySource: "declared",
@@ -1149,12 +1157,12 @@ export async function bootstrapCloudRuntime(
       merchantId: profile.owner_id,
       store: feedStore,
     });
-    const resolveVerifiedBuyer = async (
+    const authenticateBuyerRequest = async (
       request: import("node:http").IncomingMessage,
       body?: Buffer,
     ) => {
       const socketTls = request.socket as { encrypted?: boolean };
-      const result = await authVerifier.verify({
+      return await authVerifier.verify({
         remoteAddress: request.socket.remoteAddress,
         authorizationHeader: request.headers.authorization,
         method: request.method ?? "",
@@ -1163,6 +1171,8 @@ export async function bootstrapCloudRuntime(
         headers: request.headers,
         body,
       });
+    };
+    const asVerifiedBuyer = (result: Awaited<ReturnType<typeof authenticateBuyerRequest>>) => {
       if (
         !result.authenticated ||
         result.identityVerified !== true ||
@@ -1177,6 +1187,8 @@ export async function bootstrapCloudRuntime(
         buyerPrincipalId: result.identity,
       };
     };
+    const resolveVerifiedBuyer = async (request: import("node:http").IncomingMessage, body?: Buffer) =>
+      asVerifiedBuyer(await authenticateBuyerRequest(request, body));
     const followHandler = createMerchantFollowApiHandler({
       merchantId: profile.owner_id,
       store: followStore,
@@ -1198,7 +1210,8 @@ export async function bootstrapCloudRuntime(
       merchantId: profile.owner_id,
       verifyBuyer: async (request, body) => {
         if (config.a2aKillSwitch || !hasAlipayReadSignature(request.headers["signature-input"])) return undefined;
-        return await resolveVerifiedBuyer(request, body);
+        const result = await authenticateBuyerRequest(request, body);
+        return result.protocolCode === "temporarily_unavailable" ? result.protocolCode : asVerifiedBuyer(result);
       },
       lookup: core.resolveAlipayCollection,
       current: () => collectionStore?.current(),

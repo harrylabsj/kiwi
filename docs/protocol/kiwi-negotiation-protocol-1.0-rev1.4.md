@@ -1464,10 +1464,17 @@ The same destination is copied to the accepted non-binding agreement's top-level
 covered by the agreed term set's `terms_digest`. This URL is a public notice,
 never a payment URL. Raw recipient details, account and QR never appear in KNP.
 
-The buyer checks the effective unit price and all-in amount against its local
-budget before `accept_nonbinding`; budget values are not sent to the merchant.
-Only a native buyer with private display and explicit human handoff approval
-may fetch private instructions. `POST /buyer/v1/collection/alipay` binds the
+A buyer must support both all-in amount validation and private display to accept
+this extension. The current protocol does not advertise that capability:
+verified signatures alone do not show that a third-party buyer supports it.
+Kiwi's generic buyer (including HTTP and MCP) refuses these terms before sending
+`accept_nonbinding`. Its native buyer checks the effective unit price and all-in
+amount locally. An explicit unit-price ceiling also caps the all-in amount at
+that ceiling times quantity; an explicit total budget applies independently.
+If neither budget is set, the counter target and target times quantity serve as
+the ceilings. Local budget values are not sent to the merchant. Only a native
+buyer with private display and explicit human handoff approval may fetch private
+instructions. `POST /buyer/v1/collection/alipay` binds the
 signed buyer to the accepted negotiation, offer, version, agreement and terms
 digest. Configuration replacement or disablement invalidates an older version;
 an expired quote or collection cannot be used. Kiwi does not order, reserve,
@@ -1478,5 +1485,11 @@ retains `decline: true` and `reason_code: "approval_required"` and may carry
 `approval_status: "pending" | "rejected" | "expired" | "consumed"`. Only `pending`
 confirms an open review. A new message for the same negotiation, SKU, amount,
 quantity, unit and currency checks that review without creating another one.
-Pending review lasts 15 minutes; terminal results do not requeue it. No private
-merchant rejection notes or thresholds are disclosed.
+Pending review lasts 15 minutes; a matching retry does not requeue a terminal
+review. A changed unit price starts a new review and replaces a prior pending
+request if review is still required. An otherwise matching, unexpired approval
+may still yield one ordinary quote at the changed price, but its previously
+approved Alipay total must never be attached to a changed counter. A change to
+quantity, currency or unit does not reuse the old approval. Signed review
+continuation itself does not require private display. No private merchant
+rejection notes or thresholds are disclosed.

@@ -26,6 +26,7 @@
 import { asRecord } from "./procurement/requirements.js";
 import { thumbprintFromOpenInquiryIdentity } from "../commerce/receipt/receipts.js";
 import { McpError } from "./errors.js";
+import { assertGenericA2AAcceptTerms, assertGenericA2AAgreement } from "./a2a-accept-terms.js";
 import {
   buildA2AClient,
   buildAcceptEnvelope,
@@ -560,7 +561,7 @@ export class A2ANegotiator implements Negotiator {
       typeof provenance.merchant_reply_id === "string" ? provenance.merchant_reply_id : "";
     const termsDigest =
       typeof provenance.latest_terms_digest === "string" ? provenance.latest_terms_digest : "";
-    if (provenance.latest_offer_type !== "conditional_offer" && provenance.latest_offer_type !== "offer" && provenance.latest_offer_type !== "counter_offer" && provenance.latest_offer_type !== "counter_offer") {
+    if (provenance.latest_offer_type !== "conditional_offer" && provenance.latest_offer_type !== "offer" && provenance.latest_offer_type !== "counter_offer") {
       throw new McpError(
         "invalid_params",
         "商家最新回复不是 offer/conditional_offer，无法通过 accept_nonbinding 成交",
@@ -578,6 +579,7 @@ export class A2ANegotiator implements Negotiator {
         "候选缺少可接受的最新商家报价（A2A endpoint / offer_id / reply id / terms digest）",
       );
     }
+    assertGenericA2AAcceptTerms(provenance);
     const envelope = buildAcceptEnvelope({
       negotiationId,
       inReplyTo,
@@ -622,6 +624,7 @@ export class A2ANegotiator implements Negotiator {
         { reconciliation_required: true, merchant_agreement: agreement },
       );
     }
+    assertGenericA2AAgreement(checkedAgreement);
     const binding = signer !== undefined && "keyid" in signer && typeof signer.keyid === "string"
       ? thumbprintFromOpenInquiryIdentity(signer.keyid) : undefined;
     return {

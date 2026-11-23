@@ -49,7 +49,7 @@ interface Fixture {
   policy: Record<string, unknown>;
 }
 
-async function fixture(overrides: { handoffMode?: "ask" | "auto" | "never"; clock?: { ms: number }; terms?: Record<string, unknown> } = {}): Promise<Fixture> {
+async function fixture(overrides: { handoffMode?: "ask" | "auto" | "never"; clock?: { ms: number } } = {}): Promise<Fixture> {
   const store = new TaskApprovalStore({ dbPath: ":memory:" });
   const policy: Record<string, unknown> = {
     policy_id: "p-a-card",
@@ -85,9 +85,8 @@ async function fixture(overrides: { handoffMode?: "ask" | "auto" | "never"; cloc
             currency: "CNY",
             items: [{ sku: "s", quantity_value: 1, quantity_unit: "piece", unit_price_minor: 100 }],
             total_price_minor: 100,
-            ...overrides.terms,
           },
-          provenance: { offer_id: "o", negotiation_id: "n", source: "synthetic-local", latest_agreed_terms: overrides.terms },
+          provenance: { offer_id: "o", negotiation_id: "n", source: "synthetic-local" },
         },
       ],
     },
@@ -123,9 +122,16 @@ const body = (r: { content?: Array<{ text?: string }> }) => JSON.parse(r.content
 
 describe("A 卡：handoff 意图绑定", () => {
   it("MCP cannot substitute another checkout or session for a collection agreement", async () => {
-    const x = await fixture({ terms: { handoff_destination: "https://shop.example.com/collect/alipay/n/o/v1" } });
+    const x = await fixture();
+    const ordinary = x.store.getAgreement(x.agreementId)!;
+    const agreement_id = "legacy-collection-agreement";
+    // Model an agreement saved before generic accept started refusing collection terms.
+    x.store.createAgreement({ ...ordinary, agreement_id, payload: JSON.stringify({
+      ...JSON.parse(ordinary.payload), agreement_id,
+      agreed_terms: { handoff_destination: "https://shop.example.com/collect/alipay/n/o/v1" },
+    }) });
     for (const requested of [DEST_B, { destination_type: "ucp_checkout" }]) {
-      const result = await x.call("kiwi_handoff", { agreement_id: x.agreementId, ...requested });
+      const result = await x.call("kiwi_handoff", { agreement_id, ...requested });
       expect(result.isError).toBe(true);
       expect(result.content?.[0]?.text).toMatch(/authorization_denied:.*支付宝/);
     }

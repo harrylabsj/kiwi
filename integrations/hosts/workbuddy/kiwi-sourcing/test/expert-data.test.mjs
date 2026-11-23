@@ -21,9 +21,10 @@ test('embedded startup keeps known failure codes on stderr and never exposes loc
       'prepare-error-codes.mjs', 'tool-contract.mjs', 'environment-policy.mjs']) {
       copyFileSync(new URL(name, sources), join(root, name));
     }
-    const run = (code, detail) => {
-      const result = spawnSync(process.execPath, [join(root, 'embedded-expert-launcher.mjs')], {
-        env: {HOME: root, KIWI_QUOTE_HISTORY_DELEGATION: 'true'},
+    const run = (code, detail, serverName, env = {}) => {
+      const args = serverName === undefined ? [] : [serverName];
+      const result = spawnSync(process.execPath, [join(root, 'embedded-expert-launcher.mjs'), ...args], {
+        env: {HOME: root, KIWI_QUOTE_HISTORY_DELEGATION: 'true', ...env},
         encoding: 'utf8',
         timeout: 5000,
       });
@@ -44,6 +45,15 @@ test('embedded startup keeps known failure codes on stderr and never exposes loc
     run('TOOL_BASELINE_INVALID','MISSING_TOOL:kiwi_search');
     writeFileSync(join(root,'mcp-tools-0.12.12.json'),'{');
     run('TOOL_BASELINE_INVALID','INVALID_JSON');
+
+    // An existing host instance keeps its namespace even with a prerelease-shaped MCP name.
+    const host = join(root, 'host');
+    mkdirSync(host, {mode: 0o700});
+    const hostInstance = join(expertDataDirectory(host), 'kiwi-instance-v1');
+    mkdirSync(hostInstance, {mode: 0o755});
+    for (const serverName of ['kiwi-procurement-buyer-1-1-11', 'kiwi-procurement-buyer-1-2-0-rc-1']) {
+      run('INSTANCE_DATA_NOT_PRIVATE', undefined, serverName, {CODEBUDDY_PLUGIN_DATA: host});
+    }
   } finally {
     rmSync(root, {recursive: true, force: true});
   }

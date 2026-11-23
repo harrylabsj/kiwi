@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { NONCE_RETRY_AFTER_SECONDS } from "../trust/identity/nonce.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { CloudRequestListener } from "./http-router.js";
 import { DEFAULT_COVERED_COMPONENTS, parseSignatureInput } from "../trust/identity/index.js";
@@ -43,9 +44,11 @@ export function hasAlipayReadSignature(signatureInput: unknown): boolean {
   } catch { return false; }
 }
 
+type VerifiedCollectionBuyer = { merchantId: string; buyerPrincipalId: string };
+
 interface Options {
   merchantId: string;
-  verifyBuyer: (req: IncomingMessage, body: Buffer) => Promise<{ merchantId: string; buyerPrincipalId: string } | undefined>;
+  verifyBuyer: (req: IncomingMessage, body: Buffer) => Promise<VerifiedCollectionBuyer | "temporarily_unavailable" | undefined>;
   lookup: (input: AlipayCollectionReadBinding & { buyerPrincipalId: string }) => AlipayCollectionQuote | undefined;
   current: () => { version: string; enabled: boolean; recipient: string; account?: string; qrPngBase64?: string } | undefined;
   now?: () => number;
@@ -105,6 +108,11 @@ export function createAlipayCollectionHttp(options: Options): { landing: CloudRe
         return;
       }
       const buyer = await options.verifyBuyer(req, raw);
+      if (buyer === "temporarily_unavailable") {
+        res.setHeader("Retry-After", NONCE_RETRY_AFTER_SECONDS);
+        json(res, 503, { error: buyer, retry_after: NONCE_RETRY_AFTER_SECONDS });
+        return;
+      }
       const quote = buyer?.merchantId === options.merchantId
         ? options.lookup({ ...binding, buyerPrincipalId: buyer.buyerPrincipalId }) : undefined;
       const config = quote === undefined ? undefined : options.current();
