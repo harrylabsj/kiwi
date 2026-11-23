@@ -374,7 +374,7 @@ export class A2AServer {
   private async authenticate(
     req: http.IncomingMessage,
     body?: Buffer,
-  ): Promise<Caller | { error: { httpStatus: number; body: JsonRpcErrorBody } }> {
+  ): Promise<Caller | { error: ReturnType<typeof authError> }> {
     // node:http 的 IncomingMessage.socket 静态类型是 net.Socket；TLS 下实为
     // TLSSocket（带 encrypted）。用类型守卫读取，HTTPS 部署下 scheme 才是 https。
     const socketTls = req.socket as { encrypted?: boolean };
@@ -389,8 +389,7 @@ export class A2AServer {
       body,
     });
     if (!result.authenticated) {
-      const { httpStatus, body } = authError(result.protocolCode ?? "authorization_failed");
-      return { error: { httpStatus, body } };
+      return { error: authError(result.protocolCode ?? "authorization_failed") };
     }
     return {
       identity: result.identity ?? "unknown",
@@ -470,7 +469,7 @@ export class A2AServer {
       return;
     }
     // 先读 body（有大小上限）：WP5 content-digest 验签需要请求体；顺序调整对
-    // 既有认证语义无影响——认证失败仍返回 401/403，只是 body 先被读取。
+    // 先读取 body 不改变 401/403 拒绝语义；nonce 存储故障单独返回 503。
     const bodyResult = await readBody(req, this.maxPayloadBytes);
     if (!bodyResult.ok) {
       const { httpStatus, body } = payloadTooLarge(this.maxPayloadBytes);
@@ -480,6 +479,7 @@ export class A2AServer {
 
     const auth = await this.authenticate(req, bodyResult.body);
     if ("error" in auth) {
+      if (auth.error.retryAfter !== undefined) res.setHeader("Retry-After", auth.error.retryAfter);
       sendJsonError(res, null, auth.error.httpStatus, auth.error.body);
       return;
     }

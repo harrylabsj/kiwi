@@ -103,8 +103,10 @@ export interface NegotiateOptions {
    */
   outboundAuth?: { bearer?: string };
   outboundSigner?: A2AOutboundSignerLike;
-  /** Only opt-in native buyers can continue an owned task after merchant review. */
+  /** Opt-in task hosts may resume; a verified signed round is still required. */
   allowMerchantApprovalResume?: boolean;
+  /** Hosts without a private reader must not select Alipay collection terms. */
+  alipayCollectionAvailable?: boolean;
   resume?: MerchantApprovalResume;
 }
 
@@ -514,9 +516,10 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
         error: "商家成交条款缺定价证据或不匹配当前单SKU/quantity/unit/currency询价（不支持多item），拒绝 accept" };
     }
     const dealPriceMinor = item.unit_price!.amount_minor;
+    const hasBudget = options.maxPriceMinor !== undefined || explicitTotal !== undefined;
     if (dealPriceMinor > priceCeiling) {
       return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, ...resolution,
-        error: `商家成交价 ${payablePrice(dealPriceMinor)} 元/件超过买方预算上限，已拒绝成交` };
+        error: `商家成交价 ${payablePrice(dealPriceMinor)} 元/件超过${hasBudget ? "买方预算上限" : "买方还价目标"}，已拒绝成交` };
     }
     const subtotal = BigInt(dealPriceMinor) * units;
     const collection = parseAlipayCollectionTerms(agreedTerms);
@@ -525,13 +528,17 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
       return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, ...resolution,
         error: "支付宝收款条款无效、已过期或应付总额低于商品小计，已拒绝成交" };
     }
+    if (collection !== null && options.alipayCollectionAvailable !== true) {
+      return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, ...resolution,
+        error: "当前买家终端不支持支付宝私有收款指引，已拒绝接受该报价" };
+    }
     const allIn = collection === null ? subtotal : BigInt(collection.total_minor);
     const totalCeiling = options.maxPriceMinor === undefined && explicitTotal !== undefined
       ? explicitTotal : BigInt(priceCeiling) * units;
     if (allIn > totalCeiling || (explicitTotal !== undefined && allIn > explicitTotal)) {
       return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, ...resolution,
-        error: collection === null ? "商家商品小计超过买方预算上限，已拒绝成交"
-          : `商家支付宝应付总额 ${payablePrice(collection.total_minor)} 元超过买方预算上限，已拒绝成交` };
+        error: collection === null ? `商家商品小计超过${hasBudget ? "买方预算上限" : "买方还价目标合计"}，已拒绝成交`
+          : `商家支付宝应付总额 ${payablePrice(collection.total_minor)} 元超过${hasBudget ? "买方预算上限" : "买方还价目标合计"}，已拒绝成交` };
     }
 
     // 6. AcceptNonbinding → Agreement。

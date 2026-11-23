@@ -32,9 +32,9 @@ async function main() {
   }
   if (!company && serverName === 'kiwi-company-procurement-buyer') throw new Error('TOOL_BASELINE_INVALID');
   const profile = config?.profile ?? 'legacy13';
-  const dataDirectory = !company && /^kiwi-procurement-buyer(?:-\d+-\d+-\d+)?$/.test(serverName)
-    ? procurementDataDirectory()
-    : expertDataDirectory(undefined, config?.namespace);
+  // These two bundle profiles own different persistent namespaces. The MCP
+  // registration name can change for host cache invalidation, not storage.
+  const dataDirectory = company ? expertDataDirectory(undefined, config.namespace) : procurementDataDirectory();
   const instance = prepareInstanceData(dataDirectory);
   const environment = { ...process.env };
   for (const key of ['KIWI_CLIENT_ID', 'KIWI_SESSION', 'KIWI_SESSION_TOKEN',

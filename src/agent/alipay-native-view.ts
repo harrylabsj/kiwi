@@ -28,6 +28,12 @@ export type NativeAlipayReader = (input: {
   expiresAt: string;
 }) => Promise<void>;
 
+export class AlipayReadTemporarilyUnavailable extends Error {
+  constructor(readonly retryAfterSeconds: number | undefined) {
+    super("temporarily_unavailable");
+  }
+}
+
 export function createNativeAlipayReader(identity: A2aSigningIdentity, launch?: (url: string) => Promise<void>): NativeAlipayReader {
   const pinnedFetch = createPinnedFetch({ timeoutMs: 5000, maxResponseBytes: 768 * 1024 });
   return async ({ origin, binding, totalMinor, expiresAt }) => {
@@ -41,6 +47,11 @@ export function createNativeAlipayReader(identity: A2aSigningIdentity, launch?: 
       created: now, expires: now + 20, nonce: randomBytes(16).toString("hex"),
     }).sign({ url: url.href, method: "POST", body: Buffer.from(body, "utf8"), headers });
     const res = await pinnedFetch(url, { method: "POST", body, headers: { ...headers, ...signed }, redirect: "error" });
+    if (res.status === 503) {
+      const seconds = Number(res.headers.get("Retry-After"));
+      await res.body?.cancel();
+      throw new AlipayReadTemporarilyUnavailable(Number.isSafeInteger(seconds) && seconds > 0 && seconds <= 3600 ? seconds : undefined);
+    }
     if (!res.ok || res.body === null || res.headers.get("content-type")?.split(";", 1)[0]?.trim() !== "application/json") {
       await res.body?.cancel();
       throw new Error("collection_unavailable");

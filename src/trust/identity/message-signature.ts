@@ -244,7 +244,7 @@ export type HttpSignatureVerifyResult =
       params: SignatureParams;
       profile?: KeyProfile;
     }
-  | { ok: false; code: "authentication_required" | "authorization_failed" | "replay_detected"; reason: string };
+  | { ok: false; code: "authentication_required" | "authorization_failed" | "replay_detected" | "temporarily_unavailable"; reason: string };
 
 /**
  * 验签：解析 Signature-Input / Signature，逐项验证（keyid → 公钥、时间窗口、
@@ -422,8 +422,13 @@ function verifyEntry(
   // 窗内）可用伪造签名刷入任意 nonce 填满 store，配合满额整体清空把已捕获
   // 的真实签名打开重放窗口；验签后才消费使 nonce 只能被真实签名持有者写入。
   if (entry.params.nonce !== undefined && input.nonceStore !== undefined) {
-    if (!input.nonceStore.checkAndSet(`${keyid}|${entry.params.nonce}`)) {
+    const key = `${keyid}|${entry.params.nonce}`;
+    const outcome = input.nonceStore.record?.(key) ?? (input.nonceStore.checkAndSet(key) ? "fresh" : "duplicate");
+    if (outcome === "duplicate") {
       return { ok: false, code: "replay_detected", reason: "signature nonce already used" };
+    }
+    if (outcome === "unavailable") {
+      return { ok: false, code: "temporarily_unavailable", reason: "signature nonce store unavailable" };
     }
   }
 

@@ -267,6 +267,31 @@ describe("merchant negotiation approval (B2)", () => {
     expect(JSON.stringify(envelope)).not.toContain(collection.recipient);
   });
 
+  it("商家批准后买家改价，只保留一次普通应价，不沿用旧支付宝应付总额", async () => {
+    const { terms } = await approvedCounter({ total: 754_321, retryMinor: 71_000 });
+    expect(terms).not.toHaveProperty("kiwi_alipay_collection");
+    expect(terms).not.toHaveProperty("handoff_destination");
+    expect(approvals.list("consumed")).toHaveLength(1);
+    expect(await run(counter(70_000), true)).toMatchObject({ kind: "declined", reasonCode: "approval_required", approvalStatus: "consumed" });
+    expect(approvals.list("pending")).toHaveLength(0);
+  });
+
+  it("签名买家改价时替换未批准的待批记录；恰好到期的拒绝只持久化 expired", () => {
+    const input = { negotiation_id: NEGOTIATION_ID, sku: SKU, currency: "CNY", quantity: 10, unit: "piece", buyer_offer_minor: 70_000 };
+    expect(approvals.reviewSignedCounter(input)).toEqual({ status: "pending" });
+    const [before] = approvals.list("pending");
+    expect(approvals.reviewSignedCounter({ ...input, buyer_offer_minor: 71_000 })).toEqual({ status: "pending" });
+    const [after] = approvals.list("pending");
+    expect(after).toMatchObject({ buyer_offer_minor: 71_000 });
+    expect(after!.approval_id).not.toBe(before!.approval_id);
+    expect(approvals.list()).toHaveLength(1);
+    clock = after!.expires_at!;
+    expect(() => approvals.reject({ approval_id: after!.approval_id, reason: "never persisted" })).toThrow("approval pending has expired");
+    expect(approvals.sweepExpired()).toEqual([]); // reject persisted the transition; list() alone can project it.
+    expect(approvals.list()).toEqual([expect.objectContaining({ approval_id: after!.approval_id, status: "expired" })]);
+    expect(approvals.list()[0]).not.toHaveProperty("rejected_reason");
+  });
+
   const acceptEnvelopeFor = ({ envelope, offerId, terms }: Awaited<ReturnType<typeof approvedCounter>>) =>
     envelopeFor("accept_nonbinding", { type: "accept_nonbinding", offer_id: offerId, terms_digest: contentDigest(terms as never) }, envelope.message_id);
 

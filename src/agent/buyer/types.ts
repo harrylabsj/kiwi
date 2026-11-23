@@ -287,7 +287,7 @@ export interface ScoreExplanation {
 }
 
 export class BuyerTaskError extends Error {
-  readonly code: "validation" | "not_found" | "conflict" | "illegal_transition" | "vault_unavailable";
+  readonly code: "validation" | "not_found" | "conflict" | "illegal_transition" | "vault_unavailable" | "vault_decryption_failed";
   constructor(code: BuyerTaskError["code"], message: string) {
     super(message);
     this.name = "BuyerTaskError";

@@ -47,6 +47,7 @@
  */
 
 import { NegotiationValidationError } from "../../negotiation/domain/common.js";
+import { NONCE_RETRY_AFTER_SECONDS } from "../../trust/identity/nonce.js";
 import type { ProtocolErrorCode } from "../../negotiation/domain/common.js";
 
 /** JSON-RPC 2.0 标准 code + A2A/KNP 应用 code。 */
@@ -130,16 +131,24 @@ export function internalServerError(): ServerProtocolError {
 /**
  * 认证失败（HTTP 层使用，帧 id 未知故返回 null）。
  * protocol_code ∈ {authentication_required, authorization_failed, identity_rejected,
- * replay_detected}。identity_rejected 与 replay_detected 是 §32 词表里认证相关的
- * 额外结果：身份绑定冲突（403，永久拒绝）与重放（401，换新签名可重试）。
+ * replay_detected, temporarily_unavailable}。identity_rejected 与 replay_detected 是 §32 词表里认证相关的
+ * 额外结果：身份绑定冲突（403）与重放（401）；nonce 存储故障单独返回 503。
  */
 export function authError(
   protocolCode:
-    "authentication_required" | "authorization_failed" | "identity_rejected" | "replay_detected",
+    "authentication_required" | "authorization_failed" | "identity_rejected" | "replay_detected" | "temporarily_unavailable",
 ): {
   httpStatus: number;
+  retryAfter?: number;
   body: JsonRpcErrorBody;
 } {
+  if (protocolCode === "temporarily_unavailable") {
+    return { httpStatus: 503, retryAfter: NONCE_RETRY_AFTER_SECONDS, body: {
+      code: JSONRPC_CODES.AUTH_ERROR,
+      message: "authentication temporarily unavailable",
+      data: { protocol_code: protocolCode, retry_after: NONCE_RETRY_AFTER_SECONDS },
+    } };
+  }
   let httpStatus: number;
   let message: string;
   switch (protocolCode) {

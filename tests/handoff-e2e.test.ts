@@ -24,7 +24,8 @@ import { BuyerTaskStore } from "../src/agent/buyer/task-store.js";
 import { AgentKernel } from "../src/agent/kernel.js";
 import { ensurePathsForDir } from "../src/agent/agent-db.js";
 import { createFakeChatModels } from "../src/agent/fake-chat-model.js";
-import { EnvKeyProvider, PrivateVault } from "../src/agent/memory/vault.js";
+import { EnvKeyProvider, PrivateVault, VaultKeyError } from "../src/agent/memory/vault.js";
+import { BuyerTaskError } from "../src/agent/buyer/types.js";
 import { abandonMerchantApprovalResume, buildBuyerTools, resolveTaskAlipayCollection, type BuyerToolDeps } from "../src/agent/buyer/buyer-tools.js";
 import {
   WriteApprovalCandidateStore,
@@ -353,7 +354,7 @@ it("refuses native collection without private display, exact origin, current exp
   expect(capable.ledger.events("n")).toHaveLength(0);
 });
 
-async function startSignedAlipayStack(vault?: PrivateVault) {
+async function startSignedAlipayStack(vault?: PrivateVault, alipayCollectionAvailable = true) {
   const origin = "https://1.1.1.1";
   let approvalTime = Date.now();
   const merchantApprovals = new NegotiationApprovalStore(trackedMkdtemp("kiwi-alipay-merchant-"),
@@ -392,7 +393,7 @@ async function startSignedAlipayStack(vault?: PrivateVault) {
   };
   vi.stubGlobal("fetch", proxyFetch);
   vi.spyOn(pinnedTransport, "createPinnedFetch").mockImplementation(() => proxyFetch);
-  const buyer = setupBuyer(stack.catalogUrl, { alipayCollectionAvailable: true, outboundSigner: createA2aOutboundSigner(signer), vault });
+  const buyer = setupBuyer(stack.catalogUrl, { alipayCollectionAvailable, outboundSigner: createA2aOutboundSigner(signer), vault });
   return { buyer, merchantApprovals, requests, advanceApprovals: (ms: number) => { approvalTime += ms; } };
 }
 
@@ -434,17 +435,40 @@ it("resumes a signed native task after merchant approval and hands off exactly t
       handoff_id: delivered?.handoff_id, negotiation_id: pending.negotiation_id,
       text: expect.stringContaining(`/alipay ${delivered?.handoff_id} ${pending.negotiation_id}`),
     } });
+    const repeated = await buyer.getTool("handoff_agreement").execute("duplicate", { task_id });
+    expect(repeated.details).toMatchObject({
+      status: "already_delivered", handoff_id: delivered?.handoff_id, negotiation_id: pending.negotiation_id,
+    });
+    expect(toolText(repeated)).toContain(`/alipay ${delivered?.handoff_id} ${pending.negotiation_id}`);
+    expect(buyer.ledger.events(binding.link.negotiationId)).toEqual(events);
     const create = events.find((event) => event.event_kind === "handoff_candidate_created");
     expect(create?.outcome).toMatchObject({ kind: "ok", result: { candidate: {
       creates_order: false, authorizes_payment: false, reserves_inventory: false,
     } } });
 });
 
+it.each([undefined, 163_000])("resumes a signed review without a private reader (Alipay total: %s)", async (total) => {
+  const { buyer, merchantApprovals, requests } = await startSignedAlipayStack(undefined, false);
+  const task_id = await createReadyTask(buyer.store, {
+    intent: { category: "sku-001", quantity: 2, target_unit_price: 810 }, constraints: { max_total_price: 1630 },
+  });
+  const negotiate = buyer.getTool("negotiate_buyer_task");
+  expect(toolText(await negotiate.execute("neg-1", { task_id }))).toContain("merchant_approval_pending");
+  const [pending] = merchantApprovals.list("pending");
+  merchantApprovals.approve({ approval_id: pending!.approval_id, approved_minor: 81_000, alipay_total_minor: total });
+  const resumed = toolText(await negotiate.execute("neg-2", { task_id }));
+  expect(resumed).toContain(total === undefined ? "selected_nonbinding" : "当前买家终端不支持支付宝私有收款指引");
+  expect(buyer.store.getTask(task_id)?.status).toBe(total === undefined ? "selected_nonbinding" : "ready");
+  expect(requests.map((request) => request.action)).toEqual(total === undefined
+    ? ["rfq", "counter_offer", "counter_offer", "accept_nonbinding"] : ["rfq", "counter_offer", "counter_offer"]);
+  expect(requests.every((request) => request.envelope.negotiation_id === pending!.negotiation_id)).toBe(true);
+});
+
 it.each([
   { constraints: { max_total_price: 1620 }, single: 81_000, total: 163_000, error: "支付宝应付总额 1630.00 元超过买方预算上限", vaulted: true },
   { constraints: { max_unit_price: 900, max_total_price: 1620 }, single: 81_000, total: 163_000, error: "支付宝应付总额 1630.00 元超过买方预算上限" },
   { constraints: { max_unit_price: 810 }, single: 81_000, total: 163_000, error: "支付宝应付总额 1630.00 元超过买方预算上限" },
-  { constraints: {}, single: 81_000, total: 162_001, error: "支付宝应付总额 1620.01 元超过买方预算上限" },
+  { constraints: {}, single: 81_000, total: 162_001, error: "支付宝应付总额 1620.01 元超过买方还价目标合计" },
   { constraints: { max_total_price: 1620 }, single: 81_001, total: 162_002, error: "成交价 810.01 元/件超过买方预算上限" },
 ])("rejects a $single/$total collection before accept when constraints are $constraints", async ({ constraints, single, total, error, vaulted }) => {
   const vault = vaulted ? new PrivateVault(new EnvKeyProvider("a".repeat(64))) : undefined;
@@ -465,6 +489,20 @@ it.each([
     type: "merchant_approval_resume_closed", payload: { negotiation_id: pending!.negotiation_id, reason: "quoted" },
   }));
   expect(requests.map((request) => request.action)).toEqual(["rfq", "counter_offer", "counter_offer"]);
+});
+
+it.each([
+  { error: new BuyerTaskError("not_found", "fixture-internal-detail"), code: "not_found" },
+  { error: new BuyerTaskError("vault_unavailable", "fixture-internal-detail"), code: "vault_unavailable" },
+  { error: new VaultKeyError("fixture-internal-detail"), code: "vault_decryption_failed" },
+])("fails closed without disclosing private budget errors: $code", async ({ error, code }) => {
+  const { buyer, requests } = await startSignedAlipayStack();
+  const task_id = await createReadyTask(buyer.store);
+  vi.spyOn(buyer.store, "resolveBudget").mockImplementationOnce(() => { throw error; });
+  const result = toolText(await buyer.getTool("negotiate_buyer_task").execute("neg-vault-error", { task_id }));
+  expect(result).toContain(code);
+  expect(result).not.toContain("fixture-internal-detail");
+  expect(requests).toHaveLength(0);
 });
 
 it.each(["rejected", "expired", "abandoned"] as const)("does not keep resuming a %s review", async (disposition) => {

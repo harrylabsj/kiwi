@@ -48,7 +48,7 @@ export function verifyOpenInquiryRequest(input: {
   headers: Record<string, string | string[] | undefined>;
   body: Buffer;
   nonceStore: NonceStore;
-}): { ok: true; sessionIdentity: string } | { ok: false } {
+}): { ok: true; sessionIdentity: string } | { ok: false; code?: "temporarily_unavailable" } {
   if (input.body.length === 0 || input.body.length > 64 * 1024) return { ok: false };
   let url: URL;
   let message: unknown;
@@ -65,6 +65,7 @@ export function verifyOpenInquiryRequest(input: {
     return { ok: false };
   const verified = verifyHttpMessageSignature({ method: "POST", targetUri: url.href, authority: url.host,
     headers: input.headers, body: input.body, resolver: resolveOpenInquirySessionKey, nonceStore: input.nonceStore });
-  if (!verified.ok || !verified.params.nonce) return { ok: false };
+  if (!verified.ok) return verified.code === "temporarily_unavailable" ? { ok: false, code: verified.code } : { ok: false };
+  if (!verified.params.nonce) return { ok: false };
   return { ok: true, sessionIdentity: verified.keyid };
 }

@@ -51,29 +51,37 @@ export class AlipayCollectionConflict extends Error {
 /** Tenant-local data. Raw values never belong in management projections or logs. */
 export class AlipayCollectionStore {
   constructor(private readonly db: DatabaseSync, readonly merchantId: string) {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS alipay_collection_config (
-        merchant_id TEXT PRIMARY KEY NOT NULL,
-        version TEXT NOT NULL,
-        enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
-        recipient TEXT NOT NULL,
-        account TEXT,
-        qr_png_base64 TEXT
-      );
-      CREATE TABLE IF NOT EXISTS alipay_collection_audit (
-        version TEXT PRIMARY KEY NOT NULL,
-        merchant_id TEXT NOT NULL,
-        actor_id TEXT NOT NULL,
-        changed_at TEXT NOT NULL,
-        enabled INTEGER NOT NULL CHECK (enabled IN (0, 1))
-      );
-      CREATE TABLE IF NOT EXISTS alipay_collection_audit_changes (
-        version TEXT PRIMARY KEY NOT NULL REFERENCES alipay_collection_audit(version),
-        recipient_changed INTEGER NOT NULL CHECK (recipient_changed IN (0, 1)),
-        account_changed INTEGER NOT NULL CHECK (account_changed IN (0, 1)),
-        qr_changed INTEGER NOT NULL CHECK (qr_changed IN (0, 1))
-      );
-    `);
+    inImmediateTransaction(db, () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS alipay_collection_config (
+          merchant_id TEXT PRIMARY KEY NOT NULL,
+          version TEXT NOT NULL,
+          enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+          recipient TEXT NOT NULL,
+          account TEXT,
+          qr_png_base64 TEXT
+        );
+        CREATE TABLE IF NOT EXISTS alipay_collection_audit (
+          version TEXT PRIMARY KEY NOT NULL,
+          merchant_id TEXT NOT NULL,
+          actor_id TEXT NOT NULL,
+          changed_at TEXT NOT NULL,
+          enabled INTEGER NOT NULL CHECK (enabled IN (0, 1))
+        );
+        CREATE TABLE IF NOT EXISTS alipay_collection_audit_changes (
+          version TEXT PRIMARY KEY NOT NULL REFERENCES alipay_collection_audit(version),
+          recipient_changed INTEGER NOT NULL CHECK (recipient_changed IN (0, 1)),
+          account_changed INTEGER NOT NULL CHECK (account_changed IN (0, 1)),
+          qr_changed INTEGER NOT NULL CHECK (qr_changed IN (0, 1)),
+          initial INTEGER CHECK (initial IN (0, 1))
+        );
+      `);
+      // Preserve historical flags; NULL means this version predates the explicit marker.
+      const columns = db.prepare("PRAGMA table_info(alipay_collection_audit_changes)").all();
+      if (!columns.some((column) => column.name === "initial")) {
+        db.exec("ALTER TABLE alipay_collection_audit_changes ADD COLUMN initial INTEGER CHECK (initial IN (0, 1))");
+      }
+    });
   }
 
   current(): AlipayCollectionConfig | undefined {
@@ -118,12 +126,13 @@ export class AlipayCollectionStore {
         INSERT INTO alipay_collection_audit (version, merchant_id, actor_id, changed_at, enabled)
         VALUES (?, ?, ?, ?, ?)
       `).run(config.version, this.merchantId, actorId, changedAt, Number(config.enabled));
-      // Record what changed, not the values (or hashes of low-entropy account identifiers).
+      // The initial marker distinguishes field presence at setup from changes to an existing config.
+      // Never record values or hashes of low-entropy account identifiers.
       this.db.prepare(`
-        INSERT INTO alipay_collection_audit_changes (version, recipient_changed, account_changed, qr_changed)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO alipay_collection_audit_changes (version, recipient_changed, account_changed, qr_changed, initial)
+        VALUES (?, ?, ?, ?, ?)
       `).run(config.version, Number(previous?.recipient !== config.recipient),
-        Number(previous?.account !== config.account), Number(previous?.qrPngBase64 !== config.qrPngBase64));
+        Number(previous?.account !== config.account), Number(previous?.qrPngBase64 !== config.qrPngBase64), Number(previous === undefined));
       return config;
     });
   }

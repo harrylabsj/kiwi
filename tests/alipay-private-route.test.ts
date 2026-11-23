@@ -19,16 +19,22 @@ test("公开落地页不泄露资料，只有匹配协议的验签买家能查�
   const secondBuyer = generateA2aSigningIdentity("buyer-2");
   const advertisedOrigin = "https://merchant.example";
   const privatePath = "/buyer/v1/collection/alipay";
+  const memory = new InMemoryNonceStore();
   const verifier = new HttpMessageSignatureVerifier({
     resolver: resolveA2aSignatureResolver(merchant, [firstBuyer, secondBuyer]),
-    scheme: "https", expectedAuthority: "merchant.example", authoritySource: "declared", nonceStore: new InMemoryNonceStore(),
+    scheme: "https", expectedAuthority: "merchant.example", authoritySource: "declared", nonceStore: {
+      checkAndSet: (key) => memory.checkAndSet(key),
+      record: (key) => storageAvailable ? (memory.checkAndSet(key) ? "fresh" : "duplicate") : "unavailable",
+    },
   });
+  let storageAvailable = true;
   const handlers = createAlipayCollectionHttp({
     merchantId: "merchant-1",
     verifyBuyer: async (req, body) => {
       if (!hasAlipayReadSignature(req.headers["signature-input"])) return undefined;
       const result = await verifier.verify({ method: req.method ?? "", url: req.url ?? "", headers: req.headers,
         body, scheme: "http", remoteAddress: req.socket.remoteAddress, authorizationHeader: req.headers.authorization });
+      if (result.protocolCode === "temporarily_unavailable") return result.protocolCode;
       return result.authenticated && result.identityVerified === true && result.identity !== undefined
         ? { merchantId: "merchant-1", buyerPrincipalId: result.identity } : undefined;
     },
@@ -67,6 +73,16 @@ test("公开落地页不泄露资料，只有匹配协议的验签买家能查�
     const wrong = JSON.stringify({ ...fields, agreementId: "wrong" });
     expect((await request(sign(firstBuyer), wrong)).status).toBe(404);
     expect((await request(sign(firstBuyer, wrong), wrong)).status).toBe(404);
+    storageAvailable = false;
+    for (const binding of [payload, wrong]) {
+      const unavailable = await request(sign(firstBuyer, binding), binding);
+      expect(unavailable.status).toBe(503);
+      expect(unavailable.headers.get("retry-after")).toBe("60");
+      expect(unavailable.headers.get("cache-control")).toBe("no-store");
+      expect(await unavailable.json()).toEqual({ error: "temporarily_unavailable", retry_after: 60 });
+    }
+    expect((await request()).status).toBe(404);
+    storageAvailable = true;
     const signed = sign(firstBuyer);
     const res = await request(signed);
     expect(res.headers.get("cache-control")).toBe("no-store");
@@ -113,7 +129,11 @@ test("原生读取器经钉住的连接签名读取，仅展示与报价绑定�
     details = { ...details, totalMinor: 12346 };
     await expect(reader(input)).rejects.toThrow("collection_unavailable");
     await expect(reader({ ...input, origin: "http://merchant.example" })).rejects.toThrow();
-    expect(fetchPinned).toHaveBeenCalledTimes(2);
+    fetchPinned.mockResolvedValueOnce(Response.json({ error: "temporarily_unavailable" }, {
+      status: 503, headers: { "Retry-After": "60" },
+    }));
+    await expect(reader(input)).rejects.toMatchObject({ message: "temporarily_unavailable", retryAfterSeconds: 60 });
+    expect(fetchPinned).toHaveBeenCalledTimes(3);
     expect(launch).toHaveBeenCalledTimes(1);
   } finally {
     factory.mockRestore();

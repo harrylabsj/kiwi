@@ -1,7 +1,24 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { OpenInquirySessionSigner, resolveOpenInquirySessionKey, verifyOpenInquiryRequest } from "../src/a2a/open-inquiry-session.js";
 import { HttpMessageSigner, InMemoryNonceStore, verifyHttpMessageSignature } from "../src/trust/identity/index.js";
+
+import { OpenInquiryVerifier } from "../src/a2a/open-inquiry-verifier.js";
+
+it("a valid open session reports a temporary storage failure without anonymous fallback", async () => {
+  const signer = new OpenInquirySessionSigner();
+  const origin = "https://merchant.example";
+  const body = Buffer.from('{"jsonrpc":"2.0","method":"SendMessage","id":1}');
+  const headers = signer.sign({ method: "POST", url: `${origin}/a2a`, body, headers: {} });
+  const verify = vi.fn(() => ({ authenticated: true }));
+  const nonceStore = { checkAndSet: vi.fn(() => false), record: vi.fn(() => "unavailable" as const) };
+  const verifier = new OpenInquiryVerifier({ name: "delegate", verify }, origin, nonceStore);
+  await expect(verifier.verify({ method: "POST", url: "/a2a", body, headers, remoteAddress: undefined, authorizationHeader: undefined }))
+    .resolves.toMatchObject({ authenticated: false, protocolCode: "temporarily_unavailable" });
+  expect(nonceStore.record).toHaveBeenCalledTimes(1);
+  expect(nonceStore.checkAndSet).not.toHaveBeenCalled();
+  expect(verify).not.toHaveBeenCalled();
+});
 
 describe("account-free inquiry session identity", () => {
   it("isolates sessions, verifies ownership and rejects replay and body tampering", () => {
