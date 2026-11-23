@@ -1,11 +1,12 @@
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { randomBytes } from "node:crypto";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { createAlipayCollectionHttp, hasAlipayReadSignature } from "../src/cloud/alipay-collection-http.js";
 import { generateA2aSigningIdentity, resolveA2aSignatureResolver } from "../src/a2a/signing-key.js";
 import { HttpMessageSigner, HttpMessageSignatureVerifier, InMemoryNonceStore } from "../src/trust/identity/index.js";
-import { openPrivateAlipayView } from "../src/agent/alipay-native-view.js";
+import { createNativeAlipayReader, openPrivateAlipayView } from "../src/agent/alipay-native-view.js";
+import * as pinnedTransport from "../src/merchant-gateway/pinned-fetch.js";
 
 const version = "29cb1970-8520-402a-bde0-ea46cc6a666d";
 const fields = { negotiationId: "neg-1", offerId: "offer-1", version, agreementId: "agreement-1", termsDigest: `sha256:${"a".repeat(64)}` };
@@ -76,6 +77,46 @@ test("公开落地页不泄露资料，只有匹配协议的验签买家能查�
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("原生读取器经钉住的连接签名读取，仅展示与报价绑定的 JSON 响应", async () => {
+  const identity = generateA2aSigningIdentity("buyer-native-test");
+  const origin = "https://merchant.example";
+  const expiresAt = "2099-01-01T00:00:00Z";
+  const verifier = new HttpMessageSignatureVerifier({
+    resolver: resolveA2aSignatureResolver(identity), scheme: "https", expectedAuthority: "merchant.example",
+    nonceStore: new InMemoryNonceStore(),
+  });
+  const input = { origin, binding: fields, totalMinor: 12345, expiresAt };
+  let details = { version, recipient: collection.recipient, account: collection.account, totalMinor: 12345, currency: "CNY", expiresAt };
+  const fetchPinned = vi.fn<typeof fetch>(async (url, init) => {
+    expect(String(url)).toBe(`${origin}/buyer/v1/collection/alipay`);
+    expect(init).toMatchObject({ method: "POST", body: JSON.stringify(fields), redirect: "error" });
+    const headers = Object.fromEntries(new Headers(init?.headers).entries());
+    expect(hasAlipayReadSignature(headers["signature-input"])).toBe(true);
+    expect(await verifier.verify({ method: "POST", url: "/buyer/v1/collection/alipay",
+      scheme: "https", body: Buffer.from(String(init?.body)), headers: { ...headers, host: "merchant.example" },
+      remoteAddress: undefined, authorizationHeader: undefined,
+    })).toMatchObject({ authenticated: true, identityVerified: true });
+    return Response.json(details);
+  });
+  const factory = vi.spyOn(pinnedTransport, "createPinnedFetch").mockReturnValue(fetchPinned);
+  const launch = vi.fn(async (url: string) => {
+    const page = await fetch(url);
+    expect(await page.text()).toContain("¥123.45");
+  });
+  try {
+    const reader = createNativeAlipayReader(identity, launch);
+    expect(factory).toHaveBeenCalledWith({ timeoutMs: 5000, maxResponseBytes: 768 * 1024 });
+    await expect(reader(input)).resolves.toBeUndefined();
+    details = { ...details, totalMinor: 12346 };
+    await expect(reader(input)).rejects.toThrow("collection_unavailable");
+    await expect(reader({ ...input, origin: "http://merchant.example" })).rejects.toThrow();
+    expect(fetchPinned).toHaveBeenCalledTimes(2);
+    expect(launch).toHaveBeenCalledTimes(1);
+  } finally {
+    factory.mockRestore();
   }
 });
 

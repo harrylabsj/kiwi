@@ -294,6 +294,13 @@ describe("支付宝收款设置", () => {
       version: disabled.json.version, merchant_id: MERCHANT, actor_id: `admin:${MERCHANT}`,
       changed_at: FIXED_NOW.toISOString(), enabled: 0,
     });
+    const changes = operationsDb.prepare("SELECT * FROM alipay_collection_audit_changes WHERE version = ?");
+    expect(changes.get(saved.json.version as string)).toEqual({
+      version: saved.json.version, recipient_changed: 1, account_changed: Number(current.account_masked !== null), qr_changed: 1,
+    });
+    expect(changes.get(disabled.json.version as string)).toEqual({
+      version: disabled.json.version, recipient_changed: 0, account_changed: 0, qr_changed: 0,
+    });
   });
 
   it("仅直接 owner 可明确批准指定 CNY 报价的应付总额，不返回私有底价", async () => {

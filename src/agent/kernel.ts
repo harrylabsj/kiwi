@@ -53,7 +53,7 @@ import {
   recordLaunch,
   recordOpenEvidence,
 } from "../handoff/index.js";
-import { buildBuyerTools, resolveTaskAlipayCollection } from "./buyer/buyer-tools.js";
+import { abandonMerchantApprovalResume, buildBuyerTools, resolveTaskAlipayCollection } from "./buyer/buyer-tools.js";
 import type { NativeAlipayReader } from "./alipay-native-view.js";
 import { validateHandoffCandidate } from "../handoff/candidate.js";
 import { TaskScheduler, type TickBudget, type TickResult } from "./buyer/scheduler.js";
@@ -334,6 +334,8 @@ const COMMANDS_HELP = `/memory [preferences|private]  查看记忆概览 / 学�
 /approve <candidate-id>    批准并执行一个写操作候选（重新校验前置状态）
 /reject <candidate-id>     驳回一个写操作候选（绝不执行）
 /profile <file.yaml>      加载并切换另一个 agent profile（buyer/merchant 等）
+/abandon-quote <task_id>   仅在本机停止续接上一笔待商家审批报价，允许同一任务重新磋商
+/alipay <handoff_id> <negotiation_id>  在原生买家终端打开已批准的私有收款指引
 /register --agent-card-url <url> [--catalog <url>] [--domain <d>]
                           把本 merchant 注册进 agent catalog（buyer 发现用）
 /help                      本帮助
@@ -958,6 +960,14 @@ export class AgentKernel {
       }
     }
     return { enabled: true, candidates, handoffs };
+  }
+
+  /** TUI-only: abandon local resume state without withdrawing the merchant's record. */
+  abandonPendingMerchantQuote(taskId: string): string {
+    if (this.taskStore === undefined || !abandonMerchantApprovalResume(this.taskStore, taskId)) {
+      return "该任务没有可放弃的商家审批续接。";
+    }
+    return "已在本机放弃续接，可以用同一任务重新磋商；未撤销商家侧的原审批。";
   }
 
   /** 私有资料只由用户在 TUI 主动打开，永不返回给 chat tool 或模型。 */

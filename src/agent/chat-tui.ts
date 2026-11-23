@@ -95,7 +95,7 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
         modeLabel: mode === "autopilot" ? "Autopilot" : mode === "manual" ? "Manual" : "Supervised",
         a2aOn: a2aNode?.status() !== undefined && a2aNode?.status() !== null,
         catalog,
-        commands: "/help /profile /handoff /discover /negotiate /a2a /quit",
+        commands: "/help /profile /handoff /alipay /abandon-quote /discover /negotiate /a2a /quit",
       }),
     );
   };
@@ -254,6 +254,11 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
             ];
             write(theme.panel(lines));
           }
+        } else if (line === "/abandon-quote" || line.startsWith("/abandon-quote ")) {
+          const taskId = line.slice("/abandon-quote".length).trim();
+          write(/^task_[A-Za-z0-9_-]+$/.test(taskId)
+            ? current.kernel.abandonPendingMerchantQuote(taskId)
+            : "用法：/abandon-quote <task_id>（仅在本机放弃待批报价的续接）");
         } else if (line === "/alipay" || line.startsWith("/alipay ")) {
           const parts = line.slice("/alipay".length).trim().split(/\s+/);
           if (parts.length !== 2 || !parts[0] || !parts[1]) {

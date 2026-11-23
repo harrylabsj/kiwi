@@ -1,9 +1,11 @@
-/** Durable replay protection for automatic open-inquiry session signatures. */
+/** Durable replay protection for signed A2A and open-inquiry requests. */
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { NonceStore } from "../trust/identity/nonce.js";
+
+export type NonceStoreUnavailable = "capacity" | "storage";
 
 /** No active nonce is evicted to make space: a full store fails closed. */
 export class InquiryNonceStore implements NonceStore {
@@ -11,8 +13,15 @@ export class InquiryNonceStore implements NonceStore {
   private readonly now: () => number;
   private readonly maxEntries: number;
   private readonly ttlMs: number;
+  private readonly onUnavailable?: (reason: NonceStoreUnavailable) => void;
 
-  constructor(dataDir: string, options: { now?: () => number; maxEntries?: number; ttlMs?: number } = {}) {
+  constructor(dataDir: string, options: {
+    now?: () => number;
+    maxEntries?: number;
+    ttlMs?: number;
+    onUnavailable?: (reason: NonceStoreUnavailable) => void;
+  } = {}) {
+    this.onUnavailable = options.onUnavailable;
     this.now = options.now ?? Date.now;
     this.maxEntries = options.maxEntries ?? 100_000;
     this.ttlMs = options.ttlMs ?? 30 * 60_000;
@@ -42,12 +51,17 @@ export class InquiryNonceStore implements NonceStore {
       this.db.exec("BEGIN IMMEDIATE");
       this.db.prepare("DELETE FROM inquiry_nonces WHERE expires_at <= ?").run(now);
       const row = this.db.prepare("SELECT COUNT(*) AS n FROM inquiry_nonces").get() as { n: number };
-      if (row.n >= this.maxEntries) { this.db.exec("ROLLBACK"); return false; }
+      if (row.n >= this.maxEntries) {
+        this.db.exec("ROLLBACK");
+        this.onUnavailable?.("capacity");
+        return false;
+      }
       const inserted = this.db.prepare("INSERT OR IGNORE INTO inquiry_nonces VALUES (?, ?)").run(hash, now + this.ttlMs);
       this.db.exec("COMMIT");
       return Number(inserted.changes) === 1;
     } catch {
       try { this.db.exec("ROLLBACK"); } catch { /* No active transaction. */ }
+      this.onUnavailable?.("storage");
       return false;
     }
   }

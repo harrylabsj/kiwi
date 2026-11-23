@@ -976,7 +976,7 @@ function bindAlipayCollection() {
 function renderAlipayApprovals(items, version) {
   var rows = items.map(function (item) {
     var heading = item.sku + " · " + item.quantity + (item.unit ? " " + item.unit : "");
-    return '<form class="collection-form card" data-alipay-approval="' + esc(item.approval_id) + '" data-version="' + esc(version) + '">' +
+    return '<form class="collection-form card" data-alipay-approval="' + esc(item.approval_id) + '" data-version="' + esc(version) + '" data-buyer-offer="' + esc(item.buyer_offer_minor) + '">' +
       '<h3>' + esc(heading) + '</h3><p>磋商：' + esc(item.negotiation_id) + ' · 买家还价单价：' + esc(item.buyer_offer_minor) + ' 分</p>' +
       (item.expires_at ? '<p>待批截止：' + esc(item.expires_at) + '</p>' : '') +
       '<label>批准单价（人民币分）<input name="approved_minor" type="number" inputmode="numeric" required min="1" step="1"></label>' +
@@ -999,7 +999,9 @@ function bindAlipayApprovals() {
         bar("单价和最终应付总额都必须是正整数分。", true);
         return;
       }
-      if (!window.confirm("确认 " + form.querySelector("h3").textContent + "：单价 " + single + " 分，最终应付总额 " + total + " 分？")) return;
+      var aboveBuyerOffer = single > Number(form.getAttribute("data-buyer-offer"));
+      var warning = aboveBuyerOffer ? "注意：批准单价高于买家原还价，这是给买家的新报价，并不代表买家已同意。 " : "";
+      if (!window.confirm(warning + "确认 " + form.querySelector("h3").textContent + "：单价 " + single + " 分，最终应付总额 " + total + " 分？")) return;
       button.disabled = true;
       try {
         await call("POST", ALIPAY_COLLECTION + "/approvals", {

@@ -2222,18 +2222,37 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Merchant
             typeof buyerCounterMinor === "number" &&
             Number.isFinite(buyerCounterMinor) &&
             buyerCounterMinor < publicBoundMinor;
-          // B2：人工批准的一次性授权优先于自动边界；命中即消费，只回答这一笔。
-          // 低于公开边界（或旧口径下边界落到 floor 以下）时消费；高于边界时不烧授权。
-          const approved =
-            belowPublicBound || policyResponsiveMinorFinal < floorMinor
-              ? options.negotiationApprovals?.consume({
-                  negotiation_id: negotiationId,
-                  sku,
-                  currency,
-                  quantity,
-                  unit: requestedUnit,
-                })
-              : undefined;
+          // B2：只在需要人工审核的区间尝试消费授权。已签名买家重试同一还价时，
+          // 在队列锁内处理等待/终态/消费，避免重排队或覆盖刚批准的授权。
+          let approved;
+          if (belowPublicBound || policyResponsiveMinorFinal < floorMinor) {
+            const approvals = options.negotiationApprovals;
+            const input = {
+              negotiation_id: negotiationId,
+              sku, currency, quantity, unit: requestedUnit,
+              buyer_offer_minor: buyerCounterMinor ?? priceMinor,
+              public_bound_minor: publicBoundMinor,
+              floor_minor: floorMinor,
+              buyer_message_id: envelope.message_id,
+            };
+            const pendingMessage = "offer is below the merchant's automatic discount boundary; a merchant approval request has been recorded — retry after approval";
+            if (approvals !== undefined && ctx.identityVerified === true && alipayBuyerIdentity(ctx.senderIdentity)) {
+              const review = approvals.reviewSignedCounter(input);
+              if (review.status !== "approved") {
+                return {
+                  kind: "declined", taskState: "completed", reasonCode: "approval_required", approvalStatus: review.status,
+                  message: review.status === "pending" ? pendingMessage : `merchant approval is ${review.status}; start a new negotiation if needed`,
+                };
+              }
+              approved = review.record;
+            } else {
+              approved = approvals?.consume(input);
+              if (approved?.approved_minor === undefined) {
+                approvals?.recordPending(input);
+                return declineReply("approval_required", approvals === undefined ? undefined : pendingMessage);
+              }
+            }
+          }
           const authorizedMinor = approved?.approved_minor;
           // 批准价是商家可接受的下限，但不能低于买家本轮已经愿意出的价。
           // 注意 buyerCounter 已被 clamp 到公开边界，不能拿它做 max——否则
@@ -2248,33 +2267,6 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Merchant
                 ? Math.min(priceMinor, Math.max(authorizedMinor, buyerOfferMinor))
                 : authorizedMinor
               : policyResponsiveMinorFinal;
-          if (
-            authorizedMinor === undefined &&
-            (belowPublicBound || responsiveMinor < floorMinor)
-          ) {
-            // 公开边界低于私有底价：该区间不能自动报价。登记到商家审批队列，
-            // 人工批准后买家下一轮还价可命中一次性授权价；本轮不返回价格。
-            options.negotiationApprovals?.recordPending({
-              negotiation_id: negotiationId,
-              sku,
-              currency,
-              quantity,
-              unit: requestedUnit,
-              buyer_offer_minor:
-                typeof buyerCounterMinor === "number" && Number.isFinite(buyerCounterMinor)
-                  ? buyerCounterMinor
-                  : priceMinor,
-              public_bound_minor: publicBoundMinor,
-              floor_minor: floorMinor,
-              ...(typeof envelope.message_id === "string"
-                ? { buyer_message_id: envelope.message_id }
-                : {}),
-            });
-            return declineReply(
-              "approval_required",
-              "offer is below the merchant's automatic discount boundary; a merchant approval request has been recorded — retry after approval",
-            );
-          }
           // 可配置促销（merchant_policy.promos[sku]）：买满 bulk_threshold 台，
           // 批量价 = min(还价响应, list×(1-d%/100))，同样 clamp 到公开边界；
           // 若该价低于私有底价则**不挂这条条件**（不广告无法兑现的价）。
@@ -2363,7 +2355,8 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Merchant
           const explicitTotal = approved?.alipay_total_minor;
           const alipay = ctx.identityVerified === true && alipayBuyerIdentity(ctx.senderIdentity) &&
             product.handoff_destination === undefined && product.stock !== undefined && product.source_evidence !== undefined &&
-            currency === "CNY" && authorizedMinor === responsiveMinor && positiveMinorAmount(explicitTotal) &&
+            currency === "CNY" && approved?.buyer_offer_minor === buyerOfferMinor &&
+            authorizedMinor === responsiveMinor && positiveMinorAmount(explicitTotal) &&
             // This is a consistency check, not a source of the payable total.
             BigInt(explicitTotal) >= BigInt(responsiveMinor) * BigInt(quantity)
             ? currentAlipay()

@@ -356,10 +356,29 @@ const NEGOTIABLE_TASK_STATUSES: ReadonlySet<BuyerTaskStatus> = new Set([
 ]);
 
 function pendingMerchantApproval(store: BuyerTaskStore, taskId: string): MerchantApprovalResume | undefined {
-  // This event is written only from a signed merchant response, never a tool parameter.
-  const pending = [...store.taskEvents(taskId)].reverse().find((event) =>
+  // Resume data comes from the merchant channel with an independent buyer signer, never a tool parameter.
+  const events = store.taskEvents(taskId);
+  const pending = [...events].reverse().find((event) =>
     event.type === "a2a_negotiated" && event.payload.merchant_approval_resume !== undefined);
-  return pending?.payload.merchant_approval_resume as MerchantApprovalResume | undefined;
+  const resume = pending?.payload.merchant_approval_resume as MerchantApprovalResume | undefined;
+  return resume !== undefined && !events.some((event) => event.type === "merchant_approval_resume_closed" &&
+    event.payload.negotiation_id === resume.negotiationId) ? resume : undefined;
+}
+
+function closeMerchantApprovalResume(
+  store: BuyerTaskStore, taskId: string, negotiationId: string, reason: string, origin: "user" | "model",
+): boolean {
+  return store.appendEvent(taskId, "merchant_approval_resume_closed", {
+    negotiation_id: negotiationId, reason,
+  }, origin, `a2a-neg:${taskId}:${negotiationId}:merchant-approval-closed`);
+}
+
+/** Human-only local action: stop resuming without sending anything to the merchant. */
+export function abandonMerchantApprovalResume(store: BuyerTaskStore, taskId: string): boolean {
+  const task = store.getTask(taskId);
+  if (task === undefined || !NEGOTIABLE_TASK_STATUSES.has(task.status)) return false;
+  const resume = pendingMerchantApproval(store, taskId);
+  return resume !== undefined && closeMerchantApprovalResume(store, taskId, resume.negotiationId, "abandoned", "user");
 }
 
 /** 磋商前置快照（审批候选 + 执行前重读用，§16）。 */
@@ -409,6 +428,15 @@ async function executeNegotiateBuyerTask(
     .find((c) => c.candidate_status === "shortlisted" || c.candidate_status === "selected")?.sku;
   const sku = candidateSku ?? intent.category ?? intent.query_text ?? NEGOTIATE_SKU;
   const resume = pendingMerchantApproval(store, a.task_id);
+  let maxTotal: number | undefined;
+  try {
+    maxTotal = store.resolveBudget(task.constraints);
+    if (maxTotal === undefined && task.constraints.max_total_price_vault_ref !== undefined) {
+      throw new Error("vault budget unavailable");
+    }
+  } catch {
+    throw new BuyerTaskError("vault_unavailable", "无法读取任务的私有总预算；未发送磋商请求");
+  }
   const result = await negotiateWithAgent({
     catalog: deps.catalog,
     allowMerchantApprovalResume: deps.alipayCollectionAvailable === true,
@@ -434,22 +462,12 @@ async function executeNegotiateBuyerTask(
     ...(intent.needed_by !== undefined ? { deliveryBefore: intent.needed_by } : {}),
     senderIdentity: deps.profile.agent_id,
     ...(deps.outboundSigner !== undefined ? { outboundSigner: deps.outboundSigner } : {}),
-    // 预算硬约束（单价上限）：成交价超此值即拒绝。优先 constraints.max_unit_price；
-    // 只有总预算时按数量折算单价。
-    maxPriceMinor: (() => {
-      const perUnit = task.constraints.max_unit_price;
-      if (perUnit !== undefined && Number.isFinite(perUnit) && perUnit > 0) {
-        const c = losslessToMinorUnits(perUnit, 2);
-        return c.lossless ? c.amount_minor : undefined;
-      }
-      const total = task.constraints.max_total_price;
-      const qty = intent.quantity ?? 1;
-      if (total !== undefined && Number.isFinite(total) && qty > 0) {
-        const c = losslessToMinorUnits(total / qty, 2);
-        return c.lossless ? c.amount_minor : undefined;
-      }
-      return undefined;
-    })(),
+    // Convert the private limits separately; the negotiator enforces both before AcceptNonbinding.
+    // An unrepresentable explicit budget is rejected, not ignored in favor of a default.
+    ...(task.constraints.max_unit_price === undefined ? {} : {
+      maxPriceMinor: losslessToMinorUnits(task.constraints.max_unit_price, 2).amount_minor,
+    }),
+    ...(maxTotal === undefined ? {} : { maxTotalMinor: losslessToMinorUnits(maxTotal, 2).amount_minor }),
   });
   const eventKey = `a2a-neg:${a.task_id}:${result.negotiationId}`;
   if (result.merchantApprovalResume !== undefined) {
@@ -464,7 +482,22 @@ async function executeNegotiateBuyerTask(
       status: "merchant_approval_pending",
       task_id: a.task_id,
       negotiation_id: result.negotiationId,
-      text: "商家需要人工确认本次报价。商家确认后，请使用同一任务继续磋商；请勿自动反复重试。",
+      text: `商家需要人工确认本次报价。商家确认后，请使用同一任务继续磋商；请勿自动反复重试。如需改价或换商家，可在终端输入 /abandon-quote ${a.task_id}。`,
+    };
+  }
+  const resolution = result.merchantApprovalResolution;
+  if (resume !== undefined && resolution !== undefined) {
+    closeMerchantApprovalResume(store, a.task_id, resume.negotiationId, resolution, "model");
+  }
+  if (resolution !== undefined && resolution !== "quoted") {
+    const notice = {
+      rejected: "商家已拒绝上一轮报价",
+      expired: "上一轮报价的商家审批已过期",
+      consumed: "上一轮报价的商家授权已使用，无法再次续接",
+    }[resolution];
+    return {
+      ok: true, status: `merchant_approval_${resolution}`, task_id: a.task_id, negotiation_id: result.negotiationId,
+      text: `${notice}。未重新提交，也未达成协议；如需重新报价，请先与用户确认，再用同一任务发起新磋商。`,
     };
   }
   if (!result.ok) {
@@ -522,6 +555,7 @@ async function executeNegotiateBuyerTask(
         negotiation_id: result.negotiationId,
         agreement_id: result.agreement?.agreement_id ?? null,
         deal_price_minor: facts?.dealPriceMinor ?? null,
+        ...(facts?.payableTotalMinor === undefined ? {} : { payable_total_minor: facts.payableTotalMinor }),
         // v0.7.0 KTH：agreement 快照落任务记录——handoff_agreement 的
         // agreementReader 以此做 pre-execution revalidation（§10）。
         agreed_terms: result.agreement?.agreed_terms ?? null,
@@ -548,6 +582,7 @@ async function executeNegotiateBuyerTask(
         quantity: facts?.quantity ?? intent.quantity ?? 1,
         offer_price_minor: facts?.offerPriceMinor ?? null,
         deal_price_minor: facts?.dealPriceMinor ?? null,
+        ...(facts?.payableTotalMinor === undefined ? {} : { payable_total_minor: facts.payableTotalMinor }),
         delivery_before: facts?.deliveryBefore ?? null,
         agreement_id: result.agreement?.agreement_id ?? null,
         steps: result.steps,
@@ -2411,11 +2446,15 @@ async function executeHandoffForCandidate(
     now: deps.now,
   });
   if (collection.kind === "collection") {
-    const ok = result.kind === "delivered" || result.kind === "already_delivered";
-    return {
-      ok, status: result.kind,
-      text: ok ? `支付宝交接已记录；请在原生终端手动查看。${ALIPAY_COLLECTION_NOTICE}` : "支付宝收款入口未交付；请重新核对协议及其有效期。",
-    };
+    if (result.kind === "delivered" || result.kind === "already_delivered") {
+      const handoffId = result.kind === "delivered" ? result.handoff.handoff_id : result.handoff_id;
+      const negotiationId = collection.link.negotiationId;
+      return {
+        ok: true, status: result.kind, handoff_id: handoffId, negotiation_id: negotiationId,
+        text: `支付宝交接已记录；请在原生终端输入 /alipay ${handoffId} ${negotiationId} 查看。${ALIPAY_COLLECTION_NOTICE}`,
+      };
+    }
+    return { ok: false, status: result.kind, text: "支付宝收款入口未交付；请重新核对协议及其有效期。" };
   }
   const rendered = handoffResultText(result);
   return {

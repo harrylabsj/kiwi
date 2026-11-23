@@ -67,6 +67,12 @@ export class AlipayCollectionStore {
         changed_at TEXT NOT NULL,
         enabled INTEGER NOT NULL CHECK (enabled IN (0, 1))
       );
+      CREATE TABLE IF NOT EXISTS alipay_collection_audit_changes (
+        version TEXT PRIMARY KEY NOT NULL REFERENCES alipay_collection_audit(version),
+        recipient_changed INTEGER NOT NULL CHECK (recipient_changed IN (0, 1)),
+        account_changed INTEGER NOT NULL CHECK (account_changed IN (0, 1)),
+        qr_changed INTEGER NOT NULL CHECK (qr_changed IN (0, 1))
+      );
     `);
   }
 
@@ -98,7 +104,8 @@ export class AlipayCollectionStore {
     changedAt: string,
   ): AlipayCollectionConfig {
     return inImmediateTransaction(this.db, () => {
-      if ((this.current()?.version ?? null) !== expectedVersion) throw new AlipayCollectionConflict();
+      const previous = this.current();
+      if ((previous?.version ?? null) !== expectedVersion) throw new AlipayCollectionConflict();
       const config = { ...input, version: randomUUID() };
       this.db.prepare(`
         INSERT INTO alipay_collection_config (merchant_id, version, enabled, recipient, account, qr_png_base64)
@@ -111,6 +118,12 @@ export class AlipayCollectionStore {
         INSERT INTO alipay_collection_audit (version, merchant_id, actor_id, changed_at, enabled)
         VALUES (?, ?, ?, ?, ?)
       `).run(config.version, this.merchantId, actorId, changedAt, Number(config.enabled));
+      // Record what changed, not the values (or hashes of low-entropy account identifiers).
+      this.db.prepare(`
+        INSERT INTO alipay_collection_audit_changes (version, recipient_changed, account_changed, qr_changed)
+        VALUES (?, ?, ?, ?)
+      `).run(config.version, Number(previous?.recipient !== config.recipient),
+        Number(previous?.account !== config.account), Number(previous?.qrPngBase64 !== config.qrPngBase64));
       return config;
     });
   }

@@ -18,6 +18,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { bootstrapCloudRuntime, CloudStartupError } from "../src/cloud/bootstrap.js";
 import { writeAdminCredentials, verifyAdminPassword } from "../src/auth/merchant-sessions.js";
 import { CloudConfigError } from "../src/cloud/config.js";
+import { generateA2aSigningIdentity } from "../src/a2a/signing-key.js";
+import { HttpMessageSigner } from "../src/trust/identity/index.js";
 
 const dirs: string[] = [];
 const servers: Server[] = [];
@@ -171,6 +173,59 @@ function cloudEnv(options: {
 }
 
 describe("云端单实例启动（T013/T014/T015/T016）", () => {
+  it("签名请求的 nonce 在云端重启后仍有效，存储不可打开时限频告警", async () => {
+    const commerce = await startFakeCommerce(TEST_SKU);
+    const dataDir = tempDir("kiwi-cloud-signature-nonce-");
+    const profilePath = writeCloudProfile(dataDir, commerce);
+    trackEnv("KIWI_COMMERCE_URL", commerce);
+    const buyer = generateA2aSigningIdentity("buyer-cloud-nonce-test");
+    writeFileSync(path.join(dataDir, "a2a-trusted-keys.json"), JSON.stringify([{
+      keyid: buyer.keyid, algorithm: buyer.algorithm, publicKeyPem: buyer.publicKeyPem,
+    }]));
+    const port = await freePort();
+    const env = cloudEnv({ port, dataDir, profilePath, auth: "signature", sku: TEST_SKU });
+    const logs: string[] = [];
+    const start = () => bootstrapCloudRuntime({ env, artifactRoot: "/workspace", log: (line) => logs.push(line),
+      catalogFetchImpl: async () => new Response(null, { status: 503 }) });
+    const body = JSON.stringify({ jsonrpc: "2.0", id: "nonce-fixture", method: "SendMessage", params: {
+      message: { role: "ROLE_USER", parts: [{ text: `咨询 ${TEST_SKU}` }], messageId: "msg_nonce_fixture" },
+    } });
+    const signedRequest = (nonce: string) => {
+      const headers = { "content-type": "application/json", "A2A-Version": "1.0" };
+      const signed = new HttpMessageSigner({ keyid: buyer.keyid, algorithm: buyer.algorithm,
+        privateKey: buyer.privateKeyPem, nonce }).sign({
+        url: `${env.KIWI_CLOUD_PUBLIC_ORIGIN}/a2a`, method: "POST", body: Buffer.from(body), headers,
+      });
+      return () => fetch(`http://127.0.0.1:${port}/a2a`, { method: "POST", body, headers: { ...headers, ...signed } });
+    };
+    const nonceFile = path.join(dataDir, "open-inquiry-nonces.sqlite");
+    mkdirSync(nonceFile); // Test-only storage initialization failure.
+    let instance = await start();
+    try {
+      for (const nonce of ["1".repeat(32), "2".repeat(32)]) {
+        const res = await signedRequest(nonce)();
+        expect(res.status).toBe(401);
+        expect(await res.json()).toMatchObject({ error: { data: { protocol_code: "replay_detected" } } });
+      }
+      expect(logs.filter((line) => line.includes("a2a_nonce_store_unavailable reason=open"))).toHaveLength(1);
+      expect(logs.join("")).not.toContain(nonceFile);
+    } finally { await instance.close(); }
+    rmSync(nonceFile, { recursive: true });
+    instance = await start();
+    let send: ReturnType<typeof signedRequest>;
+    try {
+      send = signedRequest("3".repeat(32));
+      const first = await send();
+      expect(await first.json()).toHaveProperty("result");
+      expect(first.status).toBe(200);
+    } finally { await instance.close(); }
+    instance = await start();
+    try {
+      const replay = await send();
+      expect(replay.status).toBe(401);
+      expect(await replay.json()).toMatchObject({ error: { data: { protocol_code: "replay_detected" } } });
+    } finally { await instance.close(); }
+  });
   it("签名模式挂载支付宝工作台和公开说明，但不向匿名买家提供收款资料", async () => {
     const commerce = await startFakeCommerce(TEST_SKU);
     const dataDir = tempDir("kiwi-cloud-alipay-");
