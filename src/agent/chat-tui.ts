@@ -254,6 +254,13 @@ export async function runChatTui(options: ChatTuiOptions): Promise<number> {
             ];
             write(theme.panel(lines));
           }
+        } else if (line === "/alipay" || line.startsWith("/alipay ")) {
+          const parts = line.slice("/alipay".length).trim().split(/\s+/);
+          if (parts.length !== 2 || !parts[0] || !parts[1]) {
+            write("用法：/alipay <handoff_id> <negotiation_id>（交接获批后查看收款指引）");
+          } else {
+            write(await current.kernel.openAlipayCollection(parts[0], parts[1]));
+          }
         } else if (line.startsWith("/handoff-open ")) {
           const rest = line.slice("/handoff-open ".length).trim();
           const parts = rest.split(/\s+/);

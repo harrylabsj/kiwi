@@ -255,6 +255,13 @@ export function hasPermission(ctx: VerifiedActorContext, permission: MerchantPer
   return ctx.permissions.has(permission);
 }
 
+/** Catalog OAuth also creates owner-role cookies, but cannot manage collection destinations. */
+export function isDirectMerchantOwner(ctx: VerifiedActorContext, ownerActorId: string | undefined): boolean {
+  return ownerActorId !== undefined &&
+    ctx.authMethod === "admin-session" && ctx.role === "owner" && ctx.actorId === ownerActorId &&
+    ctx.actorId !== `merchant:${ctx.merchantId}`;
+}
+
 function requireNonEmpty(value: string, field: string): string {
   const text = String(value ?? "").trim();
   if (text === "") throw new ActorContextError("forged_context", `${field} must be non-empty`);

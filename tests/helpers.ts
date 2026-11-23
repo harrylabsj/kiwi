@@ -265,6 +265,8 @@ export async function startTestA2aStack(
     merchantPolicy?: MerchantPolicy;
     /** B2：注入审批队列，端到端验证「越界 → 人工批准 → 买家重试命中」。 */
     negotiationApprovals?: import("../src/a2a/server/negotiation-approvals.js").NegotiationApprovalStore;
+    alipayCollection?: NonNullable<Parameters<typeof import("../src/a2a/server/merchant-handler.js").createMerchantHandler>[0]["alipayCollection"]>;
+    publicMerchantOrigin?: string;
     /**
      * A659：merchant 栈时钟注入。缺省保持固定 NOW（既有套件零影响）；
      * 需要与 buyer 侧默认真实时钟端到端一致的套件（a2a-buyer-core/a373）
@@ -329,6 +331,7 @@ export async function startTestA2aStack(
     ...(options.productSource !== undefined ? { productSource: options.productSource } : {}),
     ...(options.decisionBackend !== undefined ? { decisionBackend: options.decisionBackend } : {}),
     ...(options.merchantPolicy !== undefined ? { merchantPolicy: options.merchantPolicy } : {}),
+    ...(options.alipayCollection !== undefined ? { alipayCollection: options.alipayCollection } : {}),
     ...(options.negotiationApprovals !== undefined
       ? { negotiationApprovals: options.negotiationApprovals }
       : {}),
@@ -380,7 +383,8 @@ export async function startTestA2aStack(
   const httpServer = server.createServer();
   await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", () => resolve()));
   const addr = httpServer.address() as { port: number };
-  holder.baseUrl = `http://127.0.0.1:${addr.port}`;
+  const localMerchantUrl = `http://127.0.0.1:${addr.port}`;
+  holder.baseUrl = options.publicMerchantOrigin ?? localMerchantUrl;
 
   const catalogAgentId = options.catalogAgentId ?? "cagt_test_merchant_001";
   const candidate = {
@@ -485,7 +489,7 @@ export async function startTestA2aStack(
 
   return {
     catalogUrl,
-    merchantUrl: holder.baseUrl,
+    merchantUrl: localMerchantUrl,
     merchantDir,
     stop: async () => {
       await new Promise<void>((resolve) => catalog.close(() => resolve()));

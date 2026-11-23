@@ -32,6 +32,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { ECHO_PATH } from "../tools/workbuddy-echo.js";
 import type { ReadinessReport } from "./readiness.js";
+import { ALIPAY_LANDING_PREFIX } from "./alipay-collection-http.js";
 
 export type CloudRequestListener = (req: IncomingMessage, res: ServerResponse) => void;
 
@@ -53,6 +54,8 @@ export interface CloudRouterOptions {
   merchantHomePage?: CloudRequestListener;
   /** Buyer 关注/隐私面；只有配置了可验证 Buyer 身份解析器时才挂载。 */
   buyerHandler?: CloudRequestListener;
+  /** 支付宝交接的公开说明，永不包含收款资料。 */
+  alipayLandingHandler?: CloudRequestListener;
   /** 匿名公开 Feed；不得与 Buyer/管理认证缓存边界混用。 */
   publicFeedHandler?: CloudRequestListener;
   /** 独立顶层 WebAuthn 注册/确认页。 */
@@ -153,6 +156,11 @@ export function createCloudRouter(options: CloudRouterOptions): CloudRequestList
     // 1) 平台数据面：业务 router 不接管（平台在更外层处理；到此即明确 404）。
     if (pathname === "/.cloud" || pathname.startsWith("/.cloud/")) {
       writeJson(res, 404, { error: "reserved_path", message: "reserved for platform data plane" });
+      return;
+    }
+
+    if (options.alipayLandingHandler !== undefined && pathname.startsWith(ALIPAY_LANDING_PREFIX)) {
+      options.alipayLandingHandler(req, res);
       return;
     }
 

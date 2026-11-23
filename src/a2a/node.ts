@@ -568,6 +568,7 @@ export interface A2aNodeCoreOptions {
   /** 运行中商家策略（缺省 profile.merchant_policy 静态值）。 */
   merchantPolicy?: MerchantPolicy | (() => MerchantPolicy | undefined);
   promotionPrice?: MerchantHandlerOptions["promotionPrice"];
+  alipayCollection?: MerchantHandlerOptions["alipayCollection"];
   /**
    * 商品源覆盖（缺省按 profile.commerce 构造 HTTP 商品源）。
    * 云端可注入"商家上传商品表"式实现（设计 §10.1）。
@@ -590,6 +591,7 @@ export interface A2aNodeCore {
   ephemeral: boolean;
   /** 真实商品源（merchant 角色）：就绪检查与报价共用同一实例。 */
   productSource?: MerchantProductSource;
+  resolveAlipayCollection?: ReturnType<typeof createMerchantHandler>["resolveAlipayCollection"];
   /** 释放核心资源：统计库、owner 锁、临时目录（不涉及 http server）。 */
   close: (options?: { preserveOwnership?: boolean }) => void;
   /** Host releases ownership only after its own ingress/work/assembly also stopped. */
@@ -948,7 +950,7 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
           }
         })()
       : undefined;
-  const handler =
+  const merchantNegotiationHandler =
     role === "merchant"
       ? createMerchantHandler({
           ledger,
@@ -1028,12 +1030,14 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
           ...(options.promotionPrice !== undefined
             ? { promotionPrice: options.promotionPrice }
             : {}),
+          ...(options.alipayCollection !== undefined ? { alipayCollection: options.alipayCollection } : {}),
           // P0a：reception 启用时，KNP inquiry 与普通 A2A 文本统一走接待引擎。
           ...(receptionEngine !== undefined
             ? { reception: { engine: receptionEngine, merchantId: profile.owner_id } }
             : {}),
         })
-      : defaultHandler();
+      : undefined;
+  const handler = merchantNegotiationHandler ?? defaultHandler();
 
   const retryReceipts = (): void => {
     try {
@@ -1172,6 +1176,7 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
     server, ledger, idempotency, dir, ephemeral: isEphemeral,
     ...(receiptDispatcher !== undefined ? { receiptDispatcher } : {}),
     ...(productSource !== undefined ? { productSource } : {}),
+    ...(merchantNegotiationHandler !== undefined ? { resolveAlipayCollection: merchantNegotiationHandler.resolveAlipayCollection } : {}),
     close: (closeOptions) => {
       try {
         if (signatureNonceStore instanceof InquiryNonceStore) signatureNonceStore.close();

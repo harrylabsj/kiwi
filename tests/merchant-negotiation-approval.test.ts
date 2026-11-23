@@ -12,10 +12,11 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync }
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { NegotiationHandler, NegotiationHandlerResult } from "../src/a2a/server/types.js";
+import type { NegotiationHandlerResult } from "../src/a2a/server/types.js";
 import { createMerchantHandler } from "../src/a2a/server/merchant-handler.js";
+import { contentDigest } from "../src/negotiation/jcs.js";
 import { NegotiationApprovalStore } from "../src/a2a/server/negotiation-approvals.js";
 import { LedgerStore } from "../src/negotiation/ledger/index.js";
 import { finalizeEnvelope, type NegotiationEnvelope } from "../src/negotiation/domain/envelope.js";
@@ -24,6 +25,8 @@ const NOW = "2026-10-29T10:00:00Z";
 const NEGOTIATION_ID = "neg_b2_001";
 const CAP = "com.harrylabsj.kiwi.shopping.negotiation";
 const SKU = "SKU-001";
+const COLLECTION_VERSION = "00000000-0000-4000-8000-000000000001";
+const NEXT_COLLECTION_VERSION = "00000000-0000-4000-8000-000000000002";
 
 /** 商品 850 元；公开折扣 5% → 807.50；私有底价 810 → 公开边界低于底价。 */
 const merchantPolicy = {
@@ -35,32 +38,44 @@ describe("merchant negotiation approval (B2)", () => {
   let dir: string;
   let ledger: LedgerStore;
   let approvals: NegotiationApprovalStore;
-  let handler: NegotiationHandler;
+  let handler: ReturnType<typeof createMerchantHandler>;
   let seq = 0;
+  let clock: string;
+  let collection: { version: string; enabled: boolean; recipient: string };
+  let origin: string;
+  let destination: string | undefined;
 
-  beforeEach(async () => {
-    dir = mkdtempSync(join(tmpdir(), "kiwi-b2-"));
-    ledger = new LedgerStore({ dir, now: () => NOW });
-    approvals = new NegotiationApprovalStore(dir, () => NOW);
-    handler = createMerchantHandler({
-      productSource: {
-        async getProduct() {
-          return {
-            price: 850,
-            currency: "CNY",
-            unit: "piece",
-            stock: 1_000,
-            source_evidence: { system: "owned-test-fixture" },
-          };
-        },
+  const buildHandler = () => createMerchantHandler({
+    productSource: {
+      async getProduct() {
+        return {
+          price: 850,
+          currency: "CNY",
+          unit: "piece",
+          stock: 1_000,
+          source_evidence: { system: "owned-test-fixture" },
+          ...(destination !== undefined ? { handoff_destination: destination } : {}),
+        };
       },
-      ledger,
-      now: () => NOW,
-      sender: "merchant:merchant-001",
-      counterparty: "buyer:*",
-      merchantPolicy,
-      negotiationApprovals: approvals,
-    });
+    },
+    ledger,
+    now: () => clock,
+    sender: "merchant:merchant-001",
+    counterparty: "buyer:*",
+    merchantPolicy,
+    negotiationApprovals: approvals,
+    alipayCollection: { origin, current: () => collection },
+  });
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "kiwi-b2-"));
+    clock = NOW;
+    collection = { version: COLLECTION_VERSION, enabled: true, recipient: "张三示例" };
+    origin = "https://collections.kiwi.example";
+    destination = undefined;
+    ledger = new LedgerStore({ dir, now: () => clock });
+    approvals = new NegotiationApprovalStore(dir, () => clock);
+    handler = buildHandler();
     seq = 0;
   });
 
@@ -83,17 +98,18 @@ describe("merchant negotiation approval (B2)", () => {
       in_reply_to: inReplyTo ?? `msg_${seq - 1}`,
       actor: "buyer",
       action: action as NegotiationEnvelope["action"],
-      created_at: NOW,
+      created_at: clock,
       payload: payload as never,
     });
   };
 
-  const run = async (envelope: NegotiationEnvelope): Promise<NegotiationHandlerResult> =>
+  const run = async (envelope: NegotiationEnvelope, verified = false): Promise<NegotiationHandlerResult> =>
     handler.handle({
       envelope: envelope as never,
       message: { role: "user", parts: [], messageId: envelope.message_id },
       taskId: `task_${seq}`,
       senderIdentity: "buyer:buyer-001",
+      identityVerified: verified,
     });
 
   const counter = (unitPriceMinor: number) => {
@@ -201,6 +217,152 @@ describe("merchant negotiation approval (B2)", () => {
     expect(retried.kind).toBe("accepted");
     expect(offerPrice(retried)).toBe(80_000);
     expect(approvals.list("consumed")).toHaveLength(1);
+  });
+
+  it("仅把明确批准的正整数分 CNY 应付总额持久化到一次性授权", () => {
+    const newPending = (negotiation_id: string, currency: string) => approvals.recordPending({
+      negotiation_id, sku: SKU, currency, quantity: 10, unit: "piece", buyer_offer_minor: 70_000,
+    });
+    const pending = newPending(NEGOTIATION_ID, "CNY");
+    const usd = newPending("neg_b2_usd", "USD");
+    for (const total of [0, -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => approvals.approve({
+        approval_id: pending.approval_id, approved_minor: 75_000, alipay_total_minor: total,
+      })).toThrow(/alipay_total_minor/);
+    }
+    expect(() => approvals.approve({
+      approval_id: usd.approval_id, approved_minor: 75_000, alipay_total_minor: 754_321,
+    })).toThrow(/alipay_total_minor/);
+    approvals.approve({ approval_id: pending.approval_id, approved_minor: 75_000, alipay_total_minor: 754_321 });
+    const reopened = new NegotiationApprovalStore(dir, () => NOW);
+    expect(reopened.consume({ negotiation_id: NEGOTIATION_ID, sku: SKU, currency: "CNY", quantity: 11, unit: "piece" })).toBeUndefined();
+    expect(reopened.consume({ negotiation_id: NEGOTIATION_ID, sku: SKU, currency: "CNY", quantity: 10, unit: "piece" }))
+      .toMatchObject({ approved_minor: 75_000, alipay_total_minor: 754_321 });
+    expect(reopened.consume({ negotiation_id: NEGOTIATION_ID, sku: SKU })).toBeUndefined();
+  });
+
+  const approvedCounter = async (input: { total?: number; retryMinor?: number; verified?: boolean } = {}) => {
+    const verified = input.verified ?? true;
+    await run(envelopeFor("rfq", { type: "rfq", items: [{ sku: SKU, quantity: { value: 10, unit: "piece" } }] }), verified);
+    expect(await run(counter(70_000), verified)).toMatchObject({ kind: "declined", reasonCode: "approval_required" });
+    approvals.approve({
+      approval_id: approvals.list("pending")[0]!.approval_id,
+      approved_minor: 75_000,
+      ...(input.total !== undefined ? { alipay_total_minor: input.total } : {}),
+    });
+    const result = await run(counter(input.retryMinor ?? 70_000), verified);
+    if (result.kind !== "accepted" || result.message?.parts[0]?.kind !== "data") throw new Error("missing merchant offer");
+    const envelope = result.message.parts[0].data.knp_envelope as NegotiationEnvelope;
+    expect(envelope.action).toBe("conditional_offer");
+    if (envelope.payload.type !== "conditional_offer") throw new Error("missing conditional offer payload");
+    return { envelope, terms: envelope.payload.base_terms as unknown as Record<string, unknown>, offerId: envelope.payload.offer_id };
+  };
+
+  it("在发出最终报价前绑定商家批准的总额、脱敏收款人和同源入口", async () => {
+    const { envelope, offerId, terms } = await approvedCounter({ total: 754_321 });
+    expect(terms).toMatchObject({
+      handoff_destination: `${origin}/collect/alipay/${NEGOTIATION_ID}/${offerId}/${COLLECTION_VERSION}`,
+      kiwi_alipay_collection: { version: COLLECTION_VERSION, recipient_summary: "张***", total_minor: 754_321, currency: "CNY", expires_at: "2026-10-29T11:00:00.000Z" },
+    });
+    expect(JSON.stringify(envelope)).not.toContain(collection.recipient);
+  });
+
+  const acceptEnvelopeFor = ({ envelope, offerId, terms }: Awaited<ReturnType<typeof approvedCounter>>) =>
+    envelopeFor("accept_nonbinding", { type: "accept_nonbinding", offer_id: offerId, terms_digest: contentDigest(terms as never) }, envelope.message_id);
+
+  it("仅为对应已达成协议的验签买家解析同一报价，重启后保持有效", async () => {
+    const quote = await approvedCounter({ total: 754_321 });
+    const accept = acceptEnvelopeFor(quote);
+    const result = await run(accept, true);
+    if (result.kind !== "accepted" || result.artifactParts?.[0]?.kind !== "data") throw new Error("missing merchant agreement");
+    const agreement = result.artifactParts[0].data.agreement as Record<string, unknown>;
+    expect(agreement).toMatchObject({
+      agreed_terms: quote.terms,
+      handoff_destination: quote.terms.handoff_destination,
+      creates_order: false,
+      reserves_inventory: false,
+      authorizes_payment: false,
+    });
+    const input = {
+      negotiationId: NEGOTIATION_ID,
+      offerId: quote.offerId,
+      agreementId: String(agreement.agreement_id),
+      termsDigest: contentDigest(quote.terms as never),
+      version: COLLECTION_VERSION,
+      buyerPrincipalId: "buyer:buyer-001",
+    };
+    const expected = { version: COLLECTION_VERSION, totalMinor: 754_321, currency: "CNY", expiresAt: "2026-10-29T11:00:00.000Z" };
+    expect(handler.resolveAlipayCollection(input)).toEqual(expected);
+    handler = buildHandler();
+    expect(handler.resolveAlipayCollection(input)).toEqual(expected);
+    for (const key of Object.keys(input) as Array<keyof typeof input>) {
+      expect(handler.resolveAlipayCollection({ ...input, [key]: "wrong" })).toBeUndefined();
+    }
+    collection.enabled = false;
+    expect(handler.resolveAlipayCollection(input)).toBeUndefined();
+    collection.enabled = true;
+    collection.version = NEXT_COLLECTION_VERSION;
+    expect(handler.resolveAlipayCollection(input)).toBeUndefined();
+    collection.version = COLLECTION_VERSION;
+    clock = "2026-10-29T11:00:00Z";
+    expect(handler.resolveAlipayCollection(input)).toBeUndefined();
+  });
+
+  it("协议预写完成但相位未持久化时不得解析，补齐后才可解析", async () => {
+    const quote = await approvedCounter({ total: 754_321 });
+    const accept = acceptEnvelopeFor(quote);
+    const append = ledger.append.bind(ledger);
+    let agreementId: string | undefined;
+    const storageFault = vi.spyOn(ledger, "append").mockImplementation((event) => {
+      if (event.state_transition?.to_phase === "AGREEMENT_REACHED") throw new Error("phase storage unavailable");
+      const result = append(event);
+      if (event.event_kind === "system" && event.outcome.kind === "ok" && event.outcome.result?.kind === "agreement_issued") {
+        agreementId = event.agreement_id;
+      }
+      return result;
+    });
+    await expect(run(accept, true)).rejects.toThrow("phase storage unavailable");
+    storageFault.mockRestore();
+    expect(agreementId).toBeDefined();
+    const input = {
+      negotiationId: NEGOTIATION_ID, offerId: quote.offerId, agreementId: agreementId!,
+      termsDigest: contentDigest(quote.terms as never), version: COLLECTION_VERSION, buyerPrincipalId: "buyer:buyer-001",
+    };
+    expect(handler.resolveAlipayCollection(input)).toBeUndefined();
+    handler = buildHandler();
+    expect(handler.resolveAlipayCollection(input)).toBeUndefined();
+    const recover = () => handler.recoverAccept?.({
+      envelope: accept, message: { role: "user", parts: [], messageId: accept.message_id },
+      taskId: "task_recovery", senderIdentity: input.buyerPrincipalId, identityVerified: true,
+    });
+    collection.version = NEXT_COLLECTION_VERSION;
+    expect(await recover()).toBeUndefined();
+    collection.version = COLLECTION_VERSION;
+    expect(await recover()).toMatchObject({ kind: "accepted" });
+    expect(handler.resolveAlipayCollection(input)).toMatchObject({ totalMinor: 754_321 });
+  });
+
+  it.each([
+    { title: "未批准总额", input: {} },
+    { title: "报价单价与人工批准单价不同", input: { total: 754_321, retryMinor: 80_000 } },
+    { title: "买家未验签", input: { total: 754_321, verified: false } },
+    { title: "已有平台商品入口", input: { total: 754_321 }, marketplace: "https://item.jd.com/10001000001.html" },
+    { title: "配置非 HTTPS", input: { total: 754_321 }, invalidOrigin: "http://collections.kiwi.example" },
+  ])("$title 时不发布支付宝收款入口", async ({ input, marketplace, invalidOrigin }) => {
+    destination = marketplace;
+    if (invalidOrigin !== undefined) origin = invalidOrigin;
+    handler = buildHandler();
+    const { terms } = await approvedCounter(input);
+    expect(terms.kiwi_alipay_collection).toBeUndefined();
+    expect(terms.handoff_destination).toBe(marketplace);
+  });
+
+  it("已验签报价拒绝未验签接受及配置换绑后接受", async () => {
+    const quote = await approvedCounter({ total: 754_321 });
+    const accept = acceptEnvelopeFor(quote);
+    expect(await run(accept)).toMatchObject({ kind: "declined", reasonCode: "approval_required" });
+    collection.version = NEXT_COLLECTION_VERSION;
+    expect(await run(accept, true)).toMatchObject({ kind: "declined", reasonCode: "approval_required" });
   });
 
   it("授权过期后不生效，回到审批流程", async () => {

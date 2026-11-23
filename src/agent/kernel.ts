@@ -53,7 +53,9 @@ import {
   recordLaunch,
   recordOpenEvidence,
 } from "../handoff/index.js";
-import { buildBuyerTools } from "./buyer/buyer-tools.js";
+import { buildBuyerTools, resolveTaskAlipayCollection } from "./buyer/buyer-tools.js";
+import type { NativeAlipayReader } from "./alipay-native-view.js";
+import { validateHandoffCandidate } from "../handoff/candidate.js";
 import { TaskScheduler, type TickBudget, type TickResult } from "./buyer/scheduler.js";
 import { BuyerTaskStore } from "./buyer/task-store.js";
 import { SupplierScheduler } from "./supplier/scheduler.js";
@@ -131,6 +133,8 @@ export interface AgentKernelOptions {
   vault?: PrivateVault;
   /** Buyer tasks read facts through this connector (v0.3.0-B). */
   connector?: CommerceConnector;
+  /** 仅原生买家 TUI 界面配置；不得注入通用宿主。 */
+  alipayCollectionReader?: NativeAlipayReader;
   /**
    * Negotiation CommerceClient (v0.3.0-C): claim/snapshot/submit for linked
    * consultations. Optional — negotiation tools fail closed when absent.
@@ -423,6 +427,7 @@ export class AgentKernel {
   private shutdownRequested = false;
   private closed = false;
   private readonly taskStore?: BuyerTaskStore;
+  private readonly alipayCollectionReader?: NativeAlipayReader;
   private readonly scheduler?: TaskScheduler;
   /** M1：Buyer-owned supplier pull scheduler（buyer 角色构造；与 TaskScheduler 同一 tick 链）。 */
   private readonly supplierScheduler?: SupplierScheduler;
@@ -491,6 +496,7 @@ export class AgentKernel {
     principal: Principal;
     session: AgentSession;
     taskStore?: BuyerTaskStore;
+    alipayCollectionReader?: NativeAlipayReader;
     scheduler?: TaskScheduler;
     supplierScheduler?: SupplierScheduler;
     approvals?: WriteApprovalCandidateStore;
@@ -514,6 +520,7 @@ export class AgentKernel {
     this.principal = options.principal;
     this.session = options.session;
     if (options.taskStore !== undefined) this.taskStore = options.taskStore;
+    if (options.alipayCollectionReader !== undefined) this.alipayCollectionReader = options.alipayCollectionReader;
     if (options.scheduler !== undefined) this.scheduler = options.scheduler;
     if (options.supplierScheduler !== undefined) this.supplierScheduler = options.supplierScheduler;
     if (options.approvals !== undefined) this.approvals = options.approvals;
@@ -705,6 +712,7 @@ export class AgentKernel {
         now: clock,
         recordNegotiation: (input) => rememberNegotiation(store, input),
         handoff: { ledger: handoffLedger, idempotency: handoffIdempotency },
+        ...(options.alipayCollectionReader === undefined ? {} : { alipayCollectionAvailable: true }),
         supplierStore,
       });
     } else if (
@@ -840,6 +848,7 @@ export class AgentKernel {
       turnId,
       now: clock,
       ...(taskStore !== undefined ? { taskStore } : {}),
+      ...(options.alipayCollectionReader === undefined ? {} : { alipayCollectionReader: options.alipayCollectionReader }),
       ...(scheduler !== undefined ? { scheduler } : {}),
       ...(supplierScheduler !== undefined ? { supplierScheduler } : {}),
       ...(options.commerceClient !== undefined ? { commerceClient: options.commerceClient } : {}),
@@ -949,6 +958,44 @@ export class AgentKernel {
       }
     }
     return { enabled: true, candidates, handoffs };
+  }
+
+  /** 私有资料只由用户在 TUI 主动打开，永不返回给 chat tool 或模型。 */
+  async openAlipayCollection(handoffId: string, negotiationId: string): Promise<string> {
+    const unavailable = "无法查看收款指引：请使用已签名的 Kiwi 买家端并确认交接，或联系商家核实。";
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(negotiationId) || this.handoffRuntime === undefined ||
+        this.taskStore === undefined || this.alipayCollectionReader === undefined) return unavailable;
+    try {
+      const ledger = this.handoffRuntime.ledger;
+      const events = ledger.events(negotiationId).map((event) => ledger.resolvePayload(event));
+      const handoffEvents = events.filter((event) => event.handoff_id === handoffId);
+      const state = deliveryState(handoffEvents);
+      if (state !== "DELIVERED" && state !== "LAUNCHED" && state !== "OPENED_CONFIRMED") return unavailable;
+      const delivered = handoffEvents.find((event) => event.event_kind === "handoff_delivered");
+      if (delivered?.handoff_candidate_id === undefined) return unavailable;
+      const candidateEvents = events.filter((event) => event.handoff_candidate_id === delivered.handoff_candidate_id);
+      const created = candidateEvents.find((event) => event.event_kind === "handoff_candidate_created");
+      if (!candidateEvents.some((event) => event.event_kind === "handoff_candidate_ready") ||
+          foldCandidateLifecycle(candidateEvents) !== "CONSUMED" || created?.outcome.kind !== "ok") return unavailable;
+      const candidate = validateHandoffCandidate(created.outcome.result?.candidate);
+      const now = Date.parse(this.clock());
+      if (candidate.destination_type !== "external_checkout_url" || !(Date.parse(candidate.expires_at) > now)) return unavailable;
+      for (const task of this.taskStore.listTasks({ statuses: ["selected_nonbinding"] })) {
+        const resolved = resolveTaskAlipayCollection(this.taskStore.taskEvents(task.task_id), now);
+        if (resolved.kind !== "collection" || resolved.link.negotiationId !== negotiationId ||
+            resolved.agreementId !== candidate.agreement_id || resolved.termsDigest !== candidate.terms_digest ||
+            resolved.link.url !== candidate.destination_ref || delivered.destination?.["ref"] !== resolved.link.url ||
+            delivered.destination?.["final_url"] !== resolved.link.url) continue;
+        await this.alipayCollectionReader({
+          origin: resolved.link.origin,
+          binding: { negotiationId, offerId: resolved.link.offerId, version: resolved.link.version, agreementId: resolved.agreementId, termsDigest: resolved.termsDigest },
+          totalMinor: resolved.metadata.total_minor,
+          expiresAt: resolved.metadata.expires_at,
+        });
+        return "已在本机浏览器打开私有收款指引。请在支付宝核对收款人和金额；Kiwi 不确认到账。";
+      }
+      return unavailable;
+    } catch { return unavailable; }
   }
 
   /** 模拟 OS/browser/deep-link handler 启动（LAUNCHED；不证明页面加载）。 */

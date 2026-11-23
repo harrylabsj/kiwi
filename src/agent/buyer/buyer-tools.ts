@@ -43,6 +43,17 @@ import {
   type MarketplaceListingSnapshot,
 } from "../../handoff/launch-marketplace-policy.js";
 import { isUrlDestinationType } from "../../handoff/destination.js";
+import {
+  ALIPAY_COLLECTION_NOTICE,
+  ALIPAY_PRIVATE_DISPLAY_REQUIRED,
+  isAlipayCollectionAgreement,
+  isAlipayCollectionDestination,
+  parseAlipayCollectionLink,
+  parseAlipayCollectionTerms,
+  type AlipayCollectionLink,
+  type AlipayCollectionTerms,
+} from "../../handoff/alipay-collection.js";
+import type { A2AOutboundSignerLike } from "../../a2a/signing-key.js";
 import { CatalogSourceError } from "../../discovery/catalog-source/errors.js";
 import { CommerceError } from "../../commerce/data-source.js";
 import type { ExecuteHandoffResult } from "../../handoff/index.js";
@@ -58,13 +69,13 @@ import type { CredentialBroker } from "../merchant/credential-broker.js";
 import { requireScopeCredential } from "../merchant/credential-broker.js";
 import {
   NEGOTIATE_DEAL_PRICE_MINOR,
-  defaultNegotiateDeliveryBefore,
   NEGOTIATE_SKU,
   negotiateWithAgent,
   summarizeNegotiation,
+  type MerchantApprovalResume,
 } from "../../a2a/negotiate.js";
 import { buildNegotiationChatTools, writeGateText } from "../negotiation-chat.js";
-import { routeWriteCandidate, type WriteGateDeps } from "../write-gate.js";
+import { APPROVAL_TTL_MS, routeWriteCandidate, type WriteGateDeps } from "../write-gate.js";
 import { runSearchCycle } from "./search-loop.js";
 import { assertTrackingRuleType, type BuyerTaskStore } from "./task-store.js";
 import type { SupplierRelationshipStore } from "../supplier/store.js";
@@ -273,6 +284,10 @@ export interface BuyerToolDeps {
    * 工具（agreement → 审批门 → 安全交接）；缺失时工具不挂载（fail closed）。
    */
   handoff?: { ledger: HandoffEventStore; idempotency: HandoffIdempotencyStore };
+  /** Native host assertion: independent buyer signer AND dedicated private display. Never a tool input. */
+  alipayCollectionAvailable?: boolean;
+  /** Trusted host signer; when absent, negotiation resolves its native env signer. */
+  outboundSigner?: A2AOutboundSignerLike;
   /**
    * 供应商关系存储（pull-relationship 设计 v0.1 §13 M0；kernel 注入）。提供时
    * RFQ 成功后写 `supplier_save_suggested` 本地建议事件；缺失时不建议。
@@ -340,6 +355,13 @@ const NEGOTIABLE_TASK_STATUSES: ReadonlySet<BuyerTaskStatus> = new Set([
   "awaiting_user",
 ]);
 
+function pendingMerchantApproval(store: BuyerTaskStore, taskId: string): MerchantApprovalResume | undefined {
+  // This event is written only from a signed merchant response, never a tool parameter.
+  const pending = [...store.taskEvents(taskId)].reverse().find((event) =>
+    event.type === "a2a_negotiated" && event.payload.merchant_approval_resume !== undefined);
+  return pending?.payload.merchant_approval_resume as MerchantApprovalResume | undefined;
+}
+
 /** 磋商前置快照（审批候选 + 执行前重读用，§16）。 */
 function negotiationPreconditions(
   store: BuyerTaskStore,
@@ -351,6 +373,7 @@ function negotiationPreconditions(
     task_status: task?.status ?? null,
     task_version: task?.version ?? null,
     catalog_configured: catalogConfigured,
+    merchant_pending_negotiation_id: pendingMerchantApproval(store, taskId)?.negotiationId ?? null,
   };
 }
 
@@ -385,8 +408,11 @@ async function executeNegotiateBuyerTask(
     .listCandidates(a.task_id)
     .find((c) => c.candidate_status === "shortlisted" || c.candidate_status === "selected")?.sku;
   const sku = candidateSku ?? intent.category ?? intent.query_text ?? NEGOTIATE_SKU;
+  const resume = pendingMerchantApproval(store, a.task_id);
   const result = await negotiateWithAgent({
     catalog: deps.catalog,
+    allowMerchantApprovalResume: deps.alipayCollectionAvailable === true,
+    ...(resume === undefined ? {} : { resume }),
     allowLoopback: deps.allowLoopback === true,
     // CD #27：listing → owner_agent_id → getRecord → fresh verify 全链，
     // 与 search_listings 同一注入源（历史教训：只注入 search 面不注入磋商面）。
@@ -405,8 +431,9 @@ async function executeNegotiateBuyerTask(
             return converted.lossless ? converted.amount_minor : NEGOTIATE_DEAL_PRICE_MINOR;
           })()
         : NEGOTIATE_DEAL_PRICE_MINOR,
-    deliveryBefore: intent.needed_by ?? defaultNegotiateDeliveryBefore(),
+    ...(intent.needed_by !== undefined ? { deliveryBefore: intent.needed_by } : {}),
     senderIdentity: deps.profile.agent_id,
+    ...(deps.outboundSigner !== undefined ? { outboundSigner: deps.outboundSigner } : {}),
     // 预算硬约束（单价上限）：成交价超此值即拒绝。优先 constraints.max_unit_price；
     // 只有总预算时按数量折算单价。
     maxPriceMinor: (() => {
@@ -425,6 +452,21 @@ async function executeNegotiateBuyerTask(
     })(),
   });
   const eventKey = `a2a-neg:${a.task_id}:${result.negotiationId}`;
+  if (result.merchantApprovalResume !== undefined) {
+    store.appendEvent(a.task_id, "a2a_negotiated", {
+      ok: false,
+      negotiation_id: result.negotiationId,
+      catalog_agent_id: result.catalogAgentId,
+      merchant_approval_resume: result.merchantApprovalResume,
+    }, "model", `${eventKey}:merchant-approval`);
+    return {
+      ok: true,
+      status: "merchant_approval_pending",
+      task_id: a.task_id,
+      negotiation_id: result.negotiationId,
+      text: "商家需要人工确认本次报价。商家确认后，请使用同一任务继续磋商；请勿自动反复重试。",
+    };
+  }
   if (!result.ok) {
     store.appendEvent(
       a.task_id,
@@ -484,6 +526,9 @@ async function executeNegotiateBuyerTask(
         // agreementReader 以此做 pre-execution revalidation（§10）。
         agreed_terms: result.agreement?.agreed_terms ?? null,
         terms_digest: result.agreement?.terms_digest ?? null,
+        accepted_offer_id: result.agreement?.accepted_offer_id ?? null,
+        handoff_destination: result.agreement?.handoff_destination ?? null,
+        accepted_channel_url: result.acceptedChannelUrl ?? null,
         merchant_identity_ref: `merchant:${result.catalogAgentId}`,
       },
       origin: "model",
@@ -1299,7 +1344,8 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
       "SKU/数量/目标单价/交期取自任务 intent（category 或 query_text 视为 SKU）。" +
       "结果是非绑定协议（不创建订单、不锁库存、不授权支付）。写操作：supervised 模式" +
       "需 /approve 批准后才真正发送消息；任务须处于 ready/tracking/shortlist_ready/awaiting_user。" +
-      "达成协议后任务进入 selected_nonbinding。",
+      "达成协议后任务进入 selected_nonbinding。原生签名终端若收到 merchant_approval_pending，" +
+      "在商家确认后用同一 task_id 继续；不得换商家或自动轮询。",
     parameters: {
       type: "object",
       properties: {
@@ -1401,7 +1447,8 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
       "目的地**只取商家在协议里直传的成交入口**（merchant 从 shopping-cli 读的 handoff_destination），" +
       "不允许 LLM 自编、也不读 catalog 投影——协议未带成交入口则拒绝交接。" +
       "经审批门（supervised 需 /approve）后执行：重验 agreement/terms/destination/expiry，" +
-      "安全交付到 external checkout URL。不创建订单、不授权支付、不预留库存。",
+      "安全交付到 external checkout URL。不创建订单、不授权支付、不预留库存。" +
+      "支付宝收款必须由具备私有显示能力的原生终端人工批准，只传 task_id；请勿覆盖收款摘要、有效期或目的地。",
     parameters: {
       type: "object",
       properties: {
@@ -1445,9 +1492,22 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
         if (agreement === undefined) {
           return textResult("任务记录缺少 agreement 快照（磋商未完成或 terms 未持久化）。");
         }
-        // 成交入口**只取商家在协议里直传的** handoff_destination——不经 catalog、
-        // 不允许 LLM 现编。协议未携带则拒绝交接（fail-closed）。
-        const agreementDestination = agreementDestinationFromTerms(agreement.agreed_terms);
+        const collection = resolveAlipayCollection(agreement, Date.parse(deps.now()));
+        if (collection.kind !== "ordinary") {
+          if (deps.alipayCollectionAvailable !== true || deps.registerPending === undefined) {
+            return textResult(ALIPAY_PRIVATE_DISPLAY_REQUIRED, { status: "authorization_denied" });
+          }
+          if (Object.keys(p).some((key) => key !== "task_id")) {
+            return textResult("支付宝交接仅接受 task_id；不得覆盖商家声明的目的地、收款摘要或有效期。", { status: "invalid_params" });
+          }
+          if (collection.kind !== "collection") {
+            return textResult(collection.kind === "expired" ? "支付宝收款指引已过期。" : "支付宝收款指引未绑定同源的签名磋商与已接受协议。", { status: collection.kind });
+          }
+        }
+        // Use the exact merchant declaration; never derive a collection from model input.
+        const agreementDestination = collection.kind === "collection"
+          ? { type: "external_checkout_url", ref: collection.link.url }
+          : agreementDestinationFromTerms(agreement.agreed_terms);
         if (agreementDestination === undefined) {
           return textResult("商家未在协议中声明成交入口（handoff_destination），无法交接。");
         }
@@ -1464,6 +1524,9 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
               (e.destination as { type?: unknown } | undefined)?.type === destination.type,
           );
         if (priorDelivery !== undefined) {
+          if (collection.kind === "collection") {
+            return textResult("该支付宝协议已交付过，请在原生终端手动查看；未重复交接。", { status: "already_delivered" });
+          }
           return textResult(
             `该协议已交付过（handoff ${priorDelivery.handoff_id ?? "unknown"}，` +
               `目的地 ${destination.type} ${destination.ref}），同一目的地不重复交接。`,
@@ -1493,6 +1556,12 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
         const lastStale = [...handoff.ledger.events(agreement.negotiation_id).map((event) => handoff.ledger.resolvePayload(event))]
           .reverse()
           .find((e) => e.event_kind === "handoff_candidate_stale");
+        const now = deps.now();
+        const nowMs = Date.parse(now);
+        const expiresAtMs = collection.kind === "collection"
+          ? Math.min(nowMs + expiresInHours * 3_600_000, Date.parse(collection.metadata.expires_at))
+          : nowMs + expiresInHours * 3_600_000;
+        const collectionSummary = collection.kind === "collection" ? alipayDisplaySummary(collection.metadata) : undefined;
         const candidate = createHandoffCandidate({
           agreement_id: agreement.agreement_id,
           negotiation_id: agreement.negotiation_id,
@@ -1501,14 +1570,14 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
           merchant_identity_ref: agreement.merchant_identity_ref,
           destination: { type: destination.type, ref: destination.ref },
           display_summary: {
-            merchant: p.display_summary_merchant ?? agreement.merchant_identity_ref,
-            summary: p.display_summary_text ?? `negotiation ${agreement.negotiation_id}`,
+            merchant: collection.kind === "collection" ? agreement.merchant_identity_ref : (p.display_summary_merchant ?? agreement.merchant_identity_ref),
+            summary: collectionSummary ?? p.display_summary_text ?? `negotiation ${agreement.negotiation_id}`,
           },
           policy_version: "handoff-policy/1",
           // 时钟统一用注入的 deps.now()（此前 created_at 走墙钟、事件走注入时钟，
           // time_to_handoff 指标掺入偏差）。
-          created_at: deps.now(),
-          expires_at: new Date(Date.parse(deps.now()) + expiresInHours * 3_600_000).toISOString(),
+          created_at: now,
+          expires_at: new Date(expiresAtMs).toISOString(),
           ...(lastStale?.handoff_candidate_id !== undefined
             ? { supersedes_candidate_id: lastStale.handoff_candidate_id }
             : {}),
@@ -1570,6 +1639,10 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
             },
             preconditions: { agreement_bound: true },
             risk: "handoff_delivery",
+            ...(collection.kind === "collection" ? {
+              force_pending: true,
+              ttl_ms: Math.min(APPROVAL_TTL_MS, expiresAtMs - nowMs),
+            } : {}),
             execute: (approvedArgs) => executeHandoffForCandidate(deps, approvedArgs),
             // §16 stale 检测的真实重读：approval 与执行之间协议被重磋商改写
             //（agreement 消失 / 身份变化 / terms_digest 不匹配）→ 候选 supersede。
@@ -1582,6 +1655,12 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
                 current.agreement_id === agreement.agreement_id &&
                 current.negotiation_id === agreement.negotiation_id &&
                 contentDigest(current.agreed_terms) === candidate.terms_digest;
+              if (collection.kind === "collection") {
+                const fresh = resolveAlipayCollection(current, Date.parse(deps.now()));
+                return { agreement_bound: stillBound && fresh.kind === "collection" &&
+                  fresh.link.url === collection.link.url && deps.alipayCollectionAvailable === true &&
+                  deps.store.getTask(p.task_id)?.status === "selected_nonbinding" };
+              }
               return { agreement_bound: stillBound };
             },
             // autopilot 政策闸：handoff 把买家送向真实成交入口（外部结账/PO/联系
@@ -1595,7 +1674,11 @@ export function buildBuyerTools(deps: BuyerToolDeps): Tool[] {
                   : "handoff 交付默认需要人工确认；如确需自动执行，请在 profile 设置 buyer_policy.auto_handoff: true。",
           },
         );
-        return writeGateText(outcome);
+        const rendered = writeGateText(outcome);
+        if (collectionSummary !== undefined && (outcome.kind === "pending_approval" || outcome.kind === "advice_only")) {
+          return textResult(`商家 ${agreement.merchant_identity_ref}；${collectionSummary}\n${rendered.content[0]?.type === "text" ? rendered.content[0].text : ""}`, rendered.details);
+        }
+        return rendered;
       } catch (err) {
         return textResult(errorText(err));
       }
@@ -2046,6 +2129,10 @@ function agreementFromTask(events: readonly TaskEvent[]):
       negotiation_id: string;
       agreed_terms: unknown;
       merchant_identity_ref: string;
+      accepted_offer_id?: string;
+      handoff_destination?: unknown;
+      accepted_channel_url?: string;
+      terms_digest?: string;
       /** merchant 声明域（从 a2a_negotiated 的 agent_card_url 派生；URL 安全用）。 */
       merchant_domain?: string;
     }
@@ -2088,9 +2175,50 @@ function agreementFromTask(events: readonly TaskEvent[]):
           ? payload.merchant_identity_ref
           : "merchant:unknown",
       ...(merchantDomain !== undefined ? { merchant_domain: merchantDomain } : {}),
+      ...(typeof payload.accepted_offer_id === "string" ? { accepted_offer_id: payload.accepted_offer_id } : {}),
+      handoff_destination: payload.handoff_destination,
+      ...(typeof payload.accepted_channel_url === "string" ? { accepted_channel_url: payload.accepted_channel_url } : {}),
+      ...(typeof payload.terms_digest === "string" ? { terms_digest: payload.terms_digest } : {}),
     };
   }
   return undefined;
+}
+
+type TaskAlipayCollection =
+  | { kind: "ordinary" | "invalid" | "expired" }
+  | { kind: "collection"; link: AlipayCollectionLink; metadata: AlipayCollectionTerms; agreementId: string; termsDigest: string };
+
+/** Derive the collection only from the accepted KNP snapshot in the owned task. */
+export function resolveTaskAlipayCollection(events: readonly TaskEvent[], nowMs: number): TaskAlipayCollection {
+  return resolveAlipayCollection(agreementFromTask(events), nowMs);
+}
+
+function resolveAlipayCollection(agreement: ReturnType<typeof agreementFromTask>, nowMs: number): TaskAlipayCollection {
+  if (agreement === undefined || !isAlipayCollectionAgreement(agreement.agreed_terms, agreement.handoff_destination)) {
+    return { kind: "ordinary" };
+  }
+  const terms = agreement.agreed_terms as { handoff_destination?: unknown };
+  const declared = agreement.handoff_destination;
+  const link = typeof declared === "string" ? parseAlipayCollectionLink(declared) : null;
+  const metadata = parseAlipayCollectionTerms(terms);
+  if (link === null || metadata === null || declared !== terms?.handoff_destination ||
+      link.negotiationId !== agreement.negotiation_id || link.offerId !== agreement.accepted_offer_id ||
+      link.version !== metadata.version || agreement.terms_digest !== contentDigest(terms) ||
+      agreement.accepted_channel_url === undefined || !Number.isFinite(nowMs)) return { kind: "invalid" };
+  try {
+    const channel = new URL(agreement.accepted_channel_url);
+    if (channel.origin !== link.origin || channel.username !== "" || channel.password !== "") return { kind: "invalid" };
+  } catch {
+    return { kind: "invalid" };
+  }
+  if (Date.parse(metadata.expires_at) <= nowMs) return { kind: "expired" };
+  return { kind: "collection", link, metadata, agreementId: agreement.agreement_id, termsDigest: agreement.terms_digest };
+}
+
+function alipayDisplaySummary(metadata: AlipayCollectionTerms): string {
+  const whole = Math.floor(metadata.total_minor / 100);
+  const fraction = String(metadata.total_minor % 100).padStart(2, "0");
+  return `支付宝收款方 ${metadata.recipient_summary}；金额 CNY ${whole}.${fraction}；有效期 ${metadata.expires_at}。${ALIPAY_COLLECTION_NOTICE}`;
 }
 
 function handoffResultText(result: ExecuteHandoffResult): AgentToolResult<unknown> {
@@ -2148,6 +2276,18 @@ async function executeHandoffForCandidate(
       status: "stale",
       error: "任务记录缺少 agreement 快照，交接中止（fail-closed）",
     };
+  }
+  const collection = resolveAlipayCollection(agreement, Date.parse(deps.now()));
+  const collectionLink = collection.kind === "collection" ? collection.link : undefined;
+  if (collection.kind !== "ordinary" || isAlipayCollectionDestination(a.candidate.destination_ref)) {
+    if (deps.alipayCollectionAvailable !== true || collectionLink === undefined ||
+        deps.store.getTask(a.task_id)?.status !== "selected_nonbinding" ||
+        a.candidate.agreement_id !== agreement.agreement_id || a.candidate.negotiation_id !== agreement.negotiation_id ||
+        a.candidate.terms_digest !== agreement.terms_digest ||
+        a.candidate.merchant_identity_ref !== agreement.merchant_identity_ref ||
+        a.candidate.destination_type !== "external_checkout_url" || a.candidate.destination_ref !== collectionLink.url) {
+      return { ok: false, status: "stale", error: "支付宝交接不再匹配当前协议、目的地或终端能力。" };
+    }
   }
   // ── A651 包四：三平台市场形态 URL 目的地的强制交易门输入 ─────────────
   // 审批链带回的 sidecar + 执行期 configured CatalogSource 新鲜重读；市场
@@ -2226,36 +2366,57 @@ async function executeHandoffForCandidate(
       negotiation_id: agreement.negotiation_id,
       agreed_terms: agreement.agreed_terms,
     }),
-    urlSafety: (url: string) =>
-      validateExternalDestinationUrl(url, {
+    urlSafety: async (url: string) => {
+      if (collection.kind === "collection") {
+        const safe = await validateExternalDestinationUrl(url, {
+          expectedHost: new URL(collection.link.origin).hostname,
+          maxRedirects: 0,
+          onHop: (hop) => {
+            if (hop !== collection.link.url) throw new CommerceError("invalid_input", "collection destination changed");
+          },
+        });
+        const fresh = resolveTaskAlipayCollection(deps.store.taskEvents(a.task_id), Date.parse(deps.now()));
+        if (safe.finalUrl !== collection.link.url || fresh.kind !== "collection" ||
+            fresh.link.url !== collection.link.url || fresh.agreementId !== collection.agreementId ||
+            fresh.termsDigest !== collection.termsDigest || deps.store.getTask(a.task_id)?.status !== "selected_nonbinding") {
+          throw new CommerceError("invalid_input", "collection agreement no longer matches the approved destination");
+        }
+        return safe;
+      }
+      return validateExternalDestinationUrl(url, {
         ...(agreement.merchant_domain !== undefined ? { expectedHost: agreement.merchant_domain } : {}),
         ...(declaredHost !== undefined ? { allowlist: [declaredHost] } : {}),
         allowHttp: false,
-        ...(launchTarget !== undefined
-          ? {
-              onHop: (hopUrl: string): void => {
-                let parsed: ReturnType<typeof parseMarketplaceTradeUrl>;
-                try {
-                  parsed = parseMarketplaceTradeUrl(hopUrl);
-                } catch {
-                  throw new CommerceError(
-                    "invalid_input",
-                    "destination hop left the marketplace trade form (same platform, same product id required)",
-                  );
-                }
-                if (!sameMarketplaceTarget(parsed, launchTarget)) {
-                  throw new CommerceError(
-                    "invalid_input",
-                    "destination redirect changed platform product identity",
-                  );
-                }
-              },
-            }
-          : {}),
-      }),
+        onHop: (hopUrl) => {
+          if (isAlipayCollectionDestination(hopUrl)) {
+            throw new CommerceError("invalid_input", "ordinary handoff cannot redirect to an Alipay collection destination");
+          }
+          if (launchTarget === undefined) return;
+          let parsed: ReturnType<typeof parseMarketplaceTradeUrl>;
+          try {
+            parsed = parseMarketplaceTradeUrl(hopUrl);
+          } catch {
+            throw new CommerceError(
+              "invalid_input",
+              "destination hop left the marketplace trade form (same platform, same product id required)",
+            );
+          }
+          if (!sameMarketplaceTarget(parsed, launchTarget)) {
+            throw new CommerceError("invalid_input", "destination redirect changed platform product identity");
+          }
+        },
+      });
+    },
     ...(launchContext !== undefined ? { launchContext } : {}),
     now: deps.now,
   });
+  if (collection.kind === "collection") {
+    const ok = result.kind === "delivered" || result.kind === "already_delivered";
+    return {
+      ok, status: result.kind,
+      text: ok ? `支付宝交接已记录；请在原生终端手动查看。${ALIPAY_COLLECTION_NOTICE}` : "支付宝收款入口未交付；请重新核对协议及其有效期。",
+    };
+  }
   const rendered = handoffResultText(result);
   return {
     ok: result.kind === "delivered" || result.kind === "already_delivered",
