@@ -51,6 +51,8 @@ export interface NegotiationApprovalRecord {
   updated_at: string;
   /** 人工批准的单价（minor）；仅 approved/consumed 有值。 */
   approved_minor?: number;
+  /** 明确批准的全项 CNY 应付总额（分），绑定此授权的商品、数量、单位和批准价。 */
+  alipay_total_minor?: number;
   approved_by?: string;
   expires_at?: string;
   /** 人工拒绝（pending → rejected）；rejected 后不再可批准。 */
@@ -80,6 +82,8 @@ export interface ApproveInput {
   negotiation_id?: string;
   sku?: string;
   approved_minor: number;
+  /** 全项 CNY 应付总额（分）；未明确确认时不填。 */
+  alipay_total_minor?: number;
   /** 授权有效期，秒；缺省 1 小时。 */
   ttl_seconds?: number;
   approved_by?: string;
@@ -324,6 +328,12 @@ export class NegotiationApprovalStore {
     if (record === undefined) {
       throw new Error("no pending negotiation approval matches the request");
     }
+    const total = input.alipay_total_minor;
+    if (total !== undefined && (record.currency !== "CNY" || !Number.isSafeInteger(total) || total <= 0 ||
+        !Number.isSafeInteger(record.quantity) || record.quantity <= 0 ||
+        BigInt(total) < BigInt(input.approved_minor) * BigInt(record.quantity))) {
+      throw new Error("alipay_total_minor must be a positive integer for CNY quotes and cannot be less than the approved line subtotal");
+    }
     const now = this.now();
     // §17.1/§17.2：待批已到期（创建时固化的 deadline）→ 置 expired 并拒绝批准；
     // 超时只失效，不自动批准、不自动拒绝。等于 deadline 的时刻归过期侧。
@@ -336,6 +346,7 @@ export class NegotiationApprovalStore {
     const ttl = input.ttl_seconds ?? DEFAULT_TTL_SECONDS;
     record.status = "approved";
     record.approved_minor = input.approved_minor;
+    if (total !== undefined) record.alipay_total_minor = total;
     record.approved_by = input.approved_by ?? "merchant";
     record.expires_at = new Date(Date.parse(now) + ttl * 1_000).toISOString();
     record.updated_at = now;

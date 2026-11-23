@@ -21,7 +21,7 @@ import path from "node:path";
 import { migrateMemorySchema } from "../src/agent/memory/schema.js";
 import { FakeCommerceConnector, fakeConnectorProduct } from "../src/agent/connector/fake-connector.js";
 import { BuyerTaskStore } from "../src/agent/buyer/task-store.js";
-import { buildBuyerTools, type BuyerToolDeps } from "../src/agent/buyer/buyer-tools.js";
+import { buildBuyerTools, resolveTaskAlipayCollection, type BuyerToolDeps } from "../src/agent/buyer/buyer-tools.js";
 import {
   WriteApprovalCandidateStore,
   executeApprovedCandidate,
@@ -38,6 +38,11 @@ import {
 } from "../src/handoff/index.js";
 import { testBuyerProfile, startTestA2aStack, type CapturedInbound } from "./helpers.js";
 import { uuidv7 } from "@earendil-works/pi-ai";
+import { contentDigest } from "../src/negotiation/jcs.js";
+import { NegotiationApprovalStore } from "../src/a2a/server/negotiation-approvals.js";
+import { createA2aOutboundSigner, generateA2aSigningIdentity } from "../src/a2a/signing-key.js";
+import { HttpMessageSignatureVerifier } from "../src/trust/identity/auth-verifier.js";
+import * as pinnedTransport from "../src/merchant-gateway/pinned-fetch.js";
 import { createFileProductSource, bindProductTableToCatalog } from "../src/cloud/product-source.js";
 import { ShoppingCliCatalogSource } from "../src/discovery/catalog-source/index.js";
 import type { CatalogSearchQuery } from "../src/discovery/catalog-source/types.js";
@@ -145,6 +150,8 @@ function setupBuyer(
   catalog: string,
   options: {
     mode?: "autopilot" | "supervised";
+    alipayCollectionAvailable?: boolean;
+    outboundSigner?: BuyerToolDeps["outboundSigner"];
     /**
      * A659：受控 CatalogSource fixture——只覆盖交易来源面（origin/getListing）；
      * discovery 面（searchCandidates/getCandidate）委托既有 ShoppingCliCatalog
@@ -198,6 +205,8 @@ function setupBuyer(
     catalog,
     allowLoopback: true, // 本地 127.0.0.1 测试栈
     handoff: { ledger, idempotency },
+    alipayCollectionAvailable: options.alipayCollectionAvailable,
+    outboundSigner: options.outboundSigner,
     ...(catalogSource !== undefined ? { catalogSource } : {}),
   };
   const tools = buildBuyerTools(deps);
@@ -228,6 +237,152 @@ async function createReadyTask(store: BuyerTaskStore, overrides: Record<string, 
   });
   return task.task_id;
 }
+
+const COLLECTION_VERSION = "01890aa1-0000-7000-8000-123456789abc";
+const COLLECTION_URL = `https://1.1.1.1/collect/alipay/n/o/${COLLECTION_VERSION}`;
+
+async function seedCollection(buyer: E2eHarness, channelUrl = "https://1.1.1.1/api/a2a", expiresAt = "2026-08-05T12:30:00+08:00") {
+  const taskId = await createReadyTask(buyer.store);
+  const terms = {
+    handoff_destination: COLLECTION_URL,
+    kiwi_alipay_collection: {
+      version: COLLECTION_VERSION, recipient_summary: "张***", total_minor: 1234,
+      currency: "CNY", expires_at: expiresAt,
+    },
+  };
+  for (const to of ["consulting", "negotiating", "selected_nonbinding"] as const) {
+    buyer.store.transitionTask({
+      task_id: taskId, origin: "model", to, event_type: "status_changed",
+      expected_version: buyer.store.getTask(taskId)!.version, idempotency_key: `${taskId}:${to}`,
+      ...(to === "selected_nonbinding" ? { payload: {
+        negotiation_id: "n", agreement_id: "a", accepted_offer_id: "o", agreed_terms: terms,
+        terms_digest: contentDigest(terms), handoff_destination: COLLECTION_URL,
+        accepted_channel_url: channelUrl, merchant_identity_ref: "merchant:sample-shop",
+      } } : {}),
+    });
+  }
+  return taskId;
+}
+
+it("requires explicit human approval and shows only bound masked collection facts even in autopilot", async () => {
+  const buyer = setupBuyer("", { alipayCollectionAvailable: true });
+  const task_id = await seedCollection(buyer);
+  const probe = vi.fn(async () => new Response(null, { status: 204 }));
+  vi.stubGlobal("fetch", probe);
+  try {
+    const ask = await buyer.getTool("handoff_agreement").execute("t", { task_id });
+    expect(toolText(ask)).toMatch(/张\*\*\*.*CNY 12\.34/);
+    expect(toolText(ask)).not.toContain(COLLECTION_URL);
+    expect(probe).not.toHaveBeenCalled();
+    const candidate = ask.details as { candidate_id: string; status: string };
+    expect(candidate.status).toBe("pending_approval");
+    expect(buyer.ledger.events("n")).toHaveLength(0);
+    buyer.approvals.markApproved(candidate.candidate_id);
+    const result = await executeApprovedCandidate(buyer.approvals, candidate.candidate_id, buyer.pendingHooks.get(candidate.candidate_id)!);
+    expect(result.kind).toBe("executed");
+    expect(probe).toHaveBeenCalledExactlyOnceWith(COLLECTION_URL, expect.objectContaining({ method: "HEAD", redirect: "manual" }));
+    expect(JSON.stringify(result.kind === "executed" ? result.output : null)).not.toContain(COLLECTION_URL);
+    expect(buyer.ledger.events("n").find((event) => event.event_kind === "handoff_delivered")?.destination)
+      .toMatchObject({ ref: COLLECTION_URL, final_url: COLLECTION_URL });
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it("refuses native collection without private display, exact origin, current expiry or unmodified parameters", async () => {
+  const capable = setupBuyer("", { alipayCollectionAvailable: true });
+  const generic = setupBuyer("");
+  const attempts = [
+    { buyer: generic, task_id: await seedCollection(generic), params: {}, status: "authorization_denied" },
+    { buyer: capable, task_id: await seedCollection(capable, "https://1.1.1.1:8443/api/a2a"), params: {}, status: "invalid" },
+    { buyer: capable, task_id: await seedCollection(capable, undefined, T0), params: {}, status: "expired" },
+    { buyer: capable, task_id: await seedCollection(capable), params: { display_summary_text: "substituted" }, status: "invalid_params" },
+  ];
+  for (const { buyer, task_id, params, status } of attempts) {
+    const denied = await buyer.getTool("handoff_agreement").execute("t", { task_id, ...params });
+    expect(denied.details).toEqual({ status });
+  }
+  expect(capable.pendingHooks.size + generic.pendingHooks.size).toBe(0);
+  expect(capable.ledger.events("n")).toHaveLength(0);
+});
+
+it("resumes a signed native task after merchant approval and hands off exactly the accepted collection", async () => {
+  const origin = "https://1.1.1.1";
+  const merchantApprovals = new NegotiationApprovalStore(trackedMkdtemp("kiwi-alipay-merchant-"));
+  const signer = generateA2aSigningIdentity("test-independent-buyer");
+  const verifier = new HttpMessageSignatureVerifier({ resolver: (keyid) => keyid === signer.keyid ? {
+    ...signer,
+    profile: { identity: "buyer:independent-test", role: "buyer", trustLevel: "T0" },
+  } : undefined });
+  const requests: CapturedInbound[] = [];
+  const stack = await startTestA2aStack({
+    capture: requests,
+    now: () => new Date().toISOString(),
+    publicMerchantOrigin: origin,
+    authVerifier: { name: verifier.name, verify: (ctx) => verifier.verify({
+      ...(ctx as Parameters<typeof verifier.verify>[0]), scheme: "https", headers: {
+        ...(ctx as Parameters<typeof verifier.verify>[0]).headers, host: "1.1.1.1",
+      },
+    }) },
+    productSource: { async getProduct() {
+      return { price: 850, currency: "CNY", unit: "piece", stock: 1000, source_evidence: { system: "fixture" } };
+    } },
+    merchantPolicy: { price_floors: { "sku-001": 810 }, max_auto_discount_percent: 5 },
+    negotiationApprovals: merchantApprovals,
+    alipayCollection: { origin, current: () => ({ enabled: true, version: COLLECTION_VERSION, recipient: "张三示例" }) },
+  });
+  stacks.push(stack);
+  // Simulate an HTTPS reverse proxy locally while keeping the exact public authority
+  // in the signed request, Agent Card and accepted collection link.
+  const directFetch = globalThis.fetch;
+  const proxyFetch: typeof fetch = async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.origin !== origin) return directFetch(input, init);
+    if (url.pathname.startsWith("/collect/alipay/")) return new Response(null, { status: 204 });
+    return directFetch(`${stack.merchantUrl}${url.pathname}${url.search}`, init);
+  };
+  vi.stubGlobal("fetch", proxyFetch);
+  const transport = vi.spyOn(pinnedTransport, "createPinnedFetch").mockImplementation(() => proxyFetch);
+  try {
+    const buyer = setupBuyer(stack.catalogUrl, { alipayCollectionAvailable: true, outboundSigner: createA2aOutboundSigner(signer) });
+    const task_id = await createReadyTask(buyer.store, {
+      intent: { category: "sku-001", quantity: 2, target_unit_price: 750 },
+      constraints: { max_unit_price: 810 },
+    });
+    const negotiate = buyer.getTool("negotiate_buyer_task");
+    expect(toolText(await negotiate.execute("neg-1", { task_id }))).toContain("merchant_approval_pending");
+    expect(buyer.store.getTask(task_id)?.status).toBe("ready");
+    const pending = merchantApprovals.list("pending")[0]!;
+    merchantApprovals.approve({ approval_id: pending.approval_id, approved_minor: 81_000, alipay_total_minor: 163_000 });
+    expect(toolText(await negotiate.execute("neg-2", { task_id }))).toContain("selected_nonbinding");
+    expect(buyer.store.getTask(task_id)?.status).toBe("selected_nonbinding");
+    expect(requests.map((request) => request.action)).toEqual(["rfq", "counter_offer", "counter_offer", "accept_nonbinding"]);
+    expect(new Set(requests.map((request) => request.envelope.negotiation_id))).toEqual(new Set([pending.negotiation_id]));
+    expect(requests[1]?.envelope.message_id).not.toBe(requests[2]?.envelope.message_id);
+    expect(requests[1]?.envelope.in_reply_to).toBe(requests[2]?.envelope.in_reply_to);
+    expect(requests.every((request) => request.senderIdentity === "buyer:independent-test")).toBe(true);
+    const handoff = await buyer.getTool("handoff_agreement").execute("t", { task_id });
+    expect(toolText(handoff)).toMatch(/张\*\*\*.*CNY 1630\.00/);
+    expect(handoff.details).toMatchObject({ status: "pending_approval" });
+    const { candidate_id } = handoff.details as { candidate_id: string };
+    buyer.approvals.markApproved(candidate_id);
+    const approval = await executeApprovedCandidate(buyer.approvals, candidate_id, buyer.pendingHooks.get(candidate_id)!);
+    expect(approval.kind).toBe("executed");
+    const binding = resolveTaskAlipayCollection(buyer.store.taskEvents(task_id), Date.now());
+    expect(binding.kind).toBe("collection");
+    if (binding.kind !== "collection") throw new Error("signed collection binding missing");
+    const events = buyer.ledger.events(binding.link.negotiationId);
+    expect(events.find((event) => event.event_kind === "handoff_delivered")?.destination)
+      .toMatchObject({ ref: binding.link.url, final_url: binding.link.url });
+    const create = events.find((event) => event.event_kind === "handoff_candidate_created");
+    expect(create?.outcome).toMatchObject({ kind: "ok", result: { candidate: {
+      creates_order: false, authorizes_payment: false, reserves_inventory: false,
+    } } });
+  } finally {
+    transport.mockRestore();
+    vi.unstubAllGlobals();
+  }
+});
 
 /** 从 created 事件内嵌文档重建候选（kernel launchHandoff 同法）。 */
 function rebuildCandidate(

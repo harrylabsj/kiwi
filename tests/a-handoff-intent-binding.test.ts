@@ -28,6 +28,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { TaskApprovalStore } from "../src/buyer-core/store.js";
 import { KiwiBuyerService } from "../src/buyer-core/service.js";
 import { buildKiwiTools } from "../src/mcp/tools.js";
+import { createBuyerHttpServer } from "../src/http/server.js";
 import { contentDigest } from "../src/negotiation/jcs.js";
 
 const cleanup: Array<() => void> = [];
@@ -48,7 +49,7 @@ interface Fixture {
   policy: Record<string, unknown>;
 }
 
-async function fixture(overrides: { handoffMode?: "ask" | "auto" | "never"; clock?: { ms: number } } = {}): Promise<Fixture> {
+async function fixture(overrides: { handoffMode?: "ask" | "auto" | "never"; clock?: { ms: number }; terms?: Record<string, unknown> } = {}): Promise<Fixture> {
   const store = new TaskApprovalStore({ dbPath: ":memory:" });
   const policy: Record<string, unknown> = {
     policy_id: "p-a-card",
@@ -84,8 +85,9 @@ async function fixture(overrides: { handoffMode?: "ask" | "auto" | "never"; cloc
             currency: "CNY",
             items: [{ sku: "s", quantity_value: 1, quantity_unit: "piece", unit_price_minor: 100 }],
             total_price_minor: 100,
+            ...overrides.terms,
           },
-          provenance: { offer_id: "o", negotiation_id: "n", source: "synthetic-local" },
+          provenance: { offer_id: "o", negotiation_id: "n", source: "synthetic-local", latest_agreed_terms: overrides.terms },
         },
       ],
     },
@@ -120,6 +122,42 @@ async function fixture(overrides: { handoffMode?: "ask" | "auto" | "never"; cloc
 const body = (r: { content?: Array<{ text?: string }> }) => JSON.parse(r.content?.[0]?.text ?? "{}");
 
 describe("A 卡：handoff 意图绑定", () => {
+  it("MCP cannot substitute another checkout or session for a collection agreement", async () => {
+    const x = await fixture({ terms: { handoff_destination: "https://shop.example.com/collect/alipay/n/o/v1" } });
+    for (const requested of [DEST_B, { destination_type: "ucp_checkout" }]) {
+      const result = await x.call("kiwi_handoff", { agreement_id: x.agreementId, ...requested });
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toMatch(/authorization_denied:.*支付宝/);
+    }
+    expect(x.store.listApprovalsByTask(x.taskId).filter((a) => a.action === "handoff")).toHaveLength(0);
+  });
+  it("HTTP missing approval_id creates the ordinary ASK intent and refuses reserved collection URLs", async () => {
+    const x = await fixture();
+    const server = createBuyerHttpServer({ service: x.service, authToken: "fixture-token" });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address() as { port: number };
+      const post = async (body: Record<string, unknown>) => await fetch(
+        `http://127.0.0.1:${address.port}/agreements/${x.agreementId}/handoff`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: "Bearer fixture-token" },
+          body: JSON.stringify(body),
+        },
+      ).then((response) => response.json());
+      expect(await post({ ...DEST_A, url: "https://shop.example.com/collect/%61lipay/n/o/v1?override=1" })).toMatchObject({
+        ok: false, error: { code: "authorization_denied", message: expect.stringContaining("支付宝") },
+      });
+      expect(x.store.listApprovalsByTask(x.taskId).filter((a) => a.action === "handoff")).toHaveLength(0);
+      expect(await post(DEST_A)).toMatchObject({
+        ok: false, error: { code: "approval_required", approval_id: expect.any(String) },
+      });
+      expect(x.store.listApprovalsByTask(x.taskId).filter((a) => a.action === "handoff")).toHaveLength(1);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("ASK 分支只写一条带 intent 的审批，不产生无目的地审批", async () => {
     const x = await fixture();
     const res = await x.call("kiwi_handoff", { agreement_id: x.agreementId, ...DEST_A });

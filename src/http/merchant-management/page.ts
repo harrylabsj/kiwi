@@ -144,6 +144,10 @@ export function renderMerchantManagementPage(options: {
     #bar { left: 16px; right: 16px; bottom: 16px; }
     .row { gap: 10px; }
   }
+  .collection-form { display: grid; gap: 12px; }
+  .collection-form input:not([type=checkbox]) { display: block; max-width: 100%; }
+  .collection-form img { display: block; max-width: min(100%, 280px); height: auto; }
+  .collection-form [hidden] { display: none; }
   @media (prefers-reduced-motion: no-preference) { .act, nav button { transition: background-color .15s, border-color .15s; } }
 </style>
 </head>
@@ -158,6 +162,7 @@ export function renderMerchantManagementPage(options: {
   <button data-v="negotiations">会话旁观</button>
   <button data-v="reports">运营报告</button>
   <button data-v="policy">报价规则</button>
+  <button data-v="collection" id="collection-tab" hidden>收款方式</button>
   <button data-v="operating">商品经营</button>
   <button data-v="sales">销售工作台</button>
   <button data-v="outcomes">经营结果</button>
@@ -866,7 +871,162 @@ function renderProducts(items, publication) {
     '<div class="row"><input type="file" id="pfile" aria-label="选择商品导入文件" accept=".json,.csv,.xlsx">' +
     '<button class="act" onclick="previewImport()">校验预览</button></div><div id="presult"></div></div>';
 }
+var ALIPAY_COLLECTION = "/collection/alipay";
+function renderAlipayCollection(config) {
+  return '<section class="card"><h2>支付宝收款</h2>' +
+    '<p>状态：<strong>' + (config.enabled ? "已启用" : "已关闭") + '</strong> · 收款主体：' + esc(config.recipient_masked || "未设置") +
+    ' · 账号：' + esc(config.account_masked || "未设置") + ' · 收款码：' + (config.has_qr ? "已设置" : "未设置") + '</p>' +
+    '<p class="muted">只向符合条件的已确认交易提供收款指引。买家在支付宝自行付款，你在支付宝核对到账；Kiwi 不执行支付、不确认到账。</p>' +
+    (config.enabled ? '<p><button type="button" class="act" id="alipay-disable">停用收款方式</button></p>' : '') +
+    '<form class="collection-form" id="alipay-form" autocomplete="off" data-version="' + esc(config.version || "") + '">' +
+    '<label>收款主体名称<input id="alipay-recipient" type="text" required maxlength="80" autocomplete="off"></label>' +
+    '<label>支付宝账号（手机号或邮箱）<input id="alipay-account" type="text" maxlength="128" autocomplete="off"></label>' +
+    '<label>支付宝官方静态收款码（PNG，最多 256 KiB）<input id="alipay-qr" type="file" accept="image/png,.png"></label>' +
+    '<p class="muted">账号和收款码至少填一项。保存会替换现有收款资料，未填写的项目不会保留。Kiwi 不验证账号归属或二维码内容，请自行核对。</p>' +
+    '<label><input id="alipay-enabled" type="checkbox"' + (config.enabled ? " checked" : "") + '> 启用收款方式</label>' +
+    '<div><button type="submit" class="act" id="alipay-preview">预览收款设置</button></div>' +
+    '<div id="alipay-review" class="card" hidden><h3>确认收款设置</h3><p id="alipay-review-text"></p>' +
+    '<img id="alipay-review-qr" alt="待保存的支付宝收款码" hidden>' +
+    '<p><label><input id="alipay-rights" type="checkbox"> 我已核对预览，并确认有权使用该收款主体、账号或收款码。</label></p>' +
+    '<button type="button" class="act primary" id="alipay-save" disabled>确认保存</button></div></form></section>';
+}
+function readAlipayPng(file) {
+  if (!file) return Promise.resolve(undefined);
+  if (file.size > 256 * 1024 || file.type !== "image/png") return Promise.reject(new Error("请选择不超过 256 KiB 的 PNG 文件"));
+  return new Promise(function (resolve, reject) {
+    var reader = new FileReader();
+    reader.onerror = function () { reject(new Error("PNG 文件无法读取")); };
+    reader.onload = function () { resolve(String(reader.result).split(",", 2)[1]); };
+    reader.readAsDataURL(file);
+  });
+}
+function bindAlipayCollection() {
+  var form = $("alipay-form");
+  if (!form) return;
+  var version = form.getAttribute("data-version") || null;
+  var review = $("alipay-review"), text = $("alipay-review-text"), qr = $("alipay-review-qr");
+  var rights = $("alipay-rights"), save = $("alipay-save"), preview = $("alipay-preview"), disable = $("alipay-disable");
+  var pending = null, imageReady = false, busy = false, edits = 0;
+  function syncButtons() {
+    save.disabled = busy || !pending || !imageReady || !rights.checked;
+    preview.disabled = busy;
+    if (disable) disable.disabled = busy;
+  }
+  function clearPreview() {
+    pending = null;
+    imageReady = false;
+    qr.onload = qr.onerror = null;
+    qr.removeAttribute("src");
+    qr.hidden = review.hidden = true;
+    text.textContent = "";
+    rights.checked = false;
+    syncButtons();
+  }
+  form.oninput = function (event) { if (event.target !== rights) { edits += 1; clearPreview(); } };
+  rights.onchange = syncButtons;
+  form.onsubmit = async function (event) {
+    event.preventDefault();
+    if (busy) return;
+    var edit = edits;
+    var draft = { expected_version: version, enabled: $("alipay-enabled").checked, recipient: $("alipay-recipient").value.trim() };
+    var account = $("alipay-account").value.trim(), file = $("alipay-qr").files[0];
+    if (account) draft.account = account;
+    busy = true;
+    clearPreview();
+    try {
+      var png = await readAlipayPng(file);
+      if (!form.isConnected || edits !== edit) return;
+      if (png) draft.qr_png_base64 = png;
+      var result = await call("POST", ALIPAY_COLLECTION + "/preview", draft);
+      if (!form.isConnected || edits !== edit) return;
+      pending = { draft: draft, confirmation: result.confirmation_ref };
+      text.textContent = (draft.enabled ? "启用 · " : "保存但保持关闭 · ") + draft.recipient + (account ? " · " + account : "");
+      review.hidden = false;
+      imageReady = !png;
+      if (png) {
+        qr.onload = function () { imageReady = true; syncButtons(); };
+        qr.onerror = function () { clearPreview(); bar("收款码无法显示，请更换有效的 PNG 文件。", true); };
+        qr.hidden = false;
+        qr.src = "data:image/png;base64," + png;
+      }
+    } catch (error) {
+      if (form.isConnected) bar(error.message, true);
+    } finally { busy = false; syncButtons(); }
+  };
+  async function apply(path, body, message) {
+    busy = true;
+    syncButtons();
+    try {
+      await call("POST", path, body);
+      if (form.isConnected) { form.reset(); clearPreview(); bar(message); refresh(); }
+    } catch (error) {
+      if (form.isConnected) { clearPreview(); bar(error.message, true); }
+    } finally { busy = false; syncButtons(); }
+  }
+  save.onclick = function () {
+    if (busy || !pending || !imageReady || !rights.checked) return;
+    apply(ALIPAY_COLLECTION, Object.assign({}, pending.draft, { confirmation_ref: pending.confirmation, confirm_owner_rights: true }), "收款设置已保存");
+  };
+  if (disable) disable.onclick = function () {
+    if (busy || !window.confirm("停用后，旧的 Kiwi 收款入口将无法打开；买家已保存的账号或静态码无法撤回。确认停用？")) return;
+    apply(ALIPAY_COLLECTION + "/disable", { expected_version: version, confirm_disable: true }, "支付宝收款方式已停用");
+  };
+}
+
+function renderAlipayApprovals(items, version) {
+  var rows = items.map(function (item) {
+    var heading = item.sku + " · " + item.quantity + (item.unit ? " " + item.unit : "");
+    return '<form class="collection-form card" data-alipay-approval="' + esc(item.approval_id) + '" data-version="' + esc(version) + '">' +
+      '<h3>' + esc(heading) + '</h3><p>磋商：' + esc(item.negotiation_id) + ' · 买家还价单价：' + esc(item.buyer_offer_minor) + ' 分</p>' +
+      (item.expires_at ? '<p>待批截止：' + esc(item.expires_at) + '</p>' : '') +
+      '<label>批准单价（人民币分）<input name="approved_minor" type="number" inputmode="numeric" required min="1" step="1"></label>' +
+      '<label>最终应付总额（人民币分，包括适用的运费、税费及其他费用）<input name="alipay_total_minor" type="number" inputmode="numeric" required min="1" step="1"></label>' +
+      '<label><input name="confirm_final_total" type="checkbox" required> 我已核对该商品、数量及费用，并确认这是买家应付的完整人民币总额。</label>' +
+      '<div><button type="submit" class="act primary">批准该报价金额</button></div></form>';
+  }).join("");
+  return '<section class="card"><h2>待确认支付宝报价</h2>' +
+    '<p class="muted">仅列出等待人工审批的人民币报价。批准后，符合条件的报价可在买家确认交接时提供支付宝收款指引；这里不会执行支付。</p>' +
+    (rows || '<p class="muted">暂无待确认的人民币报价。</p>') + '</section>';
+}
+function bindAlipayApprovals() {
+  Array.prototype.forEach.call($("view").querySelectorAll("[data-alipay-approval]"), function (form) {
+    var button = form.querySelector("button");
+    form.onsubmit = async function (event) {
+      event.preventDefault();
+      if (button.disabled || !form.elements.confirm_final_total.checked) return;
+      var single = form.elements.approved_minor.valueAsNumber, total = form.elements.alipay_total_minor.valueAsNumber;
+      if (!Number.isSafeInteger(single) || !Number.isSafeInteger(total) || single < 1 || total < 1) {
+        bar("单价和最终应付总额都必须是正整数分。", true);
+        return;
+      }
+      if (!window.confirm("确认 " + form.querySelector("h3").textContent + "：单价 " + single + " 分，最终应付总额 " + total + " 分？")) return;
+      button.disabled = true;
+      try {
+        await call("POST", ALIPAY_COLLECTION + "/approvals", {
+          approval_id: form.getAttribute("data-alipay-approval"), expected_version: form.getAttribute("data-version"),
+          approved_minor: single, alipay_total_minor: total, confirm_final_total: true,
+        });
+        if (form.isConnected) { bar("报价金额已批准"); refresh(); }
+      } catch (error) {
+        if (form.isConnected) { form.elements.confirm_final_total.checked = false; bar(error.message, true); }
+      } finally { button.disabled = false; }
+    };
+  });
+}
+
 var views = {
+  collection: async function () {
+    var config = await call("GET", ALIPAY_COLLECTION);
+    var html = renderAlipayCollection(config);
+    if (!config.enabled) return html;
+    try {
+      var approvals = await call("GET", ALIPAY_COLLECTION + "/approvals");
+      return html + renderAlipayApprovals(approvals.items, config.version);
+    } catch (error) {
+      if (error.message === "需要登录") throw error;
+      return html + '<section class="card"><h2>待确认支付宝报价</h2><p>暂时无法读取待审批列表。</p></section>';
+    }
+  },
   status: function () {
     return call("GET", "/runtime/status").then(function (s) {
       var failed = s.readiness && s.readiness.failed_checks || [];
@@ -1664,6 +1824,7 @@ var VIEW_COPY = {
   negotiations: ["会话旁观", "查看询价与磋商进展，掌握需要关注的会话。"],
   reports: ["运营报告", "了解买家触达与接待表现。"],
   policy: ["报价规则", "管理自动报价边界，规则确认后生效。"],
+  collection: ["收款方式", "管理只向符合条件的买家提供的收款指引。"],
   operating: ["商品经营", "选择商品、设定条件与授权，控制生效区间。"],
   sales: ["销售工作台", "处理待办、下一动作与持久跟进。"],
   outcomes: ["经营结果", "分开查看订单证据、归因与贡献。"]
@@ -1697,13 +1858,23 @@ function decorateView() {
 if (typeof MutationObserver !== "undefined") {
   new MutationObserver(decorateView).observe($("view"), { childList: true, subtree: true });
 }
+var renderSequence = 0;
+var previousView = "";
 function refresh() {
   var copy = VIEW_COPY[current];
+  var sequence = ++renderSequence;
+  var view = $("view");
+  if (previousView === "collection" || current === "collection") {
+    view.innerHTML = '<div class="card">加载中…</div>';
+  }
+  previousView = current;
   $("page-title").textContent = copy[0];
   $("page-description").textContent = copy[1];
-  $("view").setAttribute("data-view", current);
+  view.setAttribute("data-view", current);
   views[current]().then(function (html) {
-    $("view").innerHTML = html; decorateView();
+    if (sequence !== renderSequence) return;
+    view.innerHTML = html; decorateView();
+    if (current === "collection") { bindAlipayCollection(); bindAlipayApprovals(); }
     if (current === "status" && CATALOG_CONNECT && ROLE === "owner") {
       if (catalogConnectionState && catalogConnectionState.bindingId) {
         call("GET", "/catalog/bound-account").then(function (result) {
@@ -1731,6 +1902,7 @@ fetch("/merchant/api/session", { credentials: "same-origin" }).then(function (re
   if (!session) return;
   CSRF = session.csrf_token || "";
   ROLE = session.role || "";
+  $("collection-tab").hidden = session.can_manage_alipay_collection !== true;
   $("who").textContent = "商家 " + session.merchant_id + " · " + ROLE;
   refresh();
 });

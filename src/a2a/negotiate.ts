@@ -42,6 +42,7 @@ import {
 import { finalizeEnvelope, validateWireEnvelope, type NegotiationEnvelope } from "../negotiation/domain/envelope.js";
 import { validateConditionalOffer, validateAcceptedNonbindingAgreement } from "../negotiation/domain/objects.js";
 import { contentDigest } from "../negotiation/jcs.js";
+import { resolveOutboundSigner, type A2AOutboundSignerLike } from "./signing-key.js";
 import { evaluateConditionalOffer } from "../negotiation/condition/evaluator.js";
 import { detectLocale, type KiwiLocale } from "../i18n.js";
 
@@ -98,6 +99,25 @@ export interface NegotiateOptions {
    * 商家侧 `KIWI_A2A_AUTH=bearer:<token>` 时必需，否则协商 401。
    */
   outboundAuth?: { bearer?: string };
+  outboundSigner?: A2AOutboundSignerLike;
+  /** Only opt-in native buyers can continue an owned task after merchant review. */
+  allowMerchantApprovalResume?: boolean;
+  resume?: MerchantApprovalResume;
+}
+
+/** Non-secret KNP reconstruction state, never taken from model parameters. */
+export interface MerchantApprovalResume {
+  negotiationId: string;
+  catalogAgentId: string;
+  channelUrl: string;
+  signerKeyId: string;
+  offerMessageId: string;
+  offerId: string;
+  offerPriceMinor?: number;
+  sku: string;
+  quantity: number;
+  counterPriceMinor: number;
+  deliveryBefore: string;
 }
 
 /** 解析出站 bearer：显式选项优先，缺省 env `KIWI_A2A_CLIENT_BEARER`。 */
@@ -110,6 +130,9 @@ export interface NegotiateResult {
   negotiationId: string;
   catalogAgentId: string;
   agentCardUrl: string;
+  /** Actual direct KNP channel used for the validated, signed acceptance (not the discovery card URL). */
+  acceptedChannelUrl?: string;
+  merchantApprovalResume?: MerchantApprovalResume;
   steps: string[];
   agreement?: Record<string, unknown>;
   /** 磋商商业要点（自然语言渲染用）。 */
@@ -281,7 +304,8 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
   const quantity = options.quantity ?? NEGOTIATE_QUANTITY;
   const sku = options.sku ?? NEGOTIATE_SKU;
   const counterPriceMinor = options.dealPriceMinor ?? NEGOTIATE_DEAL_PRICE_MINOR;
-  const deliveryBefore = options.deliveryBefore ?? defaultNegotiateDeliveryBefore();
+  const resume = options.resume;
+  const deliveryBefore = options.deliveryBefore ?? resume?.deliveryBefore ?? defaultNegotiateDeliveryBefore();
   const senderIdentity = options.senderIdentity ?? "buyer:a2a-demo";
   const dir = mkdtempSync(path.join(tmpdir(), "kiwi-a2a-negotiate-"));
   const now = createMonotonicClock();
@@ -289,10 +313,20 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
   const idempotency = new IdempotencyStore({ dir, now });
   const steps: string[] = [];
   let handle: ChannelHandle | null = null;
-  const negotiationId = newNegotiationId();
+  const negotiationId = resume?.negotiationId ?? newNegotiationId();
   const bearer = resolveOutboundBearer(options);
 
   try {
+    const outboundSigner = resolveOutboundSigner(options.outboundSigner);
+    const catalogTarget = resume?.catalogAgentId ?? options.catalogAgentId;
+    if (resume !== undefined && (options.allowMerchantApprovalResume !== true ||
+        outboundSigner?.keyid !== resume.signerKeyId ||
+        (options.catalogAgentId !== undefined && options.catalogAgentId !== resume.catalogAgentId) ||
+        sku !== resume.sku || quantity !== resume.quantity || counterPriceMinor !== resume.counterPriceMinor ||
+        deliveryBefore !== resume.deliveryBefore)) {
+      return { ok: false, negotiationId, catalogAgentId: resume.catalogAgentId, agentCardUrl: "", steps,
+        error: "待商家审批的磋商需要原签名身份、商家和报价参数；不得覆盖后续谈判的目标。" };
+    }
     // 1. 发现：catalog 候选 → fresh resolve Agent Card（评审项 L4：includeBlocked
     // 默认关闭——此前 true 会让 catalog 判定 rejected/suspended/unreachable 的
     // 商户也进入磋商并产生误导性商业共识；演示路径也不该放宽安全默认）。
@@ -305,14 +339,14 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
       // 商家要求 bearer 时，Agent Card 抓取也必须带 Authorization 头。
       ...(bearer !== undefined ? { headers: { Authorization: `Bearer ${bearer}` } } : {}),
     });
-    const resolved = await discovery.resolveViaCatalog({}, { catalogAgentId: options.catalogAgentId, limit: 1 });
+    const resolved = await discovery.resolveViaCatalog({}, { catalogAgentId: catalogTarget, limit: 1 });
     if (resolved.length === 0) {
       return { ok: false, negotiationId, catalogAgentId: "", agentCardUrl: "", steps, error: "catalog 里没有可发现的 agent" };
     }
     const target =
-      options.catalogAgentId === undefined
+      catalogTarget === undefined
         ? resolved[0]
-        : resolved.find((r) => r.candidate.catalog_agent_id === options.catalogAgentId);
+        : resolved.find((r) => r.candidate.catalog_agent_id === catalogTarget);
     if (target === undefined) {
       return {
         ok: false,
@@ -334,10 +368,14 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
     if (channelCandidate === null || channelCandidate.url === undefined) {
       return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "无 a2a-direct 通道候选" };
     }
+    if (resume !== undefined && channelCandidate.url !== resume.channelUrl) {
+      return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "待商家审批的磋商通道已变更；未发送后续请求。" };
+    }
     // 审查 BUG-07：共享持久目录的租约——出站 send 全临界区单 owner
     const lease = new FileLeaseStore(dir);
     const channel = new A2ADirectChannel({
       url: channelCandidate.url,
+      ...(outboundSigner !== undefined ? { signer: outboundSigner } : {}),
       ledger,
       idempotency,
       now,
@@ -352,35 +390,44 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
     const send = async (envelope: ReturnType<typeof finalizeEnvelope>) =>
       handle!.send({ envelope, ref: { negotiation_id: negotiationId } });
 
-    // 3. RFQ → Offer。
-    const rfq = rfqEnvelope(negotiationId, now, quantity, sku, deliveryBefore);
-    steps.push(`rfq`);
-    const offerRes = await send(rfq);
-    const offer = extractKnpEnvelope(offerRes.task, rfq);
-    if (offer === null || offer.action !== "offer") {
-      return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "未收到 offer 回复" };
+    // RFQ → Offer (the prior merchant quote is already bound when resuming).
+    let offerMessageId = resume?.offerMessageId;
+    let offerId = resume?.offerId;
+    let offerPriceMinor = resume?.offerPriceMinor;
+    if (offerMessageId === undefined || offerId === undefined) {
+      const rfq = rfqEnvelope(negotiationId, now, quantity, sku, deliveryBefore);
+      steps.push("rfq");
+      const offerRes = await send(rfq);
+      const offer = extractKnpEnvelope(offerRes.task, rfq);
+      if (offer === null || offer.action !== "offer") {
+        return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "未收到 offer 回复" };
+      }
+      const offerPayload = offer.payload as { offer_id?: string; terms?: { items?: Array<{ unit_price?: { amount_minor?: number } }> } };
+      if (offerPayload.offer_id === undefined) {
+        return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "offer 缺 offer_id" };
+      }
+      offerMessageId = offer.message_id;
+      offerId = offerPayload.offer_id;
+      offerPriceMinor = offerPayload.terms?.items?.[0]?.unit_price?.amount_minor;
+      steps.push(`offer ${offerId}`);
     }
-    const offerPayload = offer.payload as { offer_id?: string; terms?: { items?: Array<{ unit_price?: { amount_minor?: number } }> } };
-    if (offerPayload.offer_id === undefined) {
-      return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "offer 缺 offer_id" };
-    }
-    const offerPriceMinor = offerPayload.terms?.items?.[0]?.unit_price?.amount_minor;
-    steps.push(`offer ${offerPayload.offer_id}`);
 
-    // 4. CounterOffer → ConditionalOffer。
-    const counter = counterEnvelope(
-      negotiationId,
-      now,
-      (offer.message_id as string) ?? "",
-      offerPayload.offer_id,
-      quantity,
-      sku,
-      counterPriceMinor,
-    );
+    // CounterOffer → ConditionalOffer. Always use a fresh message ID on resume;
+    // replaying the original would replay its decline rather than consume approval.
+    const counter = counterEnvelope(negotiationId, now, offerMessageId, offerId, quantity, sku, counterPriceMinor);
     steps.push(`counter_offer`);
     const condRes = await send(counter);
     const conditional = extractKnpEnvelope(condRes.task, counter);
     if (conditional === null || conditional.action !== "conditional_offer") {
+      if (conditional === null && options.allowMerchantApprovalResume === true && outboundSigner !== undefined &&
+          condRes.task?.status.message?.parts.some((part) => part.kind === "data" &&
+            part.data?.decline === true && part.data.reason_code === "approval_required")) {
+        return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, merchantApprovalResume: {
+          negotiationId, catalogAgentId, channelUrl: channelCandidate.url, signerKeyId: outboundSigner.keyid,
+          offerMessageId, offerId, ...(offerPriceMinor !== undefined ? { offerPriceMinor } : {}),
+          sku, quantity, counterPriceMinor, deliveryBefore,
+        } };
+      }
       return { ok: false, negotiationId, catalogAgentId, agentCardUrl, steps, error: "未收到 conditional_offer 回复" };
     }
     // review 2-6：先过冻结校验器再求值——此前未校验的 then_terms（float
@@ -461,6 +508,7 @@ export async function negotiateWithAgent(options: NegotiateOptions): Promise<Neg
       negotiationId,
       catalogAgentId,
       agentCardUrl,
+      ...(outboundSigner !== undefined ? { acceptedChannelUrl: channelCandidate.url } : {}),
       steps,
       agreement,
       facts: {

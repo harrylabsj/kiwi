@@ -160,6 +160,21 @@ describe("merchant negotiation ops", () => {
     ).toThrowError(/已处理/);
   });
 
+  it("店主批准时必须以正整数分明确确认 CNY 应付总额", async () => {
+    await rfq();
+    await counter(70_000);
+    const service = ops();
+    const input = {
+      approval_id: service.listApprovals("pending")[0]!.approval_id,
+      approved_minor: 81_000,
+      actor: "catalog:account:12",
+    };
+    expect(() => service.approve({ ...input, alipay_total_minor: 1.25 })).toThrowError(/alipay_total_minor/);
+    expect(service.approve({ ...input, alipay_total_minor: 810_100 })).toMatchObject({
+      status: "approved", alipay_total_minor: 810_100,
+    });
+  });
+
   it("拒绝 pending 后不可再批准，且记录原因", async () => {
     await rfq();
     await counter(70_000);

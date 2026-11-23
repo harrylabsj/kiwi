@@ -38,6 +38,7 @@ import { contentDigest, sha256Hex } from "../negotiation/jcs.js";
 import { validateAcceptedNonbindingAgreement } from "../negotiation/domain/objects.js";
 import { randomBytes as cryptoRandomBytes } from "node:crypto";
 import { isDestinationType, isSessionDestinationType, isUrlDestinationType, type DestinationType } from "../handoff/destination.js";
+import { ALIPAY_PRIVATE_DISPLAY_REQUIRED, isAlipayCollectionAgreement, isAlipayCollectionDestination } from "../handoff/alipay-collection.js";
 import { uuidv7 } from "@earendil-works/pi-ai";
 
 import {
@@ -1954,6 +1955,18 @@ export class KiwiBuyerService {
     if (stored === undefined) {
       throw new McpError("agreement_not_found", `agreement ${input.agreement_id} not found`);
     }
+    // Generic hosts cannot privately display this collection. Classify the stored
+    // agreement independently of the requested type/URL, including legacy term shapes.
+    const rejectCollectionHandoff = (agreement: StoredAgreement): void => {
+      const payload = this.parsePayload(agreement.payload) as Record<string, unknown>;
+      const merchant = asRecord(payload.merchant_agreement);
+      if (isAlipayCollectionDestination(input.url) ||
+          isAlipayCollectionAgreement(payload.agreed_terms, payload.handoff_destination) ||
+          isAlipayCollectionAgreement(merchant.agreed_terms, merchant.handoff_destination)) {
+        throw new McpError("authorization_denied", ALIPAY_PRIVATE_DISPLAY_REQUIRED);
+      }
+    };
+    rejectCollectionHandoff(stored);
     // URL 类目的地未显式给 url 时，回落到商家报价里的 handoff_destination：
     // 商家已经给出了真实购买入口，宿主无需（也常无法）猜一个 URL。
     let resolvedUrl = input.url;
@@ -2019,6 +2032,7 @@ export class KiwiBuyerService {
       if (freshAgreement === undefined) {
         throw new McpError("agreement_not_found", `agreement ${input.agreement_id} not found`);
       }
+      rejectCollectionHandoff(freshAgreement);
       this.assertHandoffIntentMatches({
         approval,
         task: freshTask,

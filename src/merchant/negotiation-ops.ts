@@ -73,6 +73,8 @@ export class NegotiationOpsError extends Error {
 export interface NegotiationOpsApproveInput {
   approval_id: string;
   approved_minor: number;
+  /** Explicit, all-in CNY amount in fen; exposed only by owner-authenticated callers. */
+  alipay_total_minor?: number;
   ttl_seconds?: number;
   actor: string;
 }
@@ -140,6 +142,9 @@ function mapStoreError(err: unknown): NegotiationOpsError {
   const message = err instanceof Error ? err.message : String(err);
   if (message.includes("no pending negotiation approval")) {
     return new NegotiationOpsError("conflict", "该审批已处理或已过期");
+  }
+  if (message.includes("alipay_total_minor")) {
+    return new NegotiationOpsError("invalid_request", message);
   }
   if (message.includes("reject reason")) {
     return new NegotiationOpsError("invalid_request", "拒绝原因过长（≤500 字符）");
@@ -237,6 +242,7 @@ export function createNegotiationOps(options: NegotiationOpsOptions): Negotiatio
         return options.approvals.approve({
           approval_id: approvalId,
           approved_minor: input.approved_minor,
+          ...(input.alipay_total_minor !== undefined ? { alipay_total_minor: input.alipay_total_minor } : {}),
           ttl_seconds: ttl,
           approved_by: actor,
         });

@@ -37,6 +37,8 @@ import type { CommerceClient } from "../commerce/types.js";
 import type { AgentEventSink } from "./host/events.js";
 import type { MerchantAnalyticsSource } from "./merchant/intelligence/types.js";
 import { isFakeProvider, resolveThinkingLevel } from "../runtime/model.js";
+import { loadA2aSigningIdentityFromFile } from "../a2a/signing-key.js";
+import { canOpenPrivateAlipayView, createNativeAlipayReader } from "./alipay-native-view.js";
 
 /** 裸 `kiwi` 的缺省 buyer profile（deepseek-v4-flash，环境变量可覆盖）。 */
 export function defaultChatProfile(): AgentProfile {
@@ -98,6 +100,8 @@ export interface ChatKernelLimits {
   merchantDataRoot?: string;
   /** 只读商家对话：强制 manual 模式并只注入只读商家工具。 */
   readOnlyMerchantTools?: boolean;
+  /** 只有本机交互式买家终端有私有收款资料显示能力。 */
+  nativeAlipayView?: boolean;
 }
 
 export async function buildChatKernel(
@@ -203,8 +207,13 @@ export async function buildChatKernel(
     process.stderr.write(`unknown KIWI_MODE ${kiwiMode}（可选 ${["manual", "supervised", "autopilot"].join("/")}）\n`);
   }
 
+  const signerFile = process.env.KIWI_A2A_SIGNING_KEY_FILE?.trim();
+  const alipayCollectionReader = limits.nativeAlipayView === true && profile.role === "buyer" &&
+    canOpenPrivateAlipayView() && signerFile ? createNativeAlipayReader(loadA2aSigningIdentityFromFile(signerFile)) : undefined;
+
   return AgentKernel.open({
     profile,
+    ...(alipayCollectionReader === undefined ? {} : { alipayCollectionReader }),
     paths,
     providers,
     model,

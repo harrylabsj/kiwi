@@ -59,6 +59,8 @@ import type {
 import type { ReceptionEngine } from "../reception/engine.js";
 import { calculateWorkbenchQuote } from "../../merchant/quote-calculator.js";
 import { isOpenInquiryIdentity } from "../open-inquiry-identity.js";
+import { assertSafeTargetUrl } from "../client/url-policy.js";
+import { parseAlipayCollectionLink, parseAlipayCollectionTerms } from "../../handoff/alipay-collection.js";
 import type {
   CustomerIdentityWriter,
   IdentityRegistrationRequest,
@@ -309,6 +311,11 @@ export interface MerchantHandlerOptions {
   /** 议价审批队列（B2）：低于自动折扣边界的还价转人工，批准后买家重试
    *  命中一次性授权价。缺省时保持原有 approval_required 硬拒行为。 */
   negotiationApprovals?: NegotiationApprovalStore;
+  /** Tenant-private settings; the recipient is never emitted unmasked. */
+  alipayCollection?: {
+    origin: string;
+    current: () => { version: string; enabled: boolean; recipient: string } | undefined;
+  };
   /** 协商顾问（C）：只生成面向买家的措辞，价格仍由确定性引擎计算。
    *  缺省关闭；输出经 safeAdvisorMessage 校验，越界即回退固定文案。 */
   negotiationAdvisor?: NegotiationAdvisor;
@@ -475,18 +482,47 @@ function offerTerms(
   };
 }
 
+function alipayBuyerIdentity(identity: string): boolean {
+  return identity.trim() !== "" && !isOpenInquiryIdentity(identity);
+}
+
+function positiveMinorAmount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function alipayRoute(origin: string, negotiationId: string, offerId: string, version: string): string | undefined {
+  try {
+    const base = assertSafeTargetUrl(origin, { allowLoopback: false });
+    if (base.protocol !== "https:" || base.href !== `${base.origin}/`) return undefined;
+    const ids = [negotiationId, offerId, version];
+    if (ids.some((id) => id.trim() === "" || id === "." || id === "..")) return undefined;
+    const url = `${base.origin}/collect/alipay/${ids.map((id) => encodeURIComponent(id)).join("/")}`;
+    return parseAlipayCollectionLink(url) !== null ? url : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function recipientSummary(recipient: string): string {
+  const chars = Array.from(recipient.trim());
+  const first = chars[0];
+  return first !== undefined && chars.length > 1 && /^\p{L}$/u.test(first) ? `${first}***` : "***";
+}
+
 function buildAgreement(input: {
   negotiation_id: string;
   accepted_offer_id: string;
   agreed_terms: unknown;
   created_at: string;
 }): Record<string, unknown> {
+  const agreedTerms = input.agreed_terms as { kiwi_alipay_collection?: unknown; handoff_destination?: string };
   return {
     type: "accepted_nonbinding_agreement",
     agreement_id: newAgreementId(),
     negotiation_id: input.negotiation_id,
     accepted_offer_id: input.accepted_offer_id,
     agreed_terms: input.agreed_terms,
+    ...(agreedTerms.kiwi_alipay_collection !== undefined ? { handoff_destination: agreedTerms.handoff_destination } : {}),
     terms_digest: contentDigest(input.agreed_terms as never),
     accepted_by: ["buyer", "merchant"],
     created_at: input.created_at,
@@ -598,10 +634,55 @@ const envelopeReply = (reply: ReturnType<typeof finalizeEnvelope>): NegotiationH
   },
 });
 
-  /** 构造生产 merchant KNP handler。 */
-export function createMerchantHandler(options: MerchantHandlerOptions): NegotiationHandler {
+export interface AlipayCollectionLookup {
+  negotiationId: string;
+  offerId: string;
+  version: string;
+  buyerPrincipalId: string;
+  agreementId: string;
+  termsDigest: string;
+}
+
+export interface AlipayCollectionBinding {
+  version: string;
+  totalMinor: number;
+  currency: "CNY";
+  expiresAt: string;
+}
+
+export interface MerchantHandler extends NegotiationHandler {
+  /** Only call with a verified buyer principal, never a client-supplied identity. */
+  resolveAlipayCollection(input: AlipayCollectionLookup): AlipayCollectionBinding | undefined;
+}
+
+/** 构造生产 merchant KNP handler。 */
+export function createMerchantHandler(options: MerchantHandlerOptions): MerchantHandler {
   const { ledger, now, sender, counterparty } = options;
   const offerPriceMinor = options.offerPriceMinor ?? MERCHANT_OFFER_PRICE_MINOR;
+  const currentAlipay = () => {
+    try {
+      const config = options.alipayCollection;
+      const current = config?.current();
+      if (config !== undefined && current?.enabled === true && current.recipient.trim() !== "") {
+        return { origin: config.origin, version: current.version, summary: recipientSummary(current.recipient) };
+      }
+    } catch {
+      // A private settings read failure must not surface details or enable collection.
+    }
+    return undefined;
+  };
+  const collectionForTerms = (
+    terms: Record<string, unknown>, negotiationId: string, offerId: string,
+  ): AlipayCollectionBinding | undefined => {
+    const collection = parseAlipayCollectionTerms(terms);
+    const current = currentAlipay();
+    if (collection === null || current === undefined || collection.version !== current.version ||
+        collection.recipient_summary !== current.summary || collection.expires_at !== terms.valid_until ||
+        !(Date.parse(collection.expires_at) > Date.parse(now()))) return undefined;
+    const destination = alipayRoute(current.origin, negotiationId, offerId, current.version);
+    if (destination === undefined || destination !== terms.handoff_destination) return undefined;
+    return { version: collection.version, totalMinor: collection.total_minor, currency: collection.currency, expiresAt: collection.expires_at };
+  };
   const allowDemoPriceFallback = options.allowDemoPriceFallback ?? false;
   const unitPolicy = unitConversionPolicy({
     aliases: options.unitAliases,
@@ -975,10 +1056,11 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
     negotiationId: string,
     acceptedOfferId: string,
     termsDigest: string,
+    persistedEvents?: ReturnType<LedgerStore["events"]>,
   ): { agreement: Record<string, unknown>; buyer_binding: string; accept_message_id: unknown; accept_wire_digest: unknown } | undefined => {
     if (acceptedOfferId === "" || termsDigest === "") return undefined;
     try {
-      for (const event of ledger.events(negotiationId)) {
+      for (const event of persistedEvents ?? ledger.events(negotiationId)) {
         if (event.event_kind !== "system") continue;
         const result = event.outcome.kind === "ok" ? event.outcome.result : undefined;
         if (result === undefined || result["kind"] !== "agreement_issued") continue;
@@ -1419,6 +1501,35 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
   }
   return {
     name: "kiwi-agent-serve-merchant",
+    resolveAlipayCollection(input) {
+      if (options.alipayCollection === undefined || !alipayBuyerIdentity(input.buyerPrincipalId) || input.agreementId === "") return undefined;
+      try {
+        // Disk is authoritative: the in-memory phase may already be advanced if
+        // the transition append failed after agreement_issued was persisted.
+        const events = ledger.events(input.negotiationId);
+        if (!ledger.verifyChain(input.negotiationId).valid) return undefined;
+        const phaseEvent = [...events].reverse().find((event) => event.state_transition !== undefined);
+        const samePrincipals = (event: typeof events[number]) => event.identity.actor === "merchant" &&
+          event.identity.sender_identity === sender && event.identity.counterparty_identity === input.buyerPrincipalId;
+        if (phaseEvent?.state_transition?.to_phase !== "AGREEMENT_REACHED" ||
+            phaseEvent.state_transition.from_phase !== "OFFER_OPEN" || !samePrincipals(phaseEvent)) return undefined;
+        const evidence = findAgreementEvidence(input.negotiationId, input.offerId, input.termsDigest,
+          events.slice(0, events.indexOf(phaseEvent)).filter((event) => samePrincipals(event) &&
+            event.agreement_id === input.agreementId && event.terms_digest === input.termsDigest));
+        const artifact = evidence?.agreement;
+        if (evidence?.buyer_binding !== input.buyerPrincipalId || artifact === undefined ||
+            artifact.agreement_id !== input.agreementId || artifact.negotiation_id !== input.negotiationId ||
+            artifact.accepted_offer_id !== input.offerId) return undefined;
+        const terms = artifact.agreed_terms;
+        if (terms === null || typeof terms !== "object" || Array.isArray(terms) ||
+            contentDigest(terms as never) !== input.termsDigest ||
+            artifact.handoff_destination !== (terms as Record<string, unknown>).handoff_destination) return undefined;
+        const collection = collectionForTerms(terms as Record<string, unknown>, input.negotiationId, input.offerId);
+        return collection?.version === input.version ? collection : undefined;
+      } catch {
+        return undefined;
+      }
+    },
     async recoverAccept(ctx: InboundNegotiationContext): Promise<NegotiationHandlerResult | undefined> {
       if (ctx.envelope.action !== "accept_nonbinding" || ctx.identityVerified !== true) return undefined;
       const { negotiation_id, message_id, digest } = ctx.envelope;
@@ -1429,6 +1540,11 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
       syncPhaseFromLedger(negotiation_id);
       const phase = phaseStateByNegotiation.get(negotiation_id)?.phase;
       if (phase === "OFFER_OPEN") {
+        const terms = evidence.agreement.agreed_terms as Record<string, unknown> | undefined;
+        if (terms?.kiwi_alipay_collection !== undefined &&
+            (!alipayBuyerIdentity(ctx.senderIdentity) || collectionForTerms(terms, negotiation_id, payload.offer_id) === undefined)) {
+          return undefined;
+        }
         boundPeers.set(negotiation_id, ctx.senderIdentity);
         await appendPhaseTransition(negotiation_id, "AGREEMENT_REACHED", phase);
       } else if (phase !== "AGREEMENT_REACHED") {
@@ -2232,33 +2348,56 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
             price: quotePrice, currency, quantity, unit: requestedUnit, arrival,
             stock: product.source_evidence !== undefined ? product.stock : undefined,
           });
+          const offerId = newOfferId();
+          const quoteTime = now();
+          const baseTerms = { ...offerTerms({
+            sku,
+            unit: requestedUnit,
+            priceMinor: responsiveMinor,
+            quantity,
+            currency,
+            handoff_destination,
+            deliveryBefore: arrival,
+            ...quoteValidity(product, authorityPromotion.kind === "applied" ? authorityPromotion.endsAt : undefined),
+          }, quoteTime), ...companyTerms(responsiveMinor) };
+          const explicitTotal = approved?.alipay_total_minor;
+          const alipay = ctx.identityVerified === true && alipayBuyerIdentity(ctx.senderIdentity) &&
+            product.handoff_destination === undefined && product.stock !== undefined && product.source_evidence !== undefined &&
+            currency === "CNY" && authorizedMinor === responsiveMinor && positiveMinorAmount(explicitTotal) &&
+            // This is a consistency check, not a source of the payable total.
+            BigInt(explicitTotal) >= BigInt(responsiveMinor) * BigInt(quantity)
+            ? currentAlipay()
+            : undefined;
+          const destination = alipay === undefined ? undefined : alipayRoute(alipay.origin, negotiationId, offerId, alipay.version);
+          const collectionExpiry = Math.min(Date.parse(baseTerms.valid_until), Date.parse(approved?.expires_at ?? ""));
+          const bindCollection = alipay !== undefined && destination !== undefined && explicitTotal !== undefined &&
+            collectionExpiry > Date.parse(quoteTime);
+          const finalTerms = bindCollection ? {
+            ...baseTerms,
+            handoff_destination: destination,
+            valid_until: new Date(collectionExpiry).toISOString(),
+            kiwi_alipay_collection: {
+              version: alipay.version,
+              recipient_summary: alipay.summary,
+              total_minor: explicitTotal,
+              currency: "CNY",
+              expires_at: new Date(collectionExpiry).toISOString(),
+            },
+          } : baseTerms;
           const reply = seedEnvelope({
             negotiation_id: negotiationId,
             in_reply_to: inReplyTo,
             actor: "merchant",
             action: "conditional_offer",
-            created_at: now(),
+            created_at: quoteTime,
             payload: {
               type: "conditional_offer",
-              offer_id: newOfferId(),
+              offer_id: offerId,
               responding_to_offer_id: counter.offer_id,
               // 许可绑定（T047）：本次报价依据的规则摘要与商品事实指纹；accept 时重验。
               policy_digest: policyDigest(),
               product_fingerprint: productFingerprint({ sku, priceMinor, currency }),
-              // base = 还价响应（已 clamp 到 [floor, list]）——单台即得到该价。
-              base_terms: { ...offerTerms(
-                {
-                  sku,
-                  unit: requestedUnit,
-                  priceMinor: responsiveMinor,
-                  quantity,
-                  currency,
-                  handoff_destination,
-                  deliveryBefore: arrival,
-                  ...quoteValidity(product, authorityPromotion.kind === "applied" ? authorityPromotion.endsAt : undefined),
-                },
-                now(),
-              ), ...companyTerms(responsiveMinor) },
+              base_terms: finalTerms,
               // conditions 可空（§13：空 conditions 等价 base_terms）。促销价低于
               // 私有底价时不挂条件——不广告无法兑现的价，也不借 then_terms 泄露底价。
               conditions:
@@ -2534,6 +2673,11 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Negotiat
           }
           // K4：预写证据补齐——先复用/生成协议，落账证据，再推进相位。
           // 任一中断点重试都复用同一商家协议号与摘要（B6）。
+          if (agreedTerms.kiwi_alipay_collection !== undefined &&
+              (ctx.identityVerified !== true || !alipayBuyerIdentity(ctx.senderIdentity) ||
+                collectionForTerms(agreedTerms, negotiationId, acceptedOfferId) === undefined)) {
+            return declineReply("approval_required");
+          }
           const priorEvidence = findAgreementEvidence(negotiationId, acceptedOfferId, presentedDigest);
           const agreement = priorEvidence?.agreement ??
             buildAgreement({

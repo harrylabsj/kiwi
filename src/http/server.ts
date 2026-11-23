@@ -156,7 +156,13 @@ export function createBuyerHttpServer(options: HttpAdapterOptions): Server {
   const sendError = (res: ServerResponse, error: unknown): void => {
     // McpError 是自有类型、消息为固定文案（只内插 id），可原样回给调用方。
     if (error instanceof McpError) {
-      return send(res, 400, { ok: false, error: { code: error.code, message: error.message } });
+      const approvalId = error.code === "approval_required"
+        ? (error.detail as { approval_id?: unknown } | undefined)?.approval_id
+        : undefined;
+      return send(res, 400, { ok: false, error: {
+        code: error.code, message: error.message,
+        ...(typeof approvalId === "string" ? { approval_id: approvalId } : {}),
+      } });
     }
     // 未预期异常：消息可能含栈/内部细节，只进 stderr，响应给稳定结论。
     process.stderr.write(
@@ -260,7 +266,7 @@ export function createBuyerHttpServer(options: HttpAdapterOptions): Server {
         try {
           const result = await service.handoff({
             agreement_id: p.id ?? "",
-            approval_id: String(b.approval_id ?? ""),
+            approval_id: b.approval_id === undefined ? undefined : String(b.approval_id),
             destination_type: String(b.destination_type ?? ""),
             url: b.url === undefined ? undefined : String(b.url),
           });

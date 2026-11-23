@@ -171,6 +171,38 @@ function cloudEnv(options: {
 }
 
 describe("云端单实例启动（T013/T014/T015/T016）", () => {
+  it("签名模式挂载支付宝工作台和公开说明，但不向匿名买家提供收款资料", async () => {
+    const commerce = await startFakeCommerce(TEST_SKU);
+    const dataDir = tempDir("kiwi-cloud-alipay-");
+    const profilePath = writeCloudProfile(dataDir, commerce, { name: "Harbor Tools" });
+    trackEnv("KIWI_COMMERCE_URL", commerce);
+    writeAdminCredentials(dataDir, { principalId: "merchant-agent:merchant-001", merchantId: MERCHANT_ID, password: ADMIN_PASSWORD });
+    const port = await freePort();
+    const instance = await bootstrapCloudRuntime({
+      env: cloudEnv({ port, dataDir, profilePath, sku: TEST_SKU, auth: "signature" }), artifactRoot: "/workspace", log: () => {},
+    });
+    try {
+      const base = `http://127.0.0.1:${port}`;
+      const landing = await fetch(`${base}/collect/alipay/neg-fixture/offer-fixture/version-fixture`);
+      expect(landing.status).toBe(200);
+      expect(await landing.text()).toContain("本页不收款");
+      const login = await fetch(`${base}/admin/login`, {
+        method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ password: ADMIN_PASSWORD }),
+      });
+      expect(login.status).toBe(303);
+      const cookie = login.headers.get("set-cookie")?.split(";")[0] ?? "";
+      const response = await fetch(`${base}/merchant/api/v1/collection/alipay`, { headers: { cookie } });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ enabled: false, version: null });
+      const privateRead = await fetch(`${base}/buyer/v1/collection/alipay`, {
+        method: "POST", headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ negotiationId: "neg-fixture", offerId: "offer-fixture", version: "version-fixture", agreementId: "agr-fixture", termsDigest: `sha256:${"0".repeat(64)}` }),
+      });
+      expect(privateRead.status).toBe(404);
+      expect(await privateRead.json()).toEqual({ error: "collection_unavailable" });
+    } finally { await instance.close(); }
+  });
   it("首次导入 admin-bootstrap.json 并确保该文件不可经 HTTP 读取", async () => {
     const commerce = await startFakeCommerce(TEST_SKU);
     const dataDir = tempDir("kiwi-cloud-admin-bootstrap-");

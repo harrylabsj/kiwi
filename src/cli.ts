@@ -1043,13 +1043,14 @@ async function cmdChat(args: ParsedArgs, requiredRole?: AgentProfile["role"]): P
   // A2A 节点 + buyer 磋商工具共用一个 catalog：kernel 构建前先解析。
   const catalog = args.catalog ?? process.env.KIWI_CATALOG_URL ?? DEFAULT_CATALOG_URL;
   const merchantToken = process.env.KIWI_MERCHANT_TOKEN || "";
-  const kernel = await buildChatKernel(profile, args.dataDir, catalog);
+  const nativeLimits = { nativeAlipayView: process.stdin.isTTY === true && process.stdout.isTTY === true };
+  const kernel = await buildChatKernel(profile, args.dataDir, catalog, undefined, undefined, undefined, nativeLimits);
   const kernels: AgentKernel[] = [kernel];
   const reload = async (file: string): Promise<AgentKernel> => {
     const next = await buildChatKernel(
       loadProfile(resolveProfilePath(file)),
       args.dataDir,
-      catalog,
+      catalog, undefined, undefined, undefined, nativeLimits,
     );
     kernels.push(next);
     return next;

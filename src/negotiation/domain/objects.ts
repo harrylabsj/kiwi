@@ -528,6 +528,8 @@ export interface AcceptedNonbindingAgreement {
   negotiation_id: string;
   accepted_offer_id: string;
   agreed_terms: TermSet;
+  /** Optional merchant declaration. Collection policy also requires an exact copy inside agreed_terms. */
+  handoff_destination?: string;
   terms_digest: string;
   accepted_by: NegotiationActor[];
   created_at: string;
@@ -564,6 +566,9 @@ export function validateAcceptedNonbindingAgreement(
     negotiation_id: validateIdentifier(obj.negotiation_id, `${path}/negotiation_id`),
     accepted_offer_id: validateIdentifier(obj.accepted_offer_id, `${path}/accepted_offer_id`),
     agreed_terms: validateTermSet(obj.agreed_terms, `${path}/agreed_terms`),
+    ...(obj.handoff_destination !== undefined
+      ? { handoff_destination: requireNonEmptyString(obj.handoff_destination, `${path}/handoff_destination`) }
+      : {}),
     terms_digest: requireDigest(obj.terms_digest, `${path}/terms_digest`),
     accepted_by: acceptedBy.map((a, i) =>
       requireEnum(a, ["buyer", "merchant"] as const, `${path}/accepted_by/${i}`),

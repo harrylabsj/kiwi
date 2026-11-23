@@ -74,6 +74,7 @@ import {
   assertVerifiedActor,
   createVerifiedActorContext,
   hasPermission,
+  isDirectMerchantOwner,
   type MerchantPermission,
   type VerifiedActorContext,
 } from "../../merchant/application/actor.js";
@@ -113,6 +114,7 @@ import {
   MerchantWorkbenchError,
   type A2aNegotiationRow,
 } from "../../merchant/workbench-service.js";
+import { NegotiationOpsError, type NegotiationOps } from "../../merchant/negotiation-ops.js";
 import {
   NEGOTIATION_STATUS_FILTERS,
   type NegotiationObserver,
@@ -124,6 +126,12 @@ import {
 } from "../../merchant/operations-report.js";
 import type { ExactMerchantProduct } from "../../agent/merchant/types.js";
 import type { MerchantOperationsSurface } from "../../merchant-core/ops/surface.js";
+import {
+  AlipayCollectionConflict,
+  isBoundedAlipayQrPng,
+  type AlipayCollectionConfig,
+  type AlipayCollectionStore,
+} from "../../merchant-core/collection/alipay-store.js";
 import { OrderFactError } from "../../merchant-core/orders/model.js";
 import { OperatingPlanError } from "../../merchant-core/operating/types.js";
 import { OpportunityError } from "../../merchant-core/opportunity/types.js";
@@ -169,6 +177,8 @@ import {
 
 const API_PREFIX = "/merchant/api";
 const WORKBENCH_API_PREFIX = "/merchant/api/v1";
+const ALIPAY_COLLECTION_PATH = "/collection/alipay";
+const ALIPAY_APPROVAL_PATH = `${ALIPAY_COLLECTION_PATH}/approvals`;
 const CATALOG_CONNECTION_SAFE_CODES = new Set([
   "PUBLICATION_NOT_ACTIVE", "PUBLICATION_NOT_VERIFIED", "CATALOG_UNREACHABLE",
   "CATALOG_MISMATCH", "BINDING_MERCHANT_MISMATCH", "BINDING_CLAIM_EXPIRED",
@@ -235,6 +245,10 @@ export interface MerchantManagementApiOptions {
   sessions: MerchantAdminSessions;
   /** 允许的写请求 Origin（精确匹配，含 scheme；请求未带 Origin 时仅 CSRF 防护）。 */
   allowedOrigins?: readonly string[];
+  alipayCollection?: AlipayCollectionStore;
+  /** Exact principal of the direct admin login, not a Catalog gateway owner-role session. */
+  alipayCollectionOwnerActorId?: string;
+  alipayNegotiationApprovals?: Pick<NegotiationOps, "listApprovals" | "approve">;
   /** 待审批候选（core 命令日志 pending 列表）。 */
   listPending: () => WriteApprovalCandidate[];
   /** 一次性候选确认凭证签发（core 凭证存储；执行层逐项核销）。 */
@@ -481,6 +495,54 @@ async function resolvePlatformRules(
   }
 }
 
+function alipayCollectionSummary(config: (Omit<AlipayCollectionConfig, "version"> & { version?: string }) | undefined) {
+  const mask = (value: string): string => {
+    const letters = Array.from(value);
+    return letters.length > 1 ? `${letters[0]}***` : "***";
+  };
+  return {
+    version: config?.version ?? null,
+    enabled: config?.enabled ?? false,
+    recipient_masked: config === undefined ? null : mask(config.recipient),
+    account_masked: config?.account === undefined ? null : mask(config.account),
+    has_qr: config?.qrPngBase64 !== undefined,
+  };
+}
+
+function alipayFields(body: unknown, allowed: readonly string[]): Record<string, unknown> {
+  const fields = requireObject(body, "body");
+  if (Object.keys(fields).some((key) => !allowed.includes(key))) {
+    // Field names are also user input; never echo them on this settings surface.
+    throw new ManagementError("invalid_input", "支付宝收款请求包含不支持的字段");
+  }
+  return fields;
+}
+
+function alipayExpectedVersion(value: unknown): string | null {
+  if (value === null || (typeof value === "string" && /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/.test(value))) return value;
+  throw new ManagementError("invalid_input", "需要有效的收款配置版本（首次设置为 null）");
+}
+
+function alipayCollectionInput(fields: Record<string, unknown>): Omit<AlipayCollectionConfig, "version"> {
+  const enabled = fields["enabled"];
+  const recipient = requireString(fields["recipient"], "recipient").trim();
+  const account = fields["account"] === undefined ? undefined : requireString(fields["account"], "account").trim();
+  const qrPngBase64 = fields["qr_png_base64"];
+  if (typeof enabled !== "boolean" || recipient.length > 80 || /[\p{Cc}\p{Cf}\p{Cs}]/u.test(recipient)) {
+    throw new ManagementError("invalid_input", "收款主体名称或启用状态无效");
+  }
+  if (account !== undefined && (account.length > 128 || !/^(?:\+?[0-9]{5,20}|[A-Za-z0-9._+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)$/.test(account))) {
+    throw new ManagementError("invalid_input", "支付宝账号须为手机号或邮箱");
+  }
+  if (qrPngBase64 !== undefined && !isBoundedAlipayQrPng(qrPngBase64)) {
+    throw new ManagementError("invalid_input", "仅支持不超过 256 KiB、宽高不超过 1024 像素的静态 PNG");
+  }
+  if (account === undefined && qrPngBase64 === undefined) {
+    throw new ManagementError("invalid_input", "请填写支付宝账号或上传官方静态收款码");
+  }
+  return { enabled, recipient, ...(account === undefined ? {} : { account }), ...(qrPngBase64 === undefined ? {} : { qrPngBase64 }) };
+}
+
 function deliveryField(body: Record<string, unknown>, key: string): string {
   const value = body[key];
   if (typeof value !== "string" || value.trim() === "") {
@@ -522,6 +584,7 @@ export function createMerchantManagementApiHandler(
   // CSRF 进程密钥：令牌 = HMAC(sessionId, key)。重启后页面重新拉取 /session
   // 即可取到新令牌；跨进程不可推导，持 Cookie 者本就可推导（CSRF 威胁模型成立）。
   const csrfKey = randomBytes(32);
+  const alipayPreviewKey = randomBytes(32);
 
   const baseDeps: MerchantApplicationDeps = {
     merchantId: options.merchantId,
@@ -669,6 +732,32 @@ export function createMerchantManagementApiHandler(
     }
   }
 
+  function requireAlipayCollectionOwner(req: IncomingMessage): ReturnType<typeof requireActor> {
+    const auth = requireActor(req);
+    const ctx = assertVerifiedActor(auth.ctx, now());
+    if (ctx.merchantId !== options.merchantId) {
+      throw new ManagementError("not_found", "resource does not belong to this merchant");
+    }
+    if (!isDirectMerchantOwner(ctx, options.alipayCollectionOwnerActorId)) {
+      throw new ManagementError("forbidden", "支付宝收款设置仅限直接登录的商家管理员");
+    }
+    return auth;
+  }
+
+  function requireAlipayCollection(): AlipayCollectionStore {
+    const store = options.alipayCollection;
+    if (store === undefined || store.merchantId !== options.merchantId) {
+      throw new ManagementError("unavailable", "支付宝收款设置暂不可用");
+    }
+    return store;
+  }
+
+  function requireAlipayApprovals(): Pick<NegotiationOps, "listApprovals" | "approve"> {
+    const approvals = options.alipayNegotiationApprovals;
+    if (approvals === undefined) throw new ManagementError("unavailable", "支付宝报价审批暂不可用");
+    return approvals;
+  }
+
   async function routeWorkbenchV1Get(
     req: IncomingMessage,
     res: ServerResponse,
@@ -676,6 +765,33 @@ export function createMerchantManagementApiHandler(
     rest: string,
     requestId: string,
   ): Promise<void> {
+    if (rest === ALIPAY_COLLECTION_PATH) {
+      requireAlipayCollectionOwner(req);
+      const store = requireAlipayCollection();
+      try {
+        writeJson(res, 200, alipayCollectionSummary(store.current()), { "x-request-id": requestId });
+      } catch {
+        throw new ManagementError("unavailable", "支付宝收款设置暂不可用");
+      }
+      return;
+    }
+    if (rest === ALIPAY_APPROVAL_PATH) {
+      requireAlipayCollectionOwner(req);
+      const store = requireAlipayCollection();
+      const approvals = requireAlipayApprovals();
+      try {
+        const items = store.current()?.enabled === true ? approvals.listApprovals("pending")
+          .filter((item) => item.currency === "CNY").slice(0, 100).map((item) => ({
+            approval_id: item.approval_id, negotiation_id: item.negotiation_id,
+            sku: item.sku, quantity: item.quantity, unit: item.unit ?? null,
+            buyer_offer_minor: item.buyer_offer_minor, currency: item.currency, expires_at: item.expires_at ?? null,
+          })) : [];
+        writeJson(res, 200, { items }, { "x-request-id": requestId });
+      } catch {
+        throw new ManagementError("unavailable", "支付宝报价审批暂不可用");
+      }
+      return;
+    }
     if (governanceRouteDisabled(rest)) {
       writeWorkbenchProblem(res, "RESOURCE_NOT_FOUND", requestId, "资源不存在", "Workbench API 路由不存在或尚未实现。");
       return;
@@ -1364,6 +1480,125 @@ export function createMerchantManagementApiHandler(
     );
   }
 
+  function alipayPreviewMac(
+    auth: ReturnType<typeof requireActor>,
+    expectedVersion: string | null,
+    draft: Omit<AlipayCollectionConfig, "version">,
+    expiry: number,
+  ): string {
+    return createHmac("sha256", alipayPreviewKey).update(JSON.stringify([
+      auth.sessionId, auth.ctx.actorId, auth.ctx.merchantId, auth.ctx.generation, expectedVersion, draft, expiry,
+    ])).digest("base64url");
+  }
+
+  async function writeAlipayCollection(req: IncomingMessage, res: ServerResponse, requestId: string, action: "preview" | "save" | "disable"): Promise<void> {
+    try {
+      const auth = requireAlipayCollectionOwner(req);
+      assertWriteGuards(req, auth.sessionId);
+      const store = requireAlipayCollection();
+      const allowed = action === "disable" ? ["expected_version", "confirm_disable"]
+        : ["expected_version", "enabled", "recipient", "account", "qr_png_base64"];
+      if (action === "save") allowed.push("confirmation_ref", "confirm_owner_rights");
+      const fields = alipayFields(await readJsonBody(req), allowed);
+      const expectedVersion = alipayExpectedVersion(fields["expected_version"]);
+      if (auth.ctx.generation !== requireAlipayCollectionOwner(req).ctx.generation) {
+        throw new AlipayCollectionConflict();
+      }
+      const current = store.current();
+      if ((current?.version ?? null) !== expectedVersion) throw new AlipayCollectionConflict();
+      if (action === "disable") {
+        if (fields["confirm_disable"] !== true) throw new ManagementError("invalid_input", "请明确确认停用收款方式");
+        if (current?.enabled !== true) throw new AlipayCollectionConflict();
+        const { version, ...details } = current;
+        const disabled = store.replace(version, { ...details, enabled: false }, auth.ctx.actorId, now().toISOString());
+        writeJson(res, 200, alipayCollectionSummary(disabled), { "x-request-id": requestId });
+        return;
+      }
+      const draft = alipayCollectionInput(fields);
+      if (action === "preview") {
+        const expiry = now().getTime() + CONFIRMATION_TTL_MS;
+        const token = `${expiry}.${alipayPreviewMac(auth, expectedVersion, draft, expiry)}`;
+        writeJson(res, 200, { ...alipayCollectionSummary(draft), confirmation_ref: token }, { "x-request-id": requestId });
+        return;
+      }
+      if (fields["confirm_owner_rights"] !== true) {
+        throw new ManagementError("invalid_input", "请明确确认你有权使用该收款主体及账号或收款码");
+      }
+      const token = fields["confirmation_ref"];
+      const parsed = typeof token === "string" ? /^(\d{1,15})\.([A-Za-z0-9_-]{43})$/.exec(token) : null;
+      if (parsed === null || Number(parsed[1]) <= now().getTime() || !timingSafeEqual(
+        Buffer.from(parsed[2]!), Buffer.from(alipayPreviewMac(auth, expectedVersion, draft, Number(parsed[1]))),
+      )) {
+        throw new ManagementError("precondition_changed", "收款信息、会话或确认有效期已变化，请重新预览");
+      }
+      const result = store.replace(expectedVersion, draft, auth.ctx.actorId, now().toISOString());
+      writeJson(res, 200, alipayCollectionSummary(result), { "x-request-id": requestId });
+    } catch (error) {
+      if (error instanceof ManagementError || error instanceof ActorContextError) throw error;
+      if (error instanceof AlipayCollectionConflict) throw new ManagementError("precondition_changed", error.message);
+      if (error instanceof BodyTooLarge) {
+        writeJson(res, 413, errorBody("invalid_input", "request body too large"), { "x-request-id": requestId });
+        return;
+      }
+      // No unexpected exception (including SQLite diagnostics) is reflected or logged here.
+      throw new ManagementError("unavailable", "支付宝收款设置暂不可用");
+    }
+  }
+
+  async function approveAlipayTotal(req: IncomingMessage, res: ServerResponse, requestId: string): Promise<void> {
+    const auth = requireAlipayCollectionOwner(req);
+    assertWriteGuards(req, auth.sessionId);
+    const approvals = requireAlipayApprovals();
+    const store = requireAlipayCollection();
+    try {
+      const fields = alipayFields(await readJsonBody(req), [
+        "approval_id", "expected_version", "approved_minor", "alipay_total_minor", "confirm_final_total",
+      ]);
+      const approvalId = requireString(fields["approval_id"], "approval_id");
+      const expectedVersion = alipayExpectedVersion(fields["expected_version"]);
+      const approvedMinor = requirePositiveInteger(fields["approved_minor"], "approved_minor");
+      const totalMinor = requirePositiveInteger(fields["alipay_total_minor"], "alipay_total_minor");
+      if (!Number.isSafeInteger(approvedMinor) || !Number.isSafeInteger(totalMinor)) {
+        throw new ManagementError("invalid_input", "单价与最终应付总额必须是安全整数分");
+      }
+      if (fields["confirm_final_total"] !== true) {
+        throw new ManagementError("invalid_input", "请明确确认包含适用运费、税费及其他费用的 CNY 最终应付总额");
+      }
+      const current = store.current();
+      if (auth.ctx.generation !== requireAlipayCollectionOwner(req).ctx.generation ||
+          current?.enabled !== true || current.version !== expectedVersion) throw new AlipayCollectionConflict();
+      const pending = approvals.listApprovals("pending").find((item) => item.approval_id === approvalId && item.currency === "CNY");
+      if (pending === undefined) throw new ManagementError("not_found", "未找到待审批的人民币报价");
+      const subtotal = approvedMinor * pending.quantity;
+      if (subtotal <= 0 || !Number.isSafeInteger(subtotal) || totalMinor < subtotal) {
+        throw new ManagementError("invalid_input", "最终应付总额不得低于已确认单价与数量计算的商品小计");
+      }
+      const receipt = approvals.approve({
+        approval_id: approvalId, approved_minor: approvedMinor, alipay_total_minor: totalMinor, actor: auth.ctx.actorId,
+      });
+      writeJson(res, 200, {
+        approval_id: receipt.approval_id, status: receipt.status,
+        approved_minor: receipt.approved_minor, alipay_total_minor: receipt.alipay_total_minor,
+      }, { "x-request-id": requestId });
+    } catch (error) {
+      if (error instanceof ManagementError || error instanceof ActorContextError) throw error;
+      if (error instanceof AlipayCollectionConflict) throw new ManagementError("precondition_changed", error.message);
+      if (error instanceof BodyTooLarge) {
+        writeJson(res, 413, errorBody("invalid_input", "request body too large"), { "x-request-id": requestId });
+        return;
+      }
+      if (error instanceof NegotiationOpsError) {
+        if (error.code === "not_found" || error.code === "conflict") {
+          throw new ManagementError("precondition_changed", "待审批报价已变更，请刷新后再试");
+        }
+        if (error.code === "forbidden" || error.code === "invalid_request") {
+          throw new ManagementError("invalid_input", "金额不符合当前报价规则，请核对后再试");
+        }
+      }
+      throw new ManagementError("unavailable", "支付宝报价审批暂不可用");
+    }
+  }
+
   async function routeWorkbenchV1Post(
     req: IncomingMessage,
     res: ServerResponse,
@@ -1371,6 +1606,14 @@ export function createMerchantManagementApiHandler(
     requestId: string,
     url: URL,
   ): Promise<void> {
+    if (rest === ALIPAY_APPROVAL_PATH) {
+      await approveAlipayTotal(req, res, requestId);
+      return;
+    }
+    if (rest === ALIPAY_COLLECTION_PATH || rest === `${ALIPAY_COLLECTION_PATH}/preview` || rest === `${ALIPAY_COLLECTION_PATH}/disable`) {
+      await writeAlipayCollection(req, res, requestId, rest.endsWith("/preview") ? "preview" : rest.endsWith("/disable") ? "disable" : "save");
+      return;
+    }
     if (governanceRouteDisabled(rest)) {
       writeWorkbenchProblem(res, "RESOURCE_NOT_FOUND", requestId, "资源不存在", "Workbench API 路由不存在或尚未实现。");
       return;
@@ -3099,6 +3342,8 @@ export function createMerchantManagementApiHandler(
         role: auth.session.role,
         expires_at: auth.session.expires_at,
         csrf_token: csrfTokenFor(auth.sessionId),
+        can_manage_alipay_collection: options.alipayCollection?.merchantId === auth.ctx.merchantId &&
+          auth.ctx.merchantId === options.merchantId && isDirectMerchantOwner(auth.ctx, options.alipayCollectionOwnerActorId),
       });
       return;
     }

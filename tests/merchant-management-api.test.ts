@@ -32,6 +32,9 @@ import { MerchantImportDraftStore } from "../src/http/merchant-management/draft-
 import { renderMerchantManagementPage } from "../src/http/merchant-management/page.js";
 import { MerchantManagementOperationStore } from "../src/http/merchant-management/operation-store.js";
 import { MutableServiceState } from "../src/http/merchant-management/service-state.js";
+import { AlipayCollectionStore } from "../src/merchant-core/collection/alipay-store.js";
+import { NegotiationApprovalStore } from "../src/a2a/server/negotiation-approvals.js";
+import { createNegotiationOps } from "../src/merchant/negotiation-ops.js";
 
 const FIXED_NOW = new Date("2026-09-21T10:00:00Z");
 const MERCHANT = "merchant-001";
@@ -66,6 +69,7 @@ const policyApplyMock = vi.fn<
 
 const importDir = mkdtempSync(path.join(tmpdir(), "kiwi-mgmt-import-"));
 const productsFile = path.join(importDir, "products.json");
+const negotiationApprovals = NegotiationApprovalStore.forDataDir(importDir, () => FIXED_NOW.toISOString());
 
 const options: MerchantManagementApiOptions = {
   merchantId: MERCHANT,
@@ -73,6 +77,12 @@ const options: MerchantManagementApiOptions = {
   runtimeVersion: "test-runtime",
   sessions,
   allowedOrigins: [ORIGIN],
+  alipayCollection: new AlipayCollectionStore(operationsDb, MERCHANT),
+  alipayCollectionOwnerActorId: `admin:${MERCHANT}`,
+  alipayNegotiationApprovals: createNegotiationOps({
+    approvals: negotiationApprovals, ledgerDir: path.join(importDir, "a2a"),
+    merchantId: MERCHANT, version: "test", now: () => FIXED_NOW.toISOString(),
+  }),
   listPending: () => candidates,
   mintCandidateConfirmation: (input) => mintCandidateConfirmation(input),
   executeDecision: async (input) => {
@@ -200,6 +210,129 @@ async function mintApprovalConfirmation(
     },
   });
 }
+
+describe("支付宝收款设置", () => {
+  const route = "/merchant/api/v1/collection/alipay";
+
+  it("不向匿名或非直接 owner 开放，首次读取默认关闭且不可缓存", async () => {
+    expect((await call("GET", route)).status).toBe(401);
+    expect((await call("GET", route, await login("operator"))).status).toBe(403);
+    expect((await call("GET", route, await login("owner", "other"))).status).toBe(404);
+    const { sessionId } = sessions.createSession({
+      principalId: `merchant:${MERCHANT}`, merchantId: MERCHANT, role: "owner",
+    });
+    expect((await call("GET", route, { cookie: `${ADMIN_SESSION_COOKIE}=${sessionId}` })).status).toBe(403);
+    const auth = await login();
+    const response = await fetch(base + route, { headers: { cookie: auth.cookie } });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({ version: null, enabled: false, recipient_masked: null, account_masked: null, has_qr: false });
+  });
+
+  it("保存前要求直属 owner、CSRF、合法 Origin 和绑定到本会话及原值的明确确认，回执不回显收款数据", async () => {
+    const auth = await login();
+    const otherSession = await login();
+    const current = (await call("GET", route, auth)).json;
+    const draft = { expected_version: current.version, enabled: true, recipient: "示例收款主体", account: "buyer-fixture@example.invalid" };
+    const preview = await call("POST", `${route}/preview`, { ...auth, body: draft });
+    expect(preview.status).toBe(200);
+    const commit = { ...draft, confirmation_ref: preview.json.confirmation_ref, confirm_owner_rights: true };
+    const post = (body: unknown, headers = auth) => call("POST", route, { ...headers, body });
+    expect((await post(commit, await login("operator"))).status).toBe(403);
+    expect((await call("POST", route, { cookie: auth.cookie, body: commit })).status).toBe(403);
+    expect((await call("POST", route, { ...auth, origin: "https://other.example", body: commit })).status).toBe(403);
+    expect((await post({ ...commit, confirm_owner_rights: false })).status).toBe(422);
+    expect((await post(commit, otherSession)).status).toBe(409);
+    expect((await post({ ...commit, account: "other-fixture@example.invalid" })).status).toBe(409);
+    const unknown = await post({ ...commit, [draft.account]: true });
+    expect(unknown.status).toBe(422);
+    expect(JSON.stringify(unknown.json)).not.toContain(draft.account);
+    expect((await call("GET", route, auth)).json).toEqual(current);
+
+    const saved = await post(commit);
+    expect(saved.status).toBe(200);
+    expect(saved.json).toEqual({ version: expect.stringMatching(/^[a-f0-9-]{36}$/), enabled: true, recipient_masked: "示***", account_masked: "b***", has_qr: false });
+    expect(JSON.stringify([preview.json, saved.json])).not.toContain(draft.account);
+    expect(JSON.stringify([preview.json, saved.json])).not.toContain(draft.recipient);
+    expect((await post(commit)).status).toBe(409);
+    expect((await call("GET", route, auth)).json).toEqual(saved.json);
+    expect(new AlipayCollectionStore(operationsDb, MERCHANT).current()).toMatchObject({
+      version: saved.json.version, account: draft.account, recipient: draft.recipient,
+    });
+    expect(new AlipayCollectionStore(operationsDb, "other").current()).toBeUndefined();
+  });
+
+  it("只接受有界静态 PNG；停用轮换版本且审计不保存收款资料", async () => {
+    const auth = await login();
+    const current = (await call("GET", route, auth)).json;
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/bj0AAAAASUVORK5CYII=";
+    const draft = { expected_version: current.version, enabled: true, recipient: "测试 PNG 主体", qr_png_base64: png };
+    const preview = (body: unknown) => call("POST", `${route}/preview`, { ...auth, body });
+    const hugeDimensions = Buffer.from(png, "base64");
+    hugeDimensions.writeUInt32BE(100_000, 16);
+    for (const invalid of ["https://example.invalid/qr.png", `data:image/png;base64,${png}`, png.slice(0, 40), hugeDimensions.toString("base64"), "A".repeat(350_000)]) {
+      expect((await preview({ ...draft, qr_png_base64: invalid })).status).toBe(422);
+    }
+    const draftPreview = await preview(draft);
+    expect(draftPreview.status).toBe(200);
+    const saved = await call("POST", route, { ...auth, body: {
+      ...draft, confirm_owner_rights: true, confirmation_ref: draftPreview.json.confirmation_ref,
+    } });
+    expect(saved.status).toBe(200);
+    expect(saved.json).toMatchObject({ account_masked: null, has_qr: true });
+    expect(JSON.stringify(saved.json)).not.toContain(png);
+    const disable = { expected_version: saved.json.version, confirm_disable: true };
+    expect((await call("POST", `${route}/disable`, { ...auth, body: { ...disable, confirm_disable: false } })).status).toBe(422);
+    const disabled = await call("POST", `${route}/disable`, { ...auth, body: disable });
+    expect(disabled.status).toBe(200);
+    expect(disabled.json).toMatchObject({ enabled: false, has_qr: true });
+    expect(disabled.json.version).not.toBe(saved.json.version);
+    expect((await call("POST", `${route}/disable`, { ...auth, body: disable })).status).toBe(409);
+    const audit = operationsDb.prepare("SELECT * FROM alipay_collection_audit WHERE version = ?")
+      .get(disabled.json.version as string);
+    expect(audit).toEqual({
+      version: disabled.json.version, merchant_id: MERCHANT, actor_id: `admin:${MERCHANT}`,
+      changed_at: FIXED_NOW.toISOString(), enabled: 0,
+    });
+  });
+
+  it("仅直接 owner 可明确批准指定 CNY 报价的应付总额，不返回私有底价", async () => {
+    const auth = await login();
+    const current = (await call("GET", route, auth)).json;
+    const draft = { expected_version: current.version, enabled: true, recipient: "测试主体", account: "merchant-fixture@example.invalid" };
+    const preview = await call("POST", `${route}/preview`, { ...auth, body: draft });
+    const configured = await call("POST", route, { ...auth, body: {
+      ...draft, confirmation_ref: preview.json.confirmation_ref, confirm_owner_rights: true,
+    } });
+    const fixture = { sku: "SKU-TEST", quantity: 2, unit: "piece", buyer_offer_minor: 700, floor_minor: 711 };
+    const cny = negotiationApprovals.recordPending({ ...fixture, negotiation_id: "neg_test_cny", currency: "CNY" });
+    const usd = negotiationApprovals.recordPending({ ...fixture, negotiation_id: "neg_test_usd", currency: "USD" });
+    const approvalPath = `${route}/approvals`;
+    const list = await call("GET", approvalPath, auth);
+    expect(list.status).toBe(200);
+    expect(list.json).toEqual({ items: [{
+      approval_id: cny.approval_id, negotiation_id: cny.negotiation_id, sku: fixture.sku, quantity: 2,
+      unit: "piece", buyer_offer_minor: 700, currency: "CNY", expires_at: null,
+    }] });
+    const approved = { approval_id: cny.approval_id, expected_version: configured.json.version,
+      approved_minor: 800, alipay_total_minor: 1650, confirm_final_total: true };
+    const post = (body: unknown, headers = auth) => call("POST", approvalPath, { ...headers, body });
+    expect((await post(approved, await login("operator"))).status).toBe(403);
+    expect((await post(approved, { ...auth, csrf: "" })).status).toBe(403);
+    expect((await post({ ...approved, confirm_final_total: false })).status).toBe(422);
+    expect((await post({ ...approved, alipay_total_minor: 1599 })).status).toBe(422);
+    expect((await post({ ...approved, alipay_total_minor: Number.MAX_SAFE_INTEGER + 1 })).status).toBe(422);
+    expect((await post({ ...approved, approval_id: usd.approval_id })).status).toBe(404);
+    expect((await post({ ...approved, expected_version: current.version })).status).toBe(409);
+    const receipt = await post(approved);
+    expect(receipt.status).toBe(200);
+    expect(receipt.json).toEqual({ approval_id: cny.approval_id, status: "approved", approved_minor: 800, alipay_total_minor: 1650 });
+    expect((await post(approved)).status).toBe(404);
+    expect(negotiationApprovals.list("approved")).toEqual([expect.objectContaining({
+      approval_id: cny.approval_id, alipay_total_minor: 1650, approved_by: `admin:${MERCHANT}`,
+    })]);
+  });
+});
 
 describe("merchant management api — 认证与防护", () => {
   it("未认证 → 401（UC12 前半）", async () => {

@@ -39,6 +39,10 @@ import { DatabaseSync } from "node:sqlite";
 import { a2aCardSigningIdentity, createA2aNodeCore, createA2aAuthVerifier } from "../a2a/node.js";
 import { isOpenInquiryIdentity } from "../a2a/open-inquiry-identity.js";
 import { InquiryNonceStore } from "../a2a/inquiry-nonce-store.js";
+import { AlipayCollectionStore } from "../merchant-core/collection/alipay-store.js";
+import { NegotiationApprovalStore } from "../a2a/server/negotiation-approvals.js";
+import { createNegotiationOps } from "../merchant/negotiation-ops.js";
+import { ALIPAY_PRIVATE_PATH, createAlipayCollectionHttp, hasAlipayReadSignature } from "./alipay-collection-http.js";
 import { OpenInquiryLocalPolicy } from "./access/open-inquiry-policy.js";
 import { closeDatabase, closeHttpServer, createCleanup, CleanupError } from "../lifecycle/close.js";
 import { A2A_SIGNING_KEY_FILE, loadA2aSigningIdentityFromFile, loadOrCreateA2aSigningIdentity, toJwsSigningIdentity } from "../a2a/signing-key.js";
@@ -583,6 +587,7 @@ export async function bootstrapCloudRuntime(
       : undefined;
   const openInquiryPolicy = new OpenInquiryLocalPolicy(config.dataDir, config.publicOrigin);
   let inquiryNonces: InquiryNonceStore | undefined;
+  let collectionStore: AlipayCollectionStore | undefined;
   const authVerifier = createA2aAuthVerifier({
     mode: config.a2aAuth.mode,
     ...(bearerToken !== undefined ? { bearerToken } : {}),
@@ -590,6 +595,10 @@ export async function bootstrapCloudRuntime(
     signingKeyId: signingIdentity?.keyid ?? config.publicOrigin,
     advertisedBase: config.publicOrigin,
     ...(config.a2aAuth.mode === "signature" ? {
+      signatureNonceStore: { checkAndSet: (key: string) => {
+        try { inquiryNonces ??= new InquiryNonceStore(config.dataDir); return inquiryNonces.checkAndSet(`signed:${key}`); }
+        catch { return false; }
+      } },
       openInquiryEnabled: () => !config.a2aKillSwitch && openInquiryPolicy.isEnabled(),
       openInquiryNonceStore: { checkAndSet: (key: string) => {
         try { inquiryNonces ??= new InquiryNonceStore(config.dataDir); return inquiryNonces.checkAndSet(key); }
@@ -670,6 +679,9 @@ export async function bootstrapCloudRuntime(
     a2aPath: CLOUD_A2A_PATH,
     dataDir: config.dataDir,
     authVerifier,
+    ...(config.a2aAuth.mode === "signature" && new URL(config.publicOrigin).protocol === "https:" ? {
+      alipayCollection: { origin: config.publicOrigin, current: () => collectionStore?.current() },
+    } : {}),
     ...(a2aSigningIdentity !== undefined ? { signingIdentity: a2aSigningIdentity } : {}),
     ...(fileProductSource !== undefined ? { productSource: fileProductSource.source } : {}),
     ...(serviceAvailability !== undefined ? { serviceAvailability } : {}),
@@ -762,6 +774,7 @@ export async function bootstrapCloudRuntime(
   let merchantApiHandler: CloudRequestListener | undefined;
   let publicFeedHandler: CloudRequestListener | undefined;
   let buyerHandler: CloudRequestListener | undefined;
+  let alipayLandingHandler: CloudRequestListener | undefined;
   let reconciliationTimer: ReturnType<typeof setInterval> | undefined;
   let clockTimer: ReturnType<typeof setInterval> | undefined;
   let bindingReconcileTimer: ReturnType<typeof setInterval> | undefined;
@@ -791,6 +804,9 @@ export async function bootstrapCloudRuntime(
     // 立即 SQLITE_BUSY；WAL 允许单写多读。
     managementDb.exec("PRAGMA journal_mode = WAL");
     managementDb.exec("PRAGMA busy_timeout = 5000");
+    if (config.a2aAuth.mode === "signature" && new URL(config.publicOrigin).protocol === "https:") {
+      collectionStore = new AlipayCollectionStore(managementDb, profile.owner_id);
+    }
     // M1 收尾（D-M0-05/D-M0-08）：三个独立迁移账本与 data_grants 在功能装配前
     // 就绪；learning/memory/jobs 任一开启时 CAS 获取实例所有权并心跳续约。
     // 获取失败只关闭新功能并记录原因（X12），现有接待/经营路径保持原行为
@@ -1167,9 +1183,20 @@ export async function bootstrapCloudRuntime(
       store: retentionStore,
       resolveBuyer: resolveVerifiedBuyer,
     });
+    const alipay = collectionStore === undefined || core.resolveAlipayCollection === undefined ? undefined : createAlipayCollectionHttp({
+      merchantId: profile.owner_id,
+      verifyBuyer: async (request, body) => {
+        if (config.a2aKillSwitch || !hasAlipayReadSignature(request.headers["signature-input"])) return undefined;
+        return await resolveVerifiedBuyer(request, body);
+      },
+      lookup: core.resolveAlipayCollection,
+      current: () => collectionStore?.current(),
+    });
+    alipayLandingHandler = alipay?.landing;
     buyerHandler = (request, response) => {
       const pathname = new URL(request.url ?? "/", "http://buyer.internal").pathname;
-      if (pathname === "/buyer/v1/follow") followHandler(request, response);
+      if (pathname === ALIPAY_PRIVATE_PATH && alipay !== undefined) alipay.privateDetails(request, response);
+      else if (pathname === "/buyer/v1/follow") followHandler(request, response);
       else if (pathname.startsWith("/buyer/v1/privacy-requests")) {
         privacyHandler(request, response);
       } else engagementHandler(request, response);
@@ -1184,6 +1211,16 @@ export async function bootstrapCloudRuntime(
       sessions: adminOptions.sessions,
       ...(adminOptions.secureCookies === true ? { secureCookies: true } : {}),
       allowedOrigins: [config.publicOrigin],
+      ...(collectionStore === undefined ? {} : {
+        alipayCollection: collectionStore,
+        alipayCollectionOwnerActorId: profile.agent_id,
+        alipayNegotiationApprovals: createNegotiationOps({
+          ledgerDir: path.join(config.dataDir, "a2a"),
+          approvals: NegotiationApprovalStore.forDataDir(config.dataDir),
+          merchantId: profile.owner_id,
+          version: PRODUCT_VERSION,
+        }),
+      }),
       listPending: () => adminOptions.surface.listPending(),
       mintCandidateConfirmation: (input) => adminOptions.store.createConfirmation(input),
       executeDecision: async (input) => {
@@ -1586,6 +1623,7 @@ export async function bootstrapCloudRuntime(
     ...(merchantApiHandler !== undefined ? { merchantApiHandler } : {}),
     ...(publicFeedHandler !== undefined ? { publicFeedHandler } : {}),
     ...(buyerHandler !== undefined ? { buyerHandler } : {}),
+    ...(alipayLandingHandler !== undefined ? { alipayLandingHandler } : {}),
     trustedPageHandler: createTrustedWorkbenchPageHandler(),
     merchantHomePage,
     readiness,

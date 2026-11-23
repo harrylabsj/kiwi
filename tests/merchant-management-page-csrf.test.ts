@@ -156,6 +156,53 @@ describe("merchant workbench CSRF recovery", () => {
     expect(sessionCalls).toBe(1);
   });
 
+  it("collection preview is local, editing invalidates it, and saving needs explicit rights confirmation", async () => {
+    const elements: Record<string, Element> = {};
+    const posted: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const context = createPageContext(elements, async (path, init) => {
+      if (path === "/merchant/api/session") return Response.json(null);
+      posted.push({ path, body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+      return Response.json(path.endsWith("/preview") ? { confirmation_ref: "preview-fixture" } : {});
+    });
+    await loadPage(context);
+    const preview = () => runInContext('$("alipay-form").onsubmit({ preventDefault() {} })', context);
+    runInContext(`
+      Object.assign($("alipay-form"), { isConnected: true, getAttribute: () => "", reset() {} });
+      Object.assign($("alipay-review-qr"), { removeAttribute() {} });
+      $("alipay-qr").files = [];
+      $("alipay-enabled").checked = true;
+      $("alipay-recipient").value = "测试收款主体";
+      $("alipay-account").value = "first@example.invalid";
+      refresh = function () {};
+      bindAlipayCollection();`, context);
+
+    await preview();
+    expect(elements["alipay-review-text"]?.textContent).toContain("first@example.invalid");
+    runInContext('$("alipay-save").onclick()', context);
+    expect(posted).toHaveLength(1);
+    runInContext(`
+      $("alipay-account").value = "second@example.invalid";
+      $("alipay-form").oninput({ target: $("alipay-account") });
+      $("alipay-rights").checked = true;
+      $("alipay-rights").onchange();
+      $("alipay-save").onclick();`, context);
+    expect(posted).toHaveLength(1);
+
+    await preview();
+    runInContext(`
+      $("alipay-rights").checked = true;
+      $("alipay-rights").onchange();
+      $("alipay-save").onclick();`, context);
+    await eventually(() => elements["bar"]?.textContent === "收款设置已保存");
+    expect(posted.at(-1)).toEqual({
+      path: "/merchant/api/v1/collection/alipay",
+      body: {
+        expected_version: null, enabled: true, recipient: "测试收款主体", account: "second@example.invalid",
+        confirmation_ref: "preview-fixture", confirm_owner_rights: true,
+      },
+    });
+  });
+
   it("applies the same recovery to the tabular upload endpoint", async () => {
     const elements: Record<string, Element> = {};
     const sentTokens: string[] = [];
