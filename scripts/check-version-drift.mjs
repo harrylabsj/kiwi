@@ -34,6 +34,25 @@ import { readFileSync } from "node:fs";
 const ISSUE_LABEL = "version-drift";
 const ISSUE_MARKER = "<!-- version-drift-auto -->";
 
+// Gate 模式（release workflow 前置门禁用）：发现「漂移且该通道未在本轮发布
+// 选中」时退出码 1，不写 issue；漂移恰好在选中通道上时视为「本轮即发它」。
+const argv = process.argv.slice(2);
+const gate = argv.includes("--gate");
+const channelsArg = argv.find((a) => a.startsWith("--channels="))?.split("=")[1] ?? "all";
+const acknowledgeSkips = argv.includes("--acknowledge-skips");
+const CHANNEL_PRODUCTS = {
+  npm: "kiwi",
+  "merchant-cloud": "kiwi-merchant-cloud",
+  "kiwi-catalog": "kiwi-catalog",
+  "shopping-cli": "shopping-cli",
+  "dsh-plugin": "kiwi-dsh-plugin",
+};
+const selectedProducts = new Set(
+  channelsArg === "all"
+    ? Object.values(CHANNEL_PRODUCTS)
+    : channelsArg.split(",").map((c) => CHANNEL_PRODUCTS[c.trim()]).filter(Boolean),
+);
+
 const lock = JSON.parse(readFileSync("portfolio.lock.json", "utf8"));
 const products = JSON.parse(readFileSync("portfolio-products.json", "utf8")).products;
 
@@ -119,7 +138,15 @@ for (const p of products) {
     }
     for (const c of checks) {
       rows.push({ product: p.id, check: c.name, ok: c.ok, detail: c.detail });
-      if (!c.ok) problems.push(`- **${p.id}**（${c.name}）：${c.detail}`);
+      if (!c.ok) {
+        const selected = selectedProducts.has(p.id);
+        if (gate) {
+          // 本轮未选中的通道出现漂移 → 阻塞；已选中的漂移 = 本轮正在发它。
+          if (!selected) problems.push(`- **${p.id}**（${c.name}）：${c.detail}`);
+        } else {
+          problems.push(`- **${p.id}**（${c.name}）：${c.detail}`);
+        }
+      }
     }
   } catch (error) {
     rows.push({ product: p.id, check: "漂移检查执行", ok: false, detail: String(error instanceof Error ? error.message : error) });
@@ -134,6 +161,24 @@ const table = [
   "|---|---|---|---|",
   ...rows.map((r) => `| ${r.product} | ${r.check} | ${r.ok ? "✅" : "❌"} | ${r.detail} |`),
 ].join("\n");
+if (gate) {
+  const summary = `## 发布门禁：版本漂移检查（${checkedAt}）\n\n${table}\n\n${
+    drift
+      ? acknowledgeSkips
+        ? "⚠️ 未选中通道存在漂移，但已通过 acknowledge_unpinned_skips 显式豁免（本轮有意跳过）。"
+        : "**门禁拦截**：未选中通道存在未发布改动。请二选一：a) 更新对应组件 pin 并把通道加入本轮 channels；b) 确认本轮有意跳过，勾选 acknowledge_unpinned_skips 重新运行。"
+      : "无阻塞漂移（已选中的漂移即本轮发布对象）。"
+  }`;
+  process.stdout.write(summary + "\n");
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    const { appendFileSync } = await import("node:fs");
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary + "\n");
+  }
+  if (drift && !acknowledgeSkips) {
+    process.exitCode = 1;
+  }
+  process.exit();
+}
 const summary = `## 版本漂移检查（${checkedAt}）\n\n${table}\n\n${drift ? "**发现漂移**" : "无漂移"}`;
 process.stdout.write(summary + "\n");
 if (process.env.GITHUB_STEP_SUMMARY) {
