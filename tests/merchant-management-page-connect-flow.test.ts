@@ -11,7 +11,7 @@
  * limitations under the License.
  */
 /**
- * 一次点击「连接 Kiwi 目录」（connectCatalog）的行为契约。
+ * 一次点击「连接Kiwi网关」（connectCatalog）的行为契约。
  *
  * 页面脚本在 node:vm 里以假 DOM + 可脚本化 fetch 真实执行，断言落在编排顺序
  * 与安全边界：
@@ -325,6 +325,8 @@ describe("merchant workbench one-click connect flow (stageAccessAndBegin)", () =
     expect(html.match(/onclick="connectCatalog\(\)"/g)).toHaveLength(1);
     expect(html.match(/id="access-link"/g)).toHaveLength(1);
     expect(html).not.toContain('id="access-submit"');
+    expect(html).toContain(">连接Kiwi网关</button>");
+    expect(html).toContain("填写后，点击下方「连接Kiwi网关」。");
     expect(html).toContain("发布后默认开放询价");
     await page.run("connectCatalog()");
     expect(page.posts.map((post) => post.path)).toEqual(["/merchant/api/v1/catalog/connect/begin"]);

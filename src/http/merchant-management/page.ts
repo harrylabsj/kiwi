@@ -372,7 +372,7 @@ function renderCatalogSetup(s, a) {
     (waiting ? '<div id="catalog-pairing" aria-live="polite">正在读取配对信息…</div>' : '') +
     (WORKBUDDY_ACCESS && canBegin ? shareForm : '') +
     '<div class="row">' +
-    (canBegin ? '<button id="catalog-begin" class="act primary" onclick="connectCatalog()">连接 Kiwi 目录</button>' : '') +
+    (canBegin ? '<button id="catalog-begin" class="act primary" onclick="connectCatalog()">连接Kiwi网关</button>' : '') +
     '<button class="act" onclick="refreshCatalogSetup()">刷新状态</button></div>' +
     (WORKBUDDY_ACCESS && !canBegin ? shareForm : '') +
     (a || s.published ? '<details class="catalog-settings"><summary>高级设置</summary>' +
@@ -446,7 +446,7 @@ function renderShareSettings(a, connectUsesLink) {
     '<details class="catalog-settings"><summary>查看代管授权与使用说明</summary>' +
     '<p class="muted">WorkBuddy 要求分享码时，请填写本应用的分享链接。链接失效或换码后，请在此更新。撤销代管会清除已保存的分享码。</p></details>' +
     '<div class="row">' +
-    (connectUsesLink ? '<p class="muted">填写后，点击下方「连接 Kiwi 目录」。</p>' : '<button id="access-submit" class="act" onclick="submitAccessLink()" disabled>保存分享链接</button>') +
+    (connectUsesLink ? '<p class="muted">填写后，点击下方「连接Kiwi网关」。</p>' : '<button id="access-submit" class="act" onclick="submitAccessLink()" disabled>保存分享链接</button>') +
     '<button id="access-revoke" class="act danger" onclick="revokeAccess()"' + (a.consentGranted ? '' : ' hidden') + '>撤销代管</button>' +
     '</div>' +
     (a.recentFaults > 0 ? '<p class="warn">最近 24 小时有 ' + esc(a.recentFaults) + ' 次门禁失败，请检查分享链接。</p>' : '') +
