@@ -28,11 +28,11 @@
 | --- | --- |
 | `GET /v1/agents/{id}/public-inquiry` | 可用性探测：仅在授权 + 绑定 + 代管 + 发布全部有效时返回 `{available, catalog_agent_id}`，否则 404 |
 | `POST /v1/agents/{id}/public-inquiry` | 签名中继：原始 body ≤ 64 KiB，逐字节转发到当前活动绑定的 `<runtime_origin>/a2a` |
-| `PUT/GET /v1/agents/{id}/public-inquiry-consent` | 商家（owner + 绑定私钥签名）单独的开放询价授权，`terms_version = open-inquiry-v1`，可随时撤销 |
+| `PUT/GET /v1/agents/{id}/public-inquiry-consent` | 商家运行时使用当前绑定私钥记录或读取开放询价状态，`terms_version = open-inquiry-v1`，可随时关闭 |
 
-授权与既有「分享码代管」授权相互独立：没有开放询价授权时，中继对任何人都返回 404。
-每次请求都重新校验授权（撤销、重新绑定、绑定过期、代管关闭、access 配置失效、
-名片未处于 `ACTIVE` 任一不满足即 fail-closed），不使用缓存的「已授权」结论。
+WorkBuddy 新发布的商家接待服务在商家确认连接并发布后默认开启询价。运行时使用同一个签名接口记录状态，商家可在工作台暂停。已有目录发布保留原有设置。分享码代管仍需商家确认。
+
+每次请求都重新校验授权、活动绑定及 `ACTIVE` 名片。使用分享码时还要求有效的代管授权和配置；门禁撤销或失效后停止这条路径。WorkBuddy 可在明确选择无分享码时使用绑定的 `/a2a` 地址，自动接入也允许从未配置分享码的实例使用该地址。两条路径都用相同的 DNS/TLS 验证、限流和报文规则。
 
 ## 3. 不变量（改动即视为协议变更）
 
@@ -77,5 +77,4 @@
 - 授权语义、`terms_version`、撤销/失效判定；
 - 限流口径或「不落库」承诺。
 
-`terms_version` 目前保持 `open-inquiry-v1`：本次只补充说明文字，不改变授权语义，
-因此不要求已授权商家重新授权；若将来收紧授权范围或改变可见性，必须升版本并要求重新授权。
+`terms_version` 保持 `open-inquiry-v1`。现有发布和已记录的授权继续有效，默认开启仅用于新发布。

@@ -151,7 +151,7 @@ import {
   WORKBENCH_CURRENCY_TABLE_VERSION,
   type ExactMoney,
 } from "../../merchant/application/money.js";
-import { CONNECTION_PAIRING_SAFE_CODES } from "../../cloud/connect-service.js";
+import { CONNECTION_PAIRING_SAFE_CODES, type PublicInquiryConsentSummary } from "../../cloud/connect-service.js";
 import { EXACT_PRODUCT_TOOLS } from "../../merchant/exact-product-executors.js";
 import { SERVICE_CONTROL_TOOLS } from "../../merchant/service-control-executors.js";
 import type { WorkbenchQuoteResult } from "../../merchant/quote-calculator.js";
@@ -348,8 +348,8 @@ export interface MerchantManagementApiOptions {
     submitAccessShareLink?: (link: string, consentTermsVersion: string) => Promise<CatalogAccessSummary>;
     revokeAccess?: () => Promise<CatalogAccessSummary>;
     readBoundAccount?: () => Promise<string | null>;
-    readPublicInquiryConsent?: () => Promise<{ granted: boolean; policyActive: boolean; localEnabled: boolean; termsVersion: string }>;
-    setPublicInquiryConsent?: (granted: boolean) => Promise<{ granted: boolean; policyActive: boolean; localEnabled: boolean; termsVersion: string }>;
+    readPublicInquiryConsent?: () => Promise<PublicInquiryConsentSummary>;
+    setPublicInquiryConsent?: (granted: boolean) => Promise<PublicInquiryConsentSummary>;
   };
   /** Workbench v1 trusted confirmation authority; absent means strong-confirmation routes fail closed. */
   workbenchConfirmations?: WorkbenchConfirmationStore;
