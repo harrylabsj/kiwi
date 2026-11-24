@@ -5,7 +5,7 @@
  * - 凭据保管 AES-GCM 往返；换密钥/过期/删除后取不到（fail-closed）；
  * - 工具按 scope 收敛；写工具在 catalog:read 下既不可见也不可调用；
  * - 草稿写入使用该商家的目录凭据、merchant_id 只来自绑定（不看入参）；
- * - request_publish **不发布**：只保存草稿并返回门户确认入口；
+ * - request_publish **不发布**：只保存草稿，不返回确认入口；
  * - 无凭据/凭据失效时明确报「需要重新连接」，不返回过期数据。
  */
 import { DatabaseSync } from "node:sqlite";
@@ -66,7 +66,7 @@ interface RecordedCall {
   input?: PublicationDraftInput | string;
 }
 
-function fakeClient(calls: RecordedCall[], options: { fail?: boolean } = {}) {
+function fakeClient(calls: RecordedCall[], options: { fail?: boolean; expiresAt?: string } = {}) {
   return {
     saveDraft: async (token: string, input: PublicationDraftInput) => {
       calls.push({ method: "saveDraft", token, input });
@@ -121,7 +121,7 @@ function fakeClient(calls: RecordedCall[], options: { fail?: boolean } = {}) {
         onboarding: {
           status: "awaiting_merchant_confirmation" as const,
           authorization_url: "https://catalog.kiwi.example/portal/connect/enr_1",
-          expires_at: "2026-09-17T10:10:00.000Z",
+          expires_at: options.expiresAt ?? "2099-01-01T00:00:00.000Z",
         },
         card: { published: false, origin: "", verification_level: "discovered" },
         presence: { state: "unknown" as const, last_seen_at: "" },
@@ -131,7 +131,7 @@ function fakeClient(calls: RecordedCall[], options: { fail?: boolean } = {}) {
   } as unknown as MerchantPublicationClient;
 }
 
-function tools(calls: RecordedCall[], options: { withCredential?: boolean; fail?: boolean } = {}) {
+function tools(calls: RecordedCall[], options: { withCredential?: boolean; fail?: boolean; expiresAt?: string } = {}) {
   const store = vault("test-secret");
   if (options.withCredential !== false) {
     store.put(MERCHANT_ID, CREDENTIAL, "2099-01-01T00:00:00.000Z");
@@ -214,9 +214,17 @@ describe("目录工具（kiwi_catalog_*）", () => {
     expect(payload.onboarding.authorization_url).toContain("/portal/connect/");
     expect(payload.card.published).toBe(false);
     expect(payload.presence.state).toBe("unknown");
-    expect(payload.note).toContain("card.published=true");
+    expect(payload.note).toContain("名片已发布不等于能询价");
     expect(text(result)).not.toContain("user_code");
     expect(calls).toEqual([{ method: "fetchServiceStatus", token: CREDENTIAL }]);
+  });
+
+  it("确认链接过期时不返回链接，提示回原实例工作台", async () => {
+    const { bundle } = tools([], { expiresAt: NOW });
+    const result = await bundle.call("kiwi_catalog_get_service_status", {}, ["catalog:read"]);
+    const payload = JSON.parse(text(result));
+    expect(payload.onboarding).toMatchObject({ authorization_url: "", expires_at: "" });
+    expect(payload.note).toContain("原实例工作台");
   });
 
   it("scope 不足时写工具被拒绝（不只靠 tools/list 过滤）", async () => {
@@ -248,12 +256,13 @@ describe("目录工具（kiwi_catalog_*）", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.token).toBe(CREDENTIAL);
     expect(calls[0]?.input).toMatchObject({ merchantDisplayName: "Acme 商贸", title: "明前龙井" });
-    const payload = JSON.parse(text(result)) as { publication_id: string; confirm_url: string };
+    const payload = JSON.parse(text(result)) as { publication_id: string; status: string };
     expect(payload.publication_id).toBe("mpub_1");
-    expect(payload.confirm_url).toBe("https://catalog.kiwi.example/portal/publications");
+    expect(payload.status).toBe("draft");
+    expect(payload).not.toHaveProperty("confirm_url");
   });
 
-  it("request_publish 只保存草稿并给出确认入口（不发布）", async () => {
+  it("request_publish 只保存草稿，不发起授权或发布", async () => {
     const calls: RecordedCall[] = [];
     const { bundle } = tools(calls);
     const result = await bundle.call(
@@ -261,15 +270,14 @@ describe("目录工具（kiwi_catalog_*）", () => {
       { merchant_display_name: "Acme 商贸", title: "明前龙井" },
       ["catalog:write"],
     );
-    expect(calls[0]?.method).toBe("saveDraft");
+    expect(calls.map((call) => call.method)).toEqual(["saveDraft"]);
     const payload = JSON.parse(text(result)) as {
       status: string;
       note: string;
-      confirm_url: string;
     };
     expect(payload.status).toBe("draft");
     expect(payload.note).toContain("尚未发布");
-    expect(payload.confirm_url).toContain("/portal/publications");
+    expect(payload).not.toHaveProperty("confirm_url");
   });
 
   it("缺少必填字段时不调用目录", async () => {

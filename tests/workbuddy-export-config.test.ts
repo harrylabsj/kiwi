@@ -29,6 +29,19 @@ describe("WorkBuddy 平台导入格式转换", () => {
     expect(diffs.map((diff) => diff.path)).toEqual(["jointAuth"]);
   });
 
+  it("导入格式先上云后发布名片，保留原场景身份", () => {
+    const converted = convertToPlatformImport(base, local) as {
+      ui: { nav: { items: Array<{ config: { modes: { items: Array<{
+        modeId: string; scenes: Array<{ id: string }>;
+      }> } } }> } };
+    };
+    const scenes = converted.ui.nav.items[0]!.config.modes.items
+      .find((mode) => mode.modeId === "onboarding")!.scenes;
+    expect(scenes.map((scene) => scene.id)).toEqual([
+      "cap-register", "cap-email", "cap-cloud", "cap-connect", "cap-golive", "cap-upgrade",
+    ]);
+  });
+
   it("保留平台专属字段（templateId/version/brand/图标/专家关联）", () => {
     const converted = convertToPlatformImport(base, local) as {
       templateId: string;

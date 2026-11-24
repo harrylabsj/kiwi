@@ -331,8 +331,8 @@ export class MerchantPublicationClient {
       const configuredOrigin = new URL(this.baseUrl).origin;
       if (
         parsed.origin !== configuredOrigin ||
-        !parsed.pathname.startsWith("/portal/connect/") ||
-        parsed.search !== "" || parsed.hash !== ""
+        !/^\/portal\/connect\/[A-Za-z0-9_-]+$/.test(parsed.pathname) ||
+        parsed.username !== "" || parsed.password !== "" || parsed.search !== "" || parsed.hash !== ""
       ) {
         throw new CatalogSourceError("response_invalid", "service-status authorization_url is not a Catalog page URL");
       }

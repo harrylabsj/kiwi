@@ -330,7 +330,8 @@ describe("merchant workbench one-click connect flow (stageAccessAndBegin)", () =
     expect(html).toContain("<h2>Kiwi网关</h2>");
     expect(html).toContain(">发布名片</button>");
     expect(html).toContain("填写后，点击下方「发布名片」。");
-    expect(html).toContain("发布后默认开放询价");
+    expect(html).toContain("首次发布后将尝试开启开放询价");
+    expect(html).toContain("商品发布后，请在买家端实测");
     await page.run("connectCatalog()");
     expect(page.posts.map((post) => post.path)).toEqual(["/merchant/api/v1/catalog/connect/begin"]);
   });

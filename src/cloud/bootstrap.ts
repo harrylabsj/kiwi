@@ -157,7 +157,7 @@ import {
   type CloudProductSourceHandle,
   type CloudProductRecord,
 } from "./product-source.js";
-import { runReadiness, type ReadinessCheckResult, type ReadinessReport } from "./readiness.js";
+import { runCardPublicationReadiness, runReadiness, type ReadinessInputs, type ReadinessCheckResult, type ReadinessReport } from "./readiness.js";
 import { loadOrCreateMerchantIdentity } from "./merchant-identity.js";
 import { createMerchantConnectionService, MerchantConnectError, type MerchantConnectionService } from "./connect-service.js";
 import { createProbeHandler } from "../tools/workbuddy-echo.js";
@@ -738,8 +738,7 @@ export async function bootstrapCloudRuntime(
 
   // 4) 就绪检查（无敏感值；stale 商品/未配置探针 SKU 都算未就绪，不冒充可用）。
   const probeSku = config.readinessSku;
-  const readiness = async (): Promise<ReadinessReport> =>
-    await runReadiness({
+  const publicationChecks: Omit<ReadinessInputs, "products"> = {
       timeoutMs: config.readinessTimeoutMs,
       identity: () => {
         if (config.a2aAuth.mode === "signature") {
@@ -752,6 +751,14 @@ export async function bootstrapCloudRuntime(
           : { ok: false, code: "IDENTITY_BEARER_TOKEN_MISSING" };
       },
       storage: () => probeAuthoritativeStorage(config.dataDir),
+      policy: () => {
+        const current = assembly.policy();
+        return current.digest !== "" ? { ok: true } : { ok: false, code: "POLICY_EMPTY" };
+      },
+  };
+  const readiness = async (): Promise<ReadinessReport> =>
+    await runReadiness({
+      ...publicationChecks,
       products: async () => {
         if (core.productSource === undefined) return { ok: false, code: "PRODUCTS_SOURCE_ABSENT" };
         if (fileProductSource !== undefined) {
@@ -776,10 +783,6 @@ export async function bootstrapCloudRuntime(
         } catch {
           return { ok: false, code: "PRODUCTS_UNREACHABLE" };
         }
-      },
-      policy: () => {
-        const current = assembly.policy();
-        return current.digest !== "" ? { ok: true } : { ok: false, code: "POLICY_EMPTY" };
       },
     });
   readinessForServiceControl = async () => {
@@ -939,10 +942,17 @@ export async function bootstrapCloudRuntime(
         a2aAuthMode: config.a2aAuth.mode,
         ...(options.catalogFetchImpl !== undefined ? { fetchImpl: options.catalogFetchImpl } : {}),
         beforePublish: async (binding) => {
-          if (productsFilePath !== undefined && !config.sample) {
-            bindProductTableToCatalog(productsFilePath, profile.owner_id, binding.merchantId);
+          const usesOwnedProductTable = productsFilePath !== undefined && !config.sample;
+          const report = usesOwnedProductTable ? await runCardPublicationReadiness(publicationChecks) : await readiness();
+          if (!report.ready) throw new MerchantConnectError("CATALOG_RUNTIME_NOT_READY", "名片发布前的运行时检查未通过");
+          if (usesOwnedProductTable) {
+            try {
+              bindProductTableToCatalog(productsFilePath, profile.owner_id, binding.merchantId);
+            } catch (error) {
+              if (!(error instanceof ProductTableError)) throw error;
+              throw new MerchantConnectError("PRODUCT_TABLE_INVALID", "商品表无法校验或与当前商家不匹配");
+            }
           }
-          if (!(await readiness()).ready) throw new MerchantConnectError("CATALOG_RUNTIME_NOT_READY","Runtime readiness is not satisfied");
         },
       });
       const connection = directConnection;

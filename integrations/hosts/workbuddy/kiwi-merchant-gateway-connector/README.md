@@ -12,7 +12,7 @@
 | `kiwi_catalog_get_merchant_profile` | 连接状态与公开资料管理入口 |
 | `kiwi_catalog_get_merchant_stats` | **经营汇总**：关注者总数 + 公开资料总浏览量 + 各资料的状态与浏览量（匿名聚合：无身份、无名单、无群发通道） |
 | `kiwi_catalog_save_publication_draft` | 保存私有草稿 |
-| `kiwi_catalog_request_publish` | 保存草稿并给出**门户确认入口**（不发布） |
+| `kiwi_catalog_request_publish` | 仅保存私有草稿（不发起名片授权、不发布） |
 | `kiwi_catalog_get_publication` | 读取一条资料的**当前内容**（商家名/商品名/类目/简介/店铺链接/FAQ）与状态 |
 | `kiwi_catalog_withdraw_publication` | 撤回资料 |
 

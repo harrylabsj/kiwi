@@ -104,8 +104,8 @@ describe("Buddy 应用配置（buddy-app.config.json）", () => {
   it("1.8.1 上线边界：不宣称买家可发现/可询价，内置连接器状态与台账一致", () => {
     const onboarding = config.home.modes.find((m) => m.key === "onboarding")!;
     expect(onboarding.description).not.toContain("让采购方发现你并直接发来询价");
-    expect(onboarding.systemPrompt).toContain("名片已发布、连接正常");
-    expect(onboarding.systemPrompt).toContain("不要据此说买家已能搜索到你或发来询价");
+    expect(onboarding.systemPrompt).toContain("名片激活回执、签名心跳、指定 SKU 发布回执和买家端实测");
+    expect(onboarding.systemPrompt).toContain("未实测，不宣称已能搜索或询价");
     expect(onboarding.systemPrompt).not.toContain("采购方可以发现你并发来询价");
     expect(config.home["内置连接器"]).toContain("v1.2.0");
   });
