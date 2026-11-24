@@ -349,6 +349,15 @@ export class LedgerStore {
     return this.load(negotiationId);
   }
 
+  /** 同一文件快照完成校验和读取，供商家持久动作的事实复核。 */
+  verifiedEvents(negotiationId: string): LedgerEvent[] {
+    const events = this.load(negotiationId);
+    if (!this.verifyEvents(events).valid) {
+      throw new LedgerError("ledger_append_only_violation", "action facts require a valid Ledger chain");
+    }
+    return events;
+  }
+
   /** 高水位（§23 恢复第 2 步）：count / 链尾 digest / 末条 message_id。 */
   highWaterMark(negotiationId: string): LedgerHighWaterMark {
     const events = this.load(negotiationId);

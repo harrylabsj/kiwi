@@ -177,6 +177,38 @@ describe("经营任务 M4", () => {
     );
   });
 
+  it("weekday digest skips weekends, catches up the latest occurrence and resumes at a new version", () => {
+    const friday = "2026-11-20T08:00:00.000Z";
+    const monday = "2026-11-23T09:00:00.000Z";
+    const spec = { kind: "daily_local", local_time: "17:00", timezone: "Asia/Shanghai", day_filter: "weekdays" } as const;
+    clock = friday;
+    const candidate = service.prepareRule({
+      merchant_id: MERCHANT, mode: "goal", template: "unfinished_inquiry_digest",
+      trigger_spec: spec, scope: { window: "last_7_days" },
+      predicate_spec: { kind: "fixed_template", template: "unfinished_inquiry_digest" },
+      action_type: "internal_summary", budget: { max_runs_per_day: 1 },
+    });
+    expect(service.listRules(MERCHANT)).toEqual([]);
+    const active = service.activateRule({ merchant_id: MERCHANT, candidate_ref: candidate.candidate_ref });
+    expect(active.next_due_at).toBe("2026-11-20T09:00:00.000Z");
+    expect(nextDailyDueAt({ ...spec, now: "2026-11-20T09:00:00.000Z" })).toBe(monday);
+    clock = "2026-11-23T09:01:00.000Z";
+    const [evaluation] = service.evaluateDue({ merchant_id: MERCHANT, prefilter: (occurrence) => {
+      expect(occurrence.next_due_at).toBe(monday);
+      return { result: "eligible", window_end: monday };
+    } });
+    expect(evaluation).toMatchObject({ trigger_key: expect.stringContaining(monday), window_end: monday });
+    expect(service.getRule(MERCHANT, active.rule_id)?.missed_count).toBe(1);
+    expect(service.evaluateDue({ merchant_id: MERCHANT, prefilter: () => ({ result: "eligible" }) })).toEqual([]);
+    const paused = service.pauseRule({ merchant_id: MERCHANT, rule_id: active.rule_id, expected_version: 1, reason: "owner" });
+    expect(paused.next_due_at).toBeNull();
+    const resumed = service.resumeRule({ merchant_id: MERCHANT, rule_id: active.rule_id, expected_version: 1, expected_enable_epoch: paused.enable_epoch });
+    expect(resumed).toMatchObject({ state: "ACTIVE", version: 2, next_due_at: "2026-11-24T09:00:00.000Z" });
+    expect(service.claimDue({ merchant_id: MERCHANT, worker_id: "fixture-worker" })).toBeUndefined();
+    expectError(() => service.resumeRule({ merchant_id: MERCHANT, rule_id: active.rule_id, expected_version: 1, expected_enable_epoch: paused.enable_epoch }),
+      "version_conflict", "rule_version_mismatch");
+  });
+
   it("prepareRule 只生成候选；activate 才创建规则；暂停递增 epoch 并取消任务", () => {
     const candidate = service.prepareRule({
       merchant_id: MERCHANT,

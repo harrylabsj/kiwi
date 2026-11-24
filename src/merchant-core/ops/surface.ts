@@ -673,6 +673,16 @@ export class MerchantOperationsSurface {
     });
   }
 
+  resumeRule(ruleId: string, value: unknown): unknown {
+    const body = objectBody(value);
+    return this.facade.operationsJobs.resumeRule({
+      merchant_id: this.facade.merchantId,
+      rule_id: ruleId,
+      expected_version: integer(body, "expected_version"),
+      expected_enable_epoch: integer(body, "expected_enable_epoch"),
+    });
+  }
+
   listArtifacts(taskId?: string): unknown[] {
     return this.facade.operationsJobs.listArtifacts(this.facade.merchantId, taskId);
   }
