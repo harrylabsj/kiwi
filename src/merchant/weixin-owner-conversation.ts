@@ -8,6 +8,7 @@ import { closeSync, openSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import type { InboundMessage } from "../weixin/types.js";
 import { ownerWeekdayDigest } from "./weixin-owner-digest.js";
+import type { OwnerAgentDecision, WeixinOwnerAgent } from "./weixin-owner-agent.js";
 import { OwnerInventoryError, ownerInventorySku, type OwnerInventoryObservation } from "./weixin-owner-inventory.js";
 
 const RETENTION = 30 * 24 * 60 * 60_000;
@@ -15,6 +16,10 @@ const REPLY_TTL = 10 * 60_000;
 const LIST_TTL = 30 * 60_000;
 const MAX_TEXT = 1200;
 const MAX_CONTEXT = 4096;
+const AGENT_HISTORY_LIMIT = 4;
+const AGENT_CALLS_PER_DAY = 60;
+const DAY_MS = 24 * 60 * 60_000;
+const AGENT_UNAVAILABLE = "Kiwi 暂时无法连接对话模型，请稍后重新发问。没有执行任何业务操作。";
 
 /** 单个权威来源的最小询价事实，不携带客户正文、价格、身份或路由。 */
 export interface OwnerInquiry {
@@ -42,6 +47,8 @@ export interface WeixinOwnerConversationOptions {
   enabled: boolean;
   /** 显式开启仅配对店主的私聊回信。缺省仍为工作台预览。 */
   replyToOwner?: boolean;
+  /** An independently opted-in model for owner private chat; never used in preview mode. */
+  agent?: WeixinOwnerAgent;
   /** 尚有效的单实例管理员凭据代次；口令轮换、主体替换后必须改变。 */
   ownerRevision: (principalId: string) => string | undefined;
   source: OwnerInquirySource;
@@ -105,8 +112,20 @@ export function rankOwnerInquiries(items: readonly OwnerInquiry[], now: number):
     (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).slice(0, 3);
 }
 
-type OwnerIntent = { kind: "list" | "greeting" | "blocked" | "private_lookup" | "unsupported" } |
-  { kind: "repeat"; listOnly: boolean } | { kind: "draft" | "explain"; index: number; ref?: string };
+type OwnerIntent = OwnerAgentDecision | { kind: "greeting" | "unsupported" | "clarify_target" };
+
+/** The model may interpret intent but cannot invent or silently change a draft target. */
+function checkAgentTarget(intent: OwnerAgentDecision, text: string): OwnerIntent {
+  if (intent.kind !== "draft" && intent.kind !== "explain") return intent;
+  const ordinals = [...text.matchAll(/(?:第\s*([一二三123])\s*(?:笔|条|个|项)|(?<!\d)([123])\s*号)/g)];
+  const refs = [...text.matchAll(/\bL-[a-f\d]{8}\b/gi)];
+  const ordinal = ordinals[0]?.[1] ?? ordinals[0]?.[2] ?? "";
+  const index = (["一", "二", "三"].includes(ordinal) ? "一二三".indexOf(ordinal) + 1 : Number(ordinal)) - 1;
+  if (ordinals.length !== 1 || index !== intent.index || refs.length > 1 || refs[0]?.[0].toUpperCase() !== intent.ref) {
+    return { kind: "clarify_target" };
+  }
+  return intent;
+}
 
 /** 只把边界明确的自然语言意图映射到业务能力，不执行正式操作。 */
 function classify(text: string): OwnerIntent {
@@ -147,6 +166,7 @@ export class WeixinOwnerConversation {
   private readonly db: DatabaseSync;
   private readonly formatter: Intl.DateTimeFormat;
   private lastPurge = -Infinity;
+  private agentCall: { conversation: string; abort: AbortController } | undefined;
 
   constructor(file: string, private readonly options: WeixinOwnerConversationOptions, private readonly now: () => number) {
     this.formatter = new Intl.DateTimeFormat("zh-CN", { timeZone: options.timeZone ?? "Asia/Shanghai", dateStyle: "short", timeStyle: "short", hour12: false });
@@ -164,6 +184,11 @@ export class WeixinOwnerConversation {
           text TEXT, context TEXT, state TEXT NOT NULL, reply TEXT, list TEXT, rule_proposal TEXT
         );
         CREATE INDEX IF NOT EXISTS owner_turn_dispatch ON owner_turn (conversation, state, seq);
+        CREATE TABLE IF NOT EXISTS owner_agent_turn (
+          seq INTEGER PRIMARY KEY REFERENCES owner_turn(seq) ON DELETE CASCADE,
+          requested INTEGER NOT NULL, history_reply INTEGER CHECK (history_reply IN (0, 1))
+        );
+        CREATE INDEX IF NOT EXISTS owner_agent_turn_requested ON owner_agent_turn (requested);
         CREATE TABLE IF NOT EXISTS owner_followup_preference (
           principal TEXT PRIMARY KEY, style TEXT, version INTEGER NOT NULL, updated_at TEXT NOT NULL
         );
@@ -200,8 +225,12 @@ export class WeixinOwnerConversation {
 
   private revisionFor(principal: string): string | undefined {
     const revision = this.options.ownerRevision(principal);
-    // 开放微信回信必须重新确认，不能沿用原先的仅工作台授权或接着发送预览队列。
-    return revision && this.options.replyToOwner ? digest(["paired-owner-replies-v1", revision]) : revision;
+    if (!revision || !this.options.replyToOwner) return revision;
+    const agent = this.options.agent;
+    // Local reply consent and model-data consent are distinct; a model change invalidates the old session.
+    if (agent?.state === "unavailable") return undefined;
+    if (agent?.state === "configured") return digest(["paired-owner-agent-v1", revision, agent.consent]);
+    return digest(["paired-owner-replies-v1", revision]);
   }
 
   private active(fingerprint: string): Binding | undefined {
@@ -237,6 +266,7 @@ export class WeixinOwnerConversation {
   }
 
   private clearTurns(conversation: string): void {
+    if (this.agentCall?.conversation === conversation) this.agentCall.abort.abort();
     this.db.prepare(`UPDATE owner_turn SET text = NULL, context = NULL, reply = NULL, list = NULL, rule_proposal = NULL,
       state = CASE WHEN state IN ('queued', 'ready') THEN 'void' ELSE state END WHERE conversation = ?`).run(conversation);
   }
@@ -272,6 +302,8 @@ export class WeixinOwnerConversation {
     this.atomic(() => {
       if (purge) {
         this.db.prepare("DELETE FROM owner_turn WHERE received < ?").run(now - RETENTION);
+        this.db.prepare("UPDATE owner_turn SET text=NULL WHERE state IN ('accepted', 'unknown') AND received<=? AND text IS NOT NULL")
+          .run(now - LIST_TTL);
         this.db.prepare(`UPDATE owner_turn SET state = 'void', text = NULL, context = NULL, reply = NULL
           WHERE state IN ('queued', 'ready') AND received <= ?`).run(now - REPLY_TTL);
       }
@@ -339,15 +371,53 @@ export class WeixinOwnerConversation {
     }
   }
 
+  private async decideWithAgent(agent: Extract<WeixinOwnerAgent, { state: "configured" }>, binding: Binding, turn: Turn,
+    text: string, signal: AbortSignal): Promise<{ intent: OwnerIntent; usedModel: boolean }> {
+    const started = this.now();
+    if (this.db.prepare("SELECT 1 FROM owner_agent_turn WHERE seq=?").get(turn.seq)) {
+      return { intent: { kind: "reply", text: "这条消息的模型请求结果未能确认，未自动重试。请重新发送问题。" }, usedModel: false };
+    }
+    const budget = this.db.prepare("SELECT COUNT(*) n FROM owner_agent_turn WHERE requested>?").get(started - DAY_MS) as { n: number };
+    if (budget.n >= AGENT_CALLS_PER_DAY) {
+      return { intent: { kind: "reply", text: "Kiwi 的对话模型已达到使用上限，请晚些再试。" }, usedModel: false };
+    }
+    const history = this.db.prepare(`SELECT t.text AS question,
+      CASE WHEN a.history_reply=1 THEN substr(t.reply, 1, 600) ELSE '上一轮由 Kiwi 本机处理，业务数据不会提供给模型。' END AS answer
+      FROM owner_agent_turn a JOIN owner_turn t USING(seq)
+      WHERE t.conversation=? AND t.seq<? AND t.state='accepted' AND t.received>?
+        AND t.text IS NOT NULL AND t.reply IS NOT NULL AND a.history_reply IS NOT NULL
+      ORDER BY t.seq DESC LIMIT ?`).all(binding.conversation, turn.seq, started - LIST_TTL, AGENT_HISTORY_LIMIT) as Array<{ question: string; answer: string }>;
+    // Reserve in SQLite before the provider call. A crash after this point cannot bill the same message again.
+    this.db.prepare("INSERT INTO owner_agent_turn (seq, requested) VALUES (?, ?)").run(turn.seq, started);
+    const call = { conversation: binding.conversation, abort: new AbortController() };
+    this.agentCall = call;
+    try {
+      const response = await agent.decide({ text, history: [...history].reverse() }, AbortSignal.any([signal, call.abort.signal]));
+      return { intent: checkAgentTarget(response, text), usedModel: true };
+    } finally {
+      if (this.agentCall === call) this.agentCall = undefined;
+    }
+  }
+
   private async prepareTurn(fingerprint: string, binding: Binding, turn: Turn, signal: AbortSignal, previewOnly = false): Promise<void> {
     const text = turn.text ?? "";
-    const intent = classify(text);
+    const agent = previewOnly ? undefined : this.options.agent;
     const inventorySku = previewOnly ? ownerInventorySku(text) : undefined;
     let reply = "我可以帮你查待跟进询价、接着聊刚才的清单，或拟一份跟进草稿。你想先看什么？";
     let list: ListSnapshot | undefined;
     let ruleProposal: ReturnType<typeof ownerWeekdayDigest>;
     let draft: { item: OwnerInquiry; body: string; index: number } | undefined;
+    let historyReply: number | null = null;
+    let modelResponded = false;
     try {
+      let intent: OwnerIntent;
+      if (agent?.state === "configured") {
+        const decision = await this.decideWithAgent(agent, binding, turn, text, signal);
+        if (signal.aborted || this.active(fingerprint)?.conversation !== turn.conversation || this.now() - turn.received >= REPLY_TTL) return;
+        ({ intent, usedModel: modelResponded } = decision);
+        // Later model turns get only free-form replies, not rendered business facts.
+        if (modelResponded) historyReply = intent.kind === "reply" ? 1 : 0;
+      } else intent = classify(text);
       if (previewOnly) ruleProposal = ownerWeekdayDigest(turn.text ?? "", this.options.timeZone ?? "Asia/Shanghai", this.now());
       if (inventorySku !== undefined) {
         reply = await this.inventoryPreview(inventorySku);
@@ -358,6 +428,12 @@ export class WeixinOwnerConversation {
       } else if (previewOnly && intent.kind === "unsupported" && /(?:偏好|语气|简洁|热情).*(?:回复|跟进)|(?:回复|跟进).*(?:偏好|语气|简洁|热情)/.test(turn.text ?? "")) {
         const style = this.preference(binding.principal).style;
         reply = "当前普通跟进语气：" + (style === "concise" ? "简洁" : style === "warm" ? "友好" : "默认") + "。请在工作台明确设置或撤回，聊天不直接更改偏好。";
+      } else if (intent.kind === "reply") {
+        reply = intent.text;
+      } else if (intent.kind === "today") {
+        reply = "我还没有可核实今天新增咨询的数据来源，不能判断今天有没有新买家来咨询。我可以帮你查当前待跟进的询价，但那不等于今天新增。";
+      } else if (intent.kind === "clarify_target") {
+        reply = "我还不能确定你指哪一笔。请告诉我清单中的序号；如果有多份清单，也请带上清单号。";
       } else if (intent.kind === "greeting") {
         reply = "你好，我是你的 Kiwi 商家智能体。可以直接跟我说「今天有什么要跟进的？」或者问我刚才聊到哪里。不用记命令。";
       } else if (intent.kind === "blocked") {
@@ -426,11 +502,13 @@ export class WeixinOwnerConversation {
         }
       }
     } catch {
-      reply = "暂时无法核实询价事实或生成回复，请到工作台查看后再试。没有发送给买家。";
+      reply = agent?.state === "configured" && !modelResponded ? AGENT_UNAVAILABLE :
+        "暂时无法核实询价事实或生成回复，请到工作台查看后再试。没有发送给买家。";
     }
     if (signal.aborted) return;
     this.atomic(() => {
       if (this.active(fingerprint)?.conversation !== turn.conversation || this.now() - turn.received >= REPLY_TTL) return;
+      if (historyReply !== null) this.db.prepare("UPDATE owner_agent_turn SET history_reply=? WHERE seq=?").run(historyReply, turn.seq);
       if (draft !== undefined) {
         let current: OwnerInquiry | undefined;
         try { current = this.options.source.get(draft.item.id); } catch { /* 无事实则不落草稿 */ }
@@ -449,9 +527,9 @@ export class WeixinOwnerConversation {
         }
       }
       const state = previewOnly ? "previewed" : "ready";
-      this.db.prepare(`UPDATE owner_turn SET state=?, reply=?, list=?, rule_proposal=?, text=NULL, context=? WHERE seq=? AND state='queued'`)
+      this.db.prepare(`UPDATE owner_turn SET state=?, reply=?, list=?, rule_proposal=?, text=?, context=? WHERE seq=? AND state='queued'`)
         .run(state, reply, list === undefined ? null : JSON.stringify(list), ruleProposal === undefined ? null : JSON.stringify(ruleProposal),
-          previewOnly ? null : turn.context, turn.seq);
+          historyReply === null ? null : text, previewOnly ? null : turn.context, turn.seq);
     });
   }
 

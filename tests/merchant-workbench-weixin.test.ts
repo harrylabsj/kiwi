@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { createScriptedFakeStreamFn } from "../src/runtime/fake-model.js";
+import { createWeixinOwnerDecider } from "../src/merchant/weixin-owner-agent.js";
 import { ADMIN_SESSION_COOKIE, MerchantAdminSessions } from "../src/auth/merchant-sessions.js";
 import { createMerchantManagementApiHandler } from "../src/http/merchant-management/api.js";
 import { MerchantImportDraftStore } from "../src/http/merchant-management/draft-store.js";
@@ -383,6 +386,81 @@ describe("merchant Workbench Weixin channel", () => {
     await vi.waitFor(() => expect(getUpdates.mock.calls.some(([cursor]) => cursor === "revoked")).toBe(true), { timeout: 3500 });
     expect(sendMessage).toHaveBeenCalledTimes(6);
   }, 12_000);
+
+  it("requires separate model consent, then replies through Pi and resumes a private chat after restart", async () => {
+    await stopServer();
+    await channel.close();
+    const consent = "a".repeat(64);
+    const action = (name: string) => fauxAssistantMessage([fauxToolCall("handle_merchant_request", { action: name })], { stopReason: "toolUse" });
+    const { streamFn, handle } = createScriptedFakeStreamFn([
+      fauxAssistantMessage("可以，先从店铺定位和常见客户问题聊起。"),
+      action("list"), action("today"),
+      fauxAssistantMessage("我们刚才在聊店铺定位，可以先明确核心客群。"),
+    ]);
+    const stream = vi.fn(streamFn);
+    const decide = createWeixinOwnerDecider({ model: handle.getModel(), streamFn: stream, getApiKey: () => "offline-fixture" });
+    const config: WeixinOwnerConversationOptions = {
+      enabled: true, replyToOwner: true, workbenchOrigin: ORIGIN,
+      ownerRevision: (id) => id === "fixture-owner" ? "fixture-revision" : undefined,
+      agent: { state: "configured", consent, provider: "fixture", model: "fixture-model", endpoint: "https://model.example/v1", decide },
+      source: { list: () => [{ id: "private-inquiry", version: "v1", receivedAt: now - 1000, sku: "PRIVATE-SKU" }], get: () => undefined },
+    };
+    function updates(cursor: string, ...texts: string[]) {
+      getUpdates.mockResolvedValueOnce({
+        next_sync_buf: cursor, longpoll_timeout_ms: 35_000,
+        messages: texts.map((text, i) => ({ account: credentials.ilink_user_id!, from_user_id: credentials.ilink_user_id!,
+          direct_text: true, text, message_id: `${cursor}-${i}`, context_token: `private-context-${i}` })),
+      });
+    }
+    async function cursorAdvanced(cursor: string) {
+      await vi.waitFor(() => expect(getUpdates.mock.calls.some(([value]) => value === cursor)).toBe(true), { timeout: 3500 });
+    }
+    channel = newChannel(config);
+    await startServer();
+    const owner = await login();
+    const attempt = await begin(owner);
+    getQrcodeStatus.mockResolvedValueOnce(confirmed);
+    updates("before-consent", "你好，先介绍一下你自己");
+    expect((await request("/poll", owner, attempt)).status).toBe(200);
+    await cursorAdvanced("before-consent");
+    expect(stream).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(await (await request("", owner)).json()).toMatchObject({ conversation: {
+      authorized: false, agent: { state: "configured", consent, endpoint: "https://model.example/v1" },
+    } });
+    expect((await request("/confirm-conversation", owner)).status).toBe(409);
+    expect((await request("/confirm-conversation", owner, { model_consent: "b".repeat(64) })).status).toBe(409);
+    expect((await request("/confirm-conversation", { ...owner, csrf: "" }, { model_consent: consent })).status).toBe(403);
+    expect((await request("/confirm-conversation", owner, { model_consent: consent })).status).toBe(200);
+    updates("model-turns", "新店开张，我该先从什么聊起？", "现在有什么要跟？", "今天有买家来吗？");
+    await cursorAdvanced("model-turns");
+    expect(sendMessage.mock.calls.map(([out]) => out.text)).toEqual([
+      "可以，先从店铺定位和常见客户问题聊起。",
+      expect.stringContaining("有 1 笔待跟进询价"),
+      expect.stringContaining("不能判断今天有没有新买家来咨询"),
+    ]);
+    expect(stream).toHaveBeenCalledTimes(3);
+    await channel.close();
+    await stopServer();
+
+    channel = newChannel(config);
+    await startServer();
+    updates("continued", "我们刚聊到哪？继续说说。");
+    channel.restore();
+    await cursorAdvanced("continued");
+    expect(sendMessage.mock.calls[3]?.[0].text).toContain("明确核心客群");
+    const modelTranscript = JSON.stringify(stream.mock.calls[3]?.[1]);
+    expect(modelTranscript).toContain("新店开张");
+    expect(modelTranscript).toContain("先从店铺定位");
+    expect(modelTranscript).not.toMatch(/private-inquiry|PRIVATE-SKU|private-context|fixture-paired-user|有 1 笔/);
+    expect(sendMessage.mock.calls.every(([out]) => out.to_user_id === credentials.ilink_user_id)).toBe(true);
+    const fresh = await login();
+    expect((await request("/revoke-conversation", fresh)).status).toBe(200);
+    updates("revoked", "还能接着聊吗？");
+    await cursorAdvanced("revoked");
+    expect(stream).toHaveBeenCalledTimes(4);
+    expect(sendMessage).toHaveBeenCalledTimes(4);
+  }, 15_000);
 
   it("shows exact inventory only to the owner and never uses a failed or cross-merchant read", async () => {
     await stopServer();
