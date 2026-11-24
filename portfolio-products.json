@@ -23,7 +23,7 @@
         "protected kiwi-release environment",
         "npm trusted publishing"
       ],
-      "last_known_registry_version": "0.12.32"
+      "last_known_registry_version": "0.12.33"
     },
     {
       "id": "kiwi",
@@ -39,7 +39,7 @@
       "release_controller": "portfolio-release",
       "artifact": "release/npm/*.tgz",
       "state": "candidate",
-      "last_known_registry_version": "0.12.32",
+      "last_known_registry_version": "0.12.33",
       "gates": [
         "full Kiwi verify",
         "protected kiwi-release environment",
