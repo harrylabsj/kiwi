@@ -50,6 +50,7 @@ import { A2A_SIGNING_KEY_FILE, loadA2aSigningIdentityFromFile, loadOrCreateA2aSi
 import { publicKeyThumbprint } from "../trust/binding/thumbprint.js";
 import { loadProfile, ProfileError } from "../config/profile.js";
 import { createMerchantManagementApiHandler } from "../http/merchant-management/api.js";
+import { MerchantWeixinChannel } from "../merchant/weixin-channel.js";
 import { createMerchantFeedApiHandler } from "../http/merchant-feed-api.js";
 import { createMerchantFollowApiHandler } from "../http/merchant-follow-api.js";
 import { createMerchantEngagementApiHandler } from "../http/merchant-engagement-api.js";
@@ -789,6 +790,7 @@ export async function bootstrapCloudRuntime(
   const adminOptions = assembly.serverOptions.admin;
   const productsFilePath = config.productsFile;
   const applyPolicyOverride = assembly.service.policyApplier;
+  const weixinChannel = adminOptions === undefined ? undefined : new MerchantWeixinChannel({ dataDir: config.dataDir, merchantId: profile.owner_id });
   let managementDb: DatabaseSync | undefined;
   let merchantApiHandler: CloudRequestListener | undefined;
   let publicFeedHandler: CloudRequestListener | undefined;
@@ -1226,6 +1228,7 @@ export async function bootstrapCloudRuntime(
       } else engagementHandler(request, response);
     };
     merchantApiHandler = createMerchantManagementApiHandler({
+      ...(weixinChannel !== undefined ? { weixinChannel } : {}),
       merchantId: profile.owner_id,
       merchantName: profile.name ?? "待设置商家名称",
       merchantNameNeedsUpdate: config.merchantNameNeedsUpdate && profile.name === "待设置商家名称",
@@ -1626,6 +1629,7 @@ export async function bootstrapCloudRuntime(
       productAuthority: fileProductSource !== undefined ? "file" : "exact",
       catalogConnection: directConnection !== undefined,
       workbuddyAccess: new URL(config.publicOrigin).hostname.endsWith(".app.workbuddy.host"),
+      weixinChannel: weixinChannel !== undefined,
     }));
   };
 
@@ -1707,6 +1711,7 @@ export async function bootstrapCloudRuntime(
     { id: "heartbeat", run: () => enrollmentHeartbeat?.stop() },
     { id: "operations_scheduler", run: () => operationsScheduler?.stop() },
     { id: "customer_data_maintenance", run: () => customerDataMaintenance?.stop() },
+    { id: "weixin_channel", run: () => weixinChannel?.close() },
     { id: "http_server", run: () => closeHttpServer(server) },
     { id: "background_work", after: ["timers"], run: async () => {
       await Promise.allSettled([directConnectionWork, bindingReconcileWork]);
@@ -1747,6 +1752,7 @@ export async function bootstrapCloudRuntime(
     throw err;
   }
 
+  weixinChannel?.restore();
   const summary = describeCloudConfig(config);
   log(
     `[kiwi-cloud] listening ${config.bindHost}:${config.port}` +
