@@ -158,7 +158,7 @@
     },
     {
       "path": ".github/workflows/portfolio-release.yml",
-      "sha256": "sha256:35333d603dbac62021d87dd7f5be93b41fa19cb58f050ca03ab169fa3222db9b"
+      "sha256": "sha256:7e8c0b8c145578aa27e3d7280b2c0961f36af0b9bd83071b9be6d08059cb9987"
     },
     {
       "path": ".github/workflows/release-rehearsal.yml",
@@ -167,6 +167,10 @@
     {
       "path": ".github/workflows/supply-chain-rehearsal.yml",
       "sha256": "sha256:5a23250a31ec05f36c806416a6a085815e03ff38a5cf5058edccb2bf03bfc2db"
+    },
+    {
+      "path": ".github/workflows/version-drift.yml",
+      "sha256": "sha256:9bcc64f047315a8b5683452c3e2dc04a101c2361eca4c1e1b42c84133b5d70eb"
     },
     {
       "path": ".gitignore",
@@ -3715,6 +3719,10 @@
     {
       "path": "scripts/check-install-toolchain.mjs",
       "sha256": "sha256:ccb86a2707cb23f385f6428eb8c3f28df9ad0c0fe59b584e2b29ffe4eafd9c69"
+    },
+    {
+      "path": "scripts/check-version-drift.mjs",
+      "sha256": "sha256:2d540421760cb8c224d9ebaa44188993a4359bfc1c9005a59086144190e3737b"
     },
     {
       "path": "scripts/chmod-workbuddy-adapter.mjs",
