@@ -31,6 +31,7 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { Readable } from "node:stream";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -81,10 +82,11 @@ const CARD = {
   ],
 };
 
-const APPROVED_DIGEST = (() => {
-  const card = validateAgentCard(CARD);
+function approvedDigest(origin: string): string {
+  const card = validateAgentCard({ ...CARD, url: origin,
+    supportedInterfaces: [{ ...CARD.supportedInterfaces[0], url: origin + "/a2a" }] });
   return `sha256:${createHash("sha256").update(canonicalize(card as unknown as Record<string, unknown>), "utf8").digest("hex")}`;
-})();
+}
 
 const issuer = generateKeyPairSync("ed25519");
 const ISSUER_KID = "catalog-issuer-stub";
@@ -123,6 +125,8 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
 
 interface CatalogStubOptions {
   failConsentReadOnce?: boolean;
+  runtimeOrigin?: string;
+  inMemory?: boolean;
   /** 第几次 poll 起返回 authorized（默认 0 = 第一次就 authorized）。 */
   pollsBeforeAuthorized?: number;
   /** 非空时：对 bind 签发声明做篡改（模拟 card_url/merchant 等验真失配）。 */
@@ -154,6 +158,7 @@ interface CatalogStub {
   origin: string;
   /** loopback 实际端口（TLS shim 目标）。 */
   port: number;
+  fetch: typeof fetch;
   close: () => Promise<void>;
   counts: { deviceCreates: number; polls: number; binds: number; publications: number; activations: number };
   /** token 端点实际收到的全部 device_code（用于断言外码不外泄）。 */
@@ -187,6 +192,8 @@ async function startRuntimeStub(): Promise<{ port: number; close: () => Promise<
 async function startCatalogStub(options: CatalogStubOptions = {}): Promise<CatalogStub> {
   const counts = { deviceCreates: 0, polls: 0, binds: 0, publications: 0, activations: 0 };
   const seenDeviceCodes: string[] = [];
+  const runtimeOrigin = options.runtimeOrigin ?? RUNTIME_ORIGIN;
+  const a2aEndpoint = runtimeOrigin + "/a2a";
   let enrollmentId = "enr_none";
   let withdrawn = false;
   let openInquiryGranted = false;
@@ -259,11 +266,11 @@ async function startCatalogStub(options: CatalogStubOptions = {}): Promise<Catal
           grant: "grant-stub",
           catalog_agent_id: AGENT_ID,
           merchant_id: MERCHANT_CLAIM,
-          runtime_origin: RUNTIME_ORIGIN,
-          a2a_endpoint: A2A_ENDPOINT,
+          runtime_origin: runtimeOrigin,
+          a2a_endpoint: a2aEndpoint,
           expires_at: futureIso(600_000),
           authorization_epoch: 1,
-          approved_card_digest: APPROVED_DIGEST,
+          approved_card_digest: approvedDigest(runtimeOrigin),
           scopes: ["runtime:bind", "card:publish", "heartbeat"],
         });
         return;
@@ -288,8 +295,8 @@ async function startCatalogStub(options: CatalogStubOptions = {}): Promise<Catal
           merchantId: MERCHANT_CLAIM,
           agentId: AGENT_ID,
           workloadRef: "wbapp_stub",
-          runtimeOrigin: RUNTIME_ORIGIN,
-          a2aEndpoint: A2A_ENDPOINT,
+          runtimeOrigin,
+          a2aEndpoint,
           cardUrl: `${publicOrigin}/v1/agents/${AGENT_ID}/agent-card.json`,
           keyId: String(payload["key_id"]),
           keyThumbprint: String(payload["key_thumbprint"]),
@@ -448,13 +455,32 @@ async function startCatalogStub(options: CatalogStubOptions = {}): Promise<Catal
       }
     });
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-
-  const port = (server.address() as AddressInfo).port;
+  if (!options.inMemory) {
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  }
+  const port = (server.address() as AddressInfo | null)?.port ?? 0;
+  const fetchInMemory: typeof fetch = async (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    return await new Promise<Response>((resolve) => {
+      const body = typeof init?.body === "string" ? init.body : "";
+      const request = Object.assign(Readable.from([Buffer.from(body)]), {
+        url: url.pathname + url.search,
+        method: init?.method ?? "GET",
+        headers: Object.fromEntries(new Headers(init?.headers)),
+      });
+      let responseInit = { status: 500, headers: {} };
+      const response = {
+        writeHead(status: number, headers: Record<string, string>) { responseInit = { status, headers }; },
+        end(payload: string) { resolve(new Response(payload, responseInit)); },
+      };
+      server.emit("request", request, response);
+    });
+  };
   return {
     origin: publicOrigin,
     port,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    fetch: fetchInMemory,
+    close: () => options.inMemory ? Promise.resolve() : new Promise<void>((resolve) => server.close(() => resolve())),
     counts,
     seenDeviceCodes,
     get withdrawn() {
@@ -577,6 +603,33 @@ function expectNoCredentials(serialized: string): void {
 // ── 用例 ─────────────────────────────────────────────────────────────
 
 describe("connect-service 内核", () => {
+  it("WorkBuddy 发布后自动开启询价：目录暂时失败可重启续办，手动暂停不会被重开", async () => {
+    const origin = "https://runtime.app.workbuddy.host";
+    const catalog = await startCatalogStub({ runtimeOrigin: origin, failConsentReadOnce: true, inMemory: true });
+    const dataDir = makeDataDir();
+    const options = {
+      dataDir,
+      catalogUrl: catalog.origin,
+      publicOrigin: origin,
+      fetchImpl: catalog.fetch,
+      loadPublicCard: async () => validateAgentCard({ ...CARD, url: origin,
+        supportedInterfaces: [{ ...CARD.supportedInterfaces[0], url: origin + "/a2a" }] }),
+    };
+    const service = createMerchantConnectionService(options);
+    const policy = new OpenInquiryLocalPolicy(dataDir, origin);
+    await service.begin();
+    expect(policy.isEnabled()).toBe(false);
+    expect((await service.reconcile()).published).toBe(true);
+    expect(policy.isEnabled()).toBe(false);
+    expect(await service.readPublicInquiryConsent()).toMatchObject({ granted: false, pending: true });
+
+    const restarted = createMerchantConnectionService(options);
+    expect((await restarted.reconcile()).published).toBe(true);
+    expect(await restarted.readPublicInquiryConsent()).toMatchObject({ granted: true, localEnabled: true });
+    await restarted.setPublicInquiryConsent(false);
+    await createMerchantConnectionService(options).reconcile();
+    expect(await restarted.readPublicInquiryConsent()).toMatchObject({ granted: false, localEnabled: false });
+  });
   it("开放询价授权回执不确定时本地关闭，权威状态确认后才恢复", async () => {
     const harness = await makeHarness({ failConsentReadOnce: true });
     const service = createMerchantConnectionService(harness.serviceOptions);

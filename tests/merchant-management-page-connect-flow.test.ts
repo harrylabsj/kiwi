@@ -11,7 +11,7 @@
  * limitations under the License.
  */
 /**
- * 一次点击「授权并发起或继续连接」（stageAccessAndBegin）的行为契约。
+ * 一次点击「连接 Kiwi 目录」（connectCatalog）的行为契约。
  *
  * 页面脚本在 node:vm 里以假 DOM + 可脚本化 fetch 真实执行，断言落在编排顺序
  * 与安全边界：
@@ -19,8 +19,7 @@
  *   - begin 幂等键持久化在 sessionStorage：结果未知或本地校验类失败都保留原键
  *     （API 侧对 pre-effect 码释放占位，见 api.ts CONNECT_BEGIN_PRE_EFFECT_CODES），
  *     同键重试/重放不会重复创建；只有 succeeded 才清键；
- *   - 已绑定实例回到「提交或更新」；一键入口只在 workbuddyAccess（*.app.workbuddy.host）
- *     且未绑定时出现——UI 与后台前置条件一致。
+ *   - 已绑定时可单独更新分享链接；待确认时直接展示配对信息。
  */
 import { describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
@@ -111,6 +110,12 @@ async function loadConnectPage(options: {
       if (route === "/merchant/api/v1/catalog/access/share-link") {
         return options.shareLinkResponse ? options.shareLinkResponse() : Response.json({ access: options.access });
       }
+      if (route === "/merchant/api/v1/catalog/public-inquiry/status") {
+        return Response.json({ consent: { granted: true, policyActive: true, localEnabled: true } });
+      }
+      if (route === "/merchant/api/v1/catalog/public-inquiry/consent") {
+        return Response.json({ consent: { granted: false, policyActive: false, localEnabled: false } });
+      }
       if (route === "/merchant/api/v1/catalog/connect/begin") {
         const next = options.beginResponses?.shift();
         return next ? next() : Response.json({ status: "succeeded" });
@@ -122,6 +127,9 @@ async function loadConnectPage(options: {
         runtime_version: "t", api_version: "1", observed_at: "t", merchant_name_needs_update: false,
         readiness: { ready: true, failed_checks: [] }, capabilities: { management_page: true, dialog_tools: false } });
     }
+    if (route === "/merchant/api/v1/catalog/connect/pairing") return Response.json({ pairing: {
+      user_code: "PAIR-123", verification_uri: "https://catalog.test/verify", expires_at: "2026-11-24T08:10:00Z",
+    } });
     if (route === "/merchant/api/v1/catalog/connect") return Response.json(options.connect);
     if (route === "/merchant/api/v1/catalog/access") return Response.json({ access: options.access });
     return Response.json({});
@@ -150,7 +158,7 @@ async function loadConnectPage(options: {
   };
   // 等首轮 refresh 落定（访问卡片是串联的最后一环）：catalogConnectionState /
   // catalogAccessState 就绪后，编排函数读到的才是与后台一致的状态。
-  await eventually(() => (elements["view"]?.innerHTML ?? "").includes("WorkBuddy 分享码"));
+  await eventually(() => (elements["view"]?.innerHTML ?? "").includes("WorkBuddy 分享链接"));
   return {
     elements, posts, storageKey: () => session.dump()["kiwi-catalog-connect-key"],
     storageDump: () => session.dump(),
@@ -164,32 +172,34 @@ const problem = (status: number, detail: string): Response =>
   Response.json({ title: "请求未完成", status, detail, code: "INVALID" }, { status, headers: { "content-type": "application/problem+json" } });
 
 describe("merchant workbench one-click connect flow (stageAccessAndBegin)", () => {
-  it("展示目录账户并按权威状态禁用重复授权，输入新链接后可更新", async () => {
+  it("已发布时显示询价状态，在高级设置提供暂停开关", async () => {
     const page = await loadConnectPage({ connect: { status: "published", bindingId: "b1", published: true },
       access: { status: "active", consentGranted: true } });
     const html = page.elements["view"]!.innerHTML;
     expect(html).toContain('id="bound-account"');
-    expect(html).toContain('查看代管授权与使用说明');
-    expect(html).toContain('查看开放询价授权与使用说明');
-    // 授权文案必须如实说明「报文经目录转发、目录不裁决/不保存」的定性
-    //（docs/open-inquiry-transport-contract.md §1）。
-    expect(html).toContain('询价与报价报文会经 Kiwi 目录转发给商家');
-    expect(html).toContain('目录不裁决条款、不保存磋商内容');
+    expect(html).toContain('高级设置');
+    expect(html).toContain('目录转发询价与报价，可读取报文，不保存磋商内容');
+    expect(html).not.toContain('id="public-inquiry-consent"');
+    expect(html).not.toContain('onclick="connectCatalog()"');
     expect(html).toContain('id="access-submit"');
     page.set('$("access-link").value = ""; updateAccessButton();');
     expect(page.elements["access-submit"]!.disabled).toBe(true);
     page.set('$("access-link").value = "https://example.test/new"; updateAccessButton();');
     expect(page.elements["access-submit"]!.disabled).toBe(false);
-    page.set('showPublicInquiryStatus({granted:true, policyActive:true, localEnabled:true});');
-    expect(page.elements["inquiry-submit"]!.disabled).toBe(true);
-    page.set('showPublicInquiryStatus({granted:false});');
-    expect(page.elements["inquiry-submit"]!.disabled).toBe(false);
+    await page.eventually(() => page.elements["inquiry-toggle"]?.textContent === "暂停开放询价");
+    await page.run("togglePublicInquiry()");
+    expect(page.posts).toContainEqual({
+      method: "POST",
+      path: "/merchant/api/v1/catalog/public-inquiry/consent",
+      body: { granted: false, terms_version: "open-inquiry-v1" },
+    });
+    expect(page.elements["public-inquiry-status"]?.textContent).toBe("开放询价已暂停");
   });
 
   it("一次点击：同意后先加密暂存、成功后才发起绑定，本人确认文案保留", async () => {
     let stageCalls = 0;
     const page = await loadConnectPage({
-      connect: { status: "preparing", bindingId: null, published: false },
+      connect: { status: "idle", bindingId: null, published: false },
       access: { status: "none" },
       shareLinkResponse: () => {
         stageCalls += 1;
@@ -198,7 +208,7 @@ describe("merchant workbench one-click connect flow (stageAccessAndBegin)", () =
       beginResponses: [() => Response.json({ status: "succeeded" })],
     });
     page.set(`$("access-link").value = ${JSON.stringify(LINK)}; $("access-consent").checked = true;`);
-    await page.run("stageAccessAndBegin()");
+    await page.run("connectCatalog()");
     await page.eventually(() => page.posts.some((p) => p.path === "/merchant/api/v1/catalog/connect/begin"));
 
     expect(stageCalls).toBe(1);
@@ -209,7 +219,7 @@ describe("merchant workbench one-click connect flow (stageAccessAndBegin)", () =
     expect(typeof (page.posts[1]!.body as { idempotency_key: string }).idempotency_key).toBe("string");
     await page.eventually(() => (page.elements["bar"]?.textContent ?? "").includes("连接申请已准备"));
     // 本人确认仍保留：成功文案指向配对信息与目录确认，而不是宣布已连接。
-    expect(page.elements["bar"]?.textContent).toContain("请本人查看配对信息并确认公开资料");
+    expect(page.elements["bar"]?.textContent).toContain("请核对配对码和公开资料");
     expect(page.storageKey()).toBeUndefined();
     expect(page.elements["access-link"]?.value).toBe("");
     expect(page.elements["access-consent"]?.checked).toBe(false);
@@ -217,11 +227,11 @@ describe("merchant workbench one-click connect flow (stageAccessAndBegin)", () =
 
   it("未同意：不暂存、不发起绑定，提示先勾选代管授权", async () => {
     const page = await loadConnectPage({
-      connect: { status: "preparing", bindingId: null, published: false },
+      connect: { status: "idle", bindingId: null, published: false },
       access: { status: "none" },
     });
     page.set(`$("access-link").value = ${JSON.stringify(LINK)};`);
-    await page.run("stageAccessAndBegin()");
+    await page.run("connectCatalog()");
     await page.eventually(() => (page.elements["bar"]?.textContent ?? "").includes("请先勾选并同意"));
     expect(page.posts).toHaveLength(0);
     expect(page.storageKey()).toBeUndefined();
@@ -229,30 +239,30 @@ describe("merchant workbench one-click connect flow (stageAccessAndBegin)", () =
 
   it("暂存失败：停在暂存错误，绝不推进到绑定", async () => {
     const page = await loadConnectPage({
-      connect: { status: "preparing", bindingId: null, published: false },
+      connect: { status: "idle", bindingId: null, published: false },
       access: { status: "none" },
       shareLinkResponse: () => problem(422, "需要先勾选并同意《分享码代管授权》后才能提交分享链接"),
     });
     page.set(`$("access-link").value = ${JSON.stringify(LINK)}; $("access-consent").checked = true;`);
-    await page.run("stageAccessAndBegin()");
-    await page.eventually(() => (page.elements["bar"]?.textContent ?? "").includes("分享链接暂存未确认"));
+    await page.run("connectCatalog()");
+    await page.eventually(() => (page.elements["bar"]?.textContent ?? "").includes("需要先勾选并同意"));
     expect(page.posts.map((p) => p.path)).toEqual(["/merchant/api/v1/catalog/access/share-link"]);
     expect(page.storageKey()).toBeUndefined();
   });
 
   it("绑定结果未知：保留幂等键并提示先查状态，重复点击不换键", async () => {
     const page = await loadConnectPage({
-      connect: { status: "preparing", bindingId: null, published: false },
+      connect: { status: "idle", bindingId: null, published: false },
       access: { status: "pending", statusReason: "local_staged", consentGranted: true },
       beginResponses: [() => Response.json({ status: "unknown" }), () => Response.json({ status: "unknown" })],
     });
-    await page.run("stageAccessAndBegin()"); // 已暂存且未填链接 → 直接继续绑定
+    await page.run("connectCatalog()"); // 已暂存且未填链接 → 直接继续绑定
     await page.eventually(() => (page.elements["bar"]?.textContent ?? "").includes("连接结果尚未确认"));
     const first = page.posts.find((p) => p.path === "/merchant/api/v1/catalog/connect/begin")!;
     expect(first).toBeDefined();
     expect(page.storageKey()).toBe((first.body as { idempotency_key: string }).idempotency_key);
 
-    await page.run("stageAccessAndBegin()"); // 再次点击：同一幂等键
+    await page.run("connectCatalog()"); // 再次点击：同一幂等键
     await page.eventually(() => page.posts.filter((p) => p.path === "/merchant/api/v1/catalog/connect/begin").length === 2);
     const second = page.posts.filter((p) => p.path === "/merchant/api/v1/catalog/connect/begin")[1]!;
     expect((second.body as { idempotency_key: string }).idempotency_key)
@@ -262,19 +272,19 @@ describe("merchant workbench one-click connect flow (stageAccessAndBegin)", () =
 
   it("重试：本地校验类失败（422）后保留原键，同键重试成功并清键", async () => {
     const page = await loadConnectPage({
-      connect: { status: "preparing", bindingId: null, published: false },
+      connect: { status: "idle", bindingId: null, published: false },
       access: { status: "pending", statusReason: "local_staged", consentGranted: true },
       beginResponses: [
         () => problem(422, "请先提交并授权本实例的 WorkBuddy 分享链接，再发起目录连接。"),
         () => Response.json({ status: "succeeded" }),
       ],
     });
-    await page.run("stageAccessAndBegin()");
+    await page.run("connectCatalog()");
     await page.eventually(() => (page.elements["bar"]?.textContent ?? "").includes("请先提交并授权"));
     const first = page.posts.find((p) => p.path === "/merchant/api/v1/catalog/connect/begin")!;
     expect(page.storageKey()).toBe((first.body as { idempotency_key: string }).idempotency_key);
 
-    await page.run("stageAccessAndBegin()");
+    await page.run("connectCatalog()");
     await page.eventually(() => (page.elements["bar"]?.textContent ?? "").includes("连接申请已准备"));
     const seconds = page.posts.filter((p) => p.path === "/merchant/api/v1/catalog/connect/begin");
     expect(seconds).toHaveLength(2);
@@ -283,16 +293,16 @@ describe("merchant workbench one-click connect flow (stageAccessAndBegin)", () =
     expect(page.storageKey()).toBeUndefined();
   });
 
-  it("旧绑定更新流程：已绑定或已发布回到「提交或更新」，一键入口不再出现", async () => {
+  it("旧绑定更新流程：已绑定或已发布可保存分享链接，一键入口不再出现", async () => {
     for (const connect of [
       { status: "preparing", bindingId: "bnd_1", published: false },
       { status: "published", bindingId: "bnd_1", published: true },
     ]) {
       const page = await loadConnectPage({ connect, access: { status: "active" } });
-      await page.eventually(() => (page.elements["view"]?.innerHTML ?? "").includes("WorkBuddy 分享码"));
+      await page.eventually(() => (page.elements["view"]?.innerHTML ?? "").includes("WorkBuddy 分享链接"));
       const html = page.elements["view"]!.innerHTML;
       expect(html).toContain('onclick="submitAccessLink()"');
-      expect(html).not.toContain('onclick="stageAccessAndBegin()"');
+      expect(html).not.toContain('onclick="connectCatalog()"');
     }
   });
 
@@ -301,33 +311,38 @@ describe("merchant workbench one-click connect flow (stageAccessAndBegin)", () =
       connect: { status: "preparing", bindingId: "bnd_1", published: false },
       access: { status: "invalid", statusReason: "catalog_access_exists" },
     });
-    await page.eventually(() => (page.elements["view"]?.innerHTML ?? "").includes("目录已有分享码配置"));
+    await page.eventually(() => (page.elements["view"]?.innerHTML ?? "").includes("目录保留了原分享码"));
     const html = page.elements["view"]!.innerHTML;
-    expect(html).toContain("本次绑定没有覆盖它");
-    expect(html).toContain("提交或更新");
+    expect(html).toContain("保存分享链接");
     expect(html).not.toContain("已加密暂存");
   });
 
-  it("一键入口只在 workbuddyAccess 且未绑定时出现；非 workbuddy 实例保持「发起或继续连接」", async () => {
-    const workbuddy = await loadConnectPage({
-      connect: { status: "preparing", bindingId: null, published: false }, access: { status: "none" },
+  it("首屏只有一个连接按钮和一个可选链接输入；留空可直接连接", async () => {
+    const page = await loadConnectPage({
+      connect: { status: "idle", bindingId: null, published: false }, access: { status: "none" },
     });
-    await workbuddy.eventually(() => (workbuddy.elements["view"]?.innerHTML ?? "").includes("WorkBuddy 分享码"));
-    expect(workbuddy.elements["view"]!.innerHTML).toContain('onclick="stageAccessAndBegin()"');
+    const html = page.elements["view"]!.innerHTML;
+    expect(html.match(/onclick="connectCatalog\(\)"/g)).toHaveLength(1);
+    expect(html.match(/id="access-link"/g)).toHaveLength(1);
+    expect(html).not.toContain('id="access-submit"');
+    expect(html).toContain("发布后默认开放询价");
+    await page.run("connectCatalog()");
+    expect(page.posts.map((post) => post.path)).toEqual(["/merchant/api/v1/catalog/connect/begin"]);
+  });
 
-    const nonWorkbuddy = await loadConnectPage({
-      connect: { status: "preparing", bindingId: null, published: false }, access: { status: "none" },
-      workbuddyAccess: false,
+  it("等待确认时直接展示配对码和目录发布入口", async () => {
+    const page = await loadConnectPage({
+      connect: { status: "awaiting_confirmation", bindingId: null, published: false },
+      access: { status: "pending", statusReason: "local_staged", consentGranted: true },
     });
-    await nonWorkbuddy.eventually(() => (nonWorkbuddy.elements["view"]?.innerHTML ?? "").includes("WorkBuddy 分享码"));
-    const html = nonWorkbuddy.elements["view"]!.innerHTML;
-    expect(html).toContain('onclick="beginCatalogConnect()"');
-    expect(html).not.toContain('onclick="stageAccessAndBegin()"');
+    await page.eventually(() => (page.elements["catalog-pairing"]?.innerHTML ?? "").includes("PAIR-123"));
+    expect(page.elements["catalog-pairing"]?.innerHTML).toContain("前往 Kiwi 目录确认发布");
+    expect(page.elements["view"]?.innerHTML).not.toContain('onclick="connectCatalog()"');
   });
 
   it("展示自动检测/使用分享码/无分享码三种接入方式，并明确切换不删除分享码", async () => {
     const page = await loadConnectPage({
-      connect: { status: "preparing", bindingId: null, published: false },
+      connect: { status: "idle", bindingId: null, published: false },
       access: { status: "none", mode: "auto", modePersisted: false, modeInvalid: false, detection: null },
     });
     const html = page.elements["view"]!.innerHTML;
@@ -335,9 +350,7 @@ describe("merchant workbench one-click connect flow (stageAccessAndBegin)", () =
     expect(html).toContain("自动检测（默认）");
     expect(html).toContain("使用分享码");
     expect(html).toContain("无分享码（直连）");
-    expect(html).toContain("切换接入方式不会删除已保存分享码");
-    expect(html).toContain("接入方式经目录公开为买家路由状态");
-    expect(html).toContain("使用分享码时买家中继");
+    expect(html).toContain("切换接入方式会保留分享码");
 
     page.set('$("access-mode").value = "no_share_code";');
     await page.run("saveAccessMode()");
@@ -357,7 +370,7 @@ describe("merchant workbench one-click connect flow (stageAccessAndBegin)", () =
 
 describe("begin key persistence across reload", () => {
   const baseOptions = () => ({
-    connect: { status: "preparing", bindingId: null, published: false },
+    connect: { status: "idle", bindingId: null, published: false },
     access: { status: "pending", statusReason: "local_staged", consentGranted: true },
     beginResponses: [() => Response.json({ status: "unknown" })],
   });
@@ -365,7 +378,7 @@ describe("begin key persistence across reload", () => {
   it("sessionStorage 可用：unknown 后跨刷新恢复同一幂等键", async () => {
     const store = makeSessionStore();
     const first = await loadConnectPage({ ...baseOptions(), sessionStore: store });
-    await first.run("stageAccessAndBegin()");
+    await first.run("connectCatalog()");
     await first.eventually(() => (first.elements["bar"]?.textContent ?? "").includes("连接结果尚未确认"));
     const persistedKey = first.storageKey();
     expect(persistedKey).toBeDefined();
@@ -375,7 +388,7 @@ describe("begin key persistence across reload", () => {
       ...baseOptions(), sessionStore: store,
       beginResponses: [() => Response.json({ status: "unknown" })],
     });
-    await second.run("stageAccessAndBegin()");
+    await second.run("connectCatalog()");
     await second.eventually(() => second.posts.some((p) => p.path === "/merchant/api/v1/catalog/connect/begin"));
     const beginBodies = second.posts
       .filter((p) => p.path === "/merchant/api/v1/catalog/connect/begin")
@@ -385,7 +398,7 @@ describe("begin key persistence across reload", () => {
 
   it("sessionStorage 不可用：页面照常降级运行（try/catch），刷新后只能换新键", async () => {
     const first = await loadConnectPage({ ...baseOptions(), storageUnavailable: true });
-    await first.run("stageAccessAndBegin()");
+    await first.run("connectCatalog()");
     await first.eventually(() => (first.elements["bar"]?.textContent ?? "").includes("连接结果尚未确认"));
     expect(first.posts.some((p) => p.path === "/merchant/api/v1/catalog/connect/begin")).toBe(true);
 
@@ -394,7 +407,7 @@ describe("begin key persistence across reload", () => {
       ...baseOptions(), storageUnavailable: true,
       beginResponses: [() => Response.json({ status: "unknown" })],
     });
-    await second.run("stageAccessAndBegin()");
+    await second.run("connectCatalog()");
     await second.eventually(() => second.posts.some((p) => p.path === "/merchant/api/v1/catalog/connect/begin"));
     const secondKey = (second.posts.find((p) => p.path === "/merchant/api/v1/catalog/connect/begin")!.body as { idempotency_key: string }).idempotency_key;
     expect(secondKey).not.toBe((first.posts.find((p) => p.path === "/merchant/api/v1/catalog/connect/begin")!.body as { idempotency_key: string }).idempotency_key);
@@ -407,7 +420,7 @@ describe("bound workbench: update code and revoke (UI)", () => {
     access,
   });
 
-  it("已绑定换码：提交走 /catalog/access/share-link 并显示已提交；回执不含链接", async () => {
+  it("已绑定换码：提交走 /catalog/access/share-link 并显示已保存；回执不含链接", async () => {
     let seenBody: unknown;
     const page = await loadConnectPage({
       ...boundOptions({ status: "active", consentGranted: true }),
@@ -419,7 +432,7 @@ describe("bound workbench: update code and revoke (UI)", () => {
     page.set(`$("access-link").value = ${JSON.stringify(LINK)}; $("access-consent").checked = true;`);
     // loadConnectPage 的 fetch 桩固定返回 options.shareLinkResponse；请求体在 posts 里断言。
     await page.run("submitAccessLink()");
-    await page.eventually(() => (page.elements["bar"]?.textContent ?? "").includes("已提交"));
+    await page.eventually(() => (page.elements["bar"]?.textContent ?? "").includes("已保存"));
     const shareLinkPost = page.posts.find((p) => p.path === "/merchant/api/v1/catalog/access/share-link");
     expect(shareLinkPost).toBeDefined();
     seenBody = shareLinkPost!.body;

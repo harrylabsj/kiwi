@@ -79,6 +79,7 @@ import {
   assertShareLinkMatchesRuntimeOrigin,
   buildWorkbuddyAccessConfig,
   buildWorkbuddyAccessRevocation,
+  isWorkbuddyAppOrigin,
   parseWorkbuddyShareLink,
   WORKBUDDY_CUSTODY_TERMS_VERSION,
   WorkbuddyShareLinkError,
@@ -291,6 +292,7 @@ export interface ConnectionSession extends AuthorizedEnrollment {
   active_card_revision?: number;
   expected_card_revision?: number;
   card_revision?: number;
+  public_inquiry_default_pending?: boolean;
   /**
    * WorkBuddy 访问配置的最近一次已知状态（M-03）。只保存脱敏投影：分享码
    * 由 Catalog 受控保存，运行时这一侧从不落盘、从不回显。
@@ -488,6 +490,7 @@ export interface PublicInquiryConsentSummary {
   granted: boolean;
   policyActive: boolean;
   localEnabled: boolean;
+  pending?: boolean;
   termsVersion: string;
 }
 
@@ -869,6 +872,7 @@ class ConnectionServiceImpl implements MerchantConnectionService {
   private firstBindAccessConfig: WorkbuddyAccessConfig | undefined;
   private readonly shareVault: LocalShareVault;
   private readonly inquiryPolicy: OpenInquiryLocalPolicy;
+  private readonly defaultPublicInquiry: boolean;
   private localShareInvalid = false;
   private readonly a2aAuthMode: "signature" | "bearer";
   /** begin/reconcile 串行（排队不交错）。 */
@@ -928,6 +932,7 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       );
     }
     this.origin = normalizeOrigin(trimmed);
+    this.defaultPublicInquiry = this.a2aAuthMode === "signature" && isWorkbuddyAppOrigin(parsed);
     this.a2aEndpoint = `${this.origin}/a2a`;
     if (shareLink === "") {
       this.firstBindAccessConfig = undefined;
@@ -1227,8 +1232,9 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       if (current.status === "published") {
         // 显式 reconcile（含用户操作）每次都核对 Catalog；后台轮询节流放在
         // bootstrap 的 tick 层（published 会话 60s 一次，onboarding 仍 5s）。
+        let active: PublicBinding;
         try {
-          await this.assertPublicationActive(current);
+          active = await this.assertPublicationActive(current);
         } catch (err) {
           // 撤回/暂停/网络不可达一律 fail-closed：summary 报未发布（paused/error），
           // 绝不自动恢复营业、不发任何写请求；下趟 reconcile 会重新核对。
@@ -1241,6 +1247,13 @@ class ConnectionServiceImpl implements MerchantConnectionService {
         }
         this.publicationVerified = true;
         this.availability = null;
+        if (current.public_inquiry_default_pending && this.defaultPublicInquiry) {
+          try {
+            await this.reconcileDefaultInquiry(current, this.verifiedFromPublication(current, active));
+          } catch {
+            // Keep the durable marker for retry. An inquiry failure does not undo publication.
+          }
+        }
       }
       return this.toSummary(current);
     });
@@ -1660,13 +1673,14 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     return await this.withLock(async () => {
       const binding = await this.getVerifiedBinding();
       if (binding === null) throw new MerchantConnectError("STATE_INVALID", "尚未建立有效的 Catalog 绑定");
-      const context: RuntimeAccessContext = { agentId: binding.agentId, bindingId: binding.bindingId,
-        keyId: this.identity.keyId, runtimeOrigin: this.origin, serviceEpoch: this.serviceEpoch };
+      const context = this.inquiryContext(binding);
       const remote = await this.client.readPublicInquiryConsent(context, this.identity);
       const intent = this.inquiryPolicy.intent(binding);
       if (intent === "grant") this.inquiryPolicy.set(binding, true, remote.granted && remote.policyActive);
       else if (intent === "revoke" && !remote.granted) this.inquiryPolicy.set(binding, false, true);
-      return { ...remote, localEnabled: this.inquiryPolicy.isEnabled() };
+      const localEnabled = this.inquiryPolicy.isEnabled();
+      const pending = this.selectSession(readEnrollmentStore(this.dataDir))?.public_inquiry_default_pending === true;
+      return { ...remote, localEnabled, ...(pending && intent !== "revoke" && !localEnabled ? { pending: true } : {}) };
     });
   }
 
@@ -1674,8 +1688,7 @@ class ConnectionServiceImpl implements MerchantConnectionService {
     return await this.withLock(async () => {
       const binding = await this.getVerifiedBinding();
       if (binding === null) throw new MerchantConnectError("STATE_INVALID", "尚未建立有效的 Catalog 绑定");
-      const context: RuntimeAccessContext = { agentId: binding.agentId, bindingId: binding.bindingId,
-        keyId: this.identity.keyId, runtimeOrigin: this.origin, serviceEpoch: this.serviceEpoch };
+      const context = this.inquiryContext(binding);
       // An unconfirmed grant and every revoke immediately disable local access.
       this.inquiryPolicy.set(binding, granted, false);
       await this.client.setPublicInquiryConsent(context, this.identity, granted);
@@ -1684,6 +1697,39 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       this.inquiryPolicy.set(binding, granted, granted ? remote.policyActive : true);
       return { ...remote, localEnabled: this.inquiryPolicy.isEnabled() };
     });
+  }
+
+  private inquiryContext(binding: VerifiedBinding): RuntimeAccessContext {
+    return { agentId: binding.agentId, bindingId: binding.bindingId,
+      keyId: this.identity.keyId, runtimeOrigin: this.origin, serviceEpoch: this.serviceEpoch };
+  }
+
+  private async reconcileDefaultInquiry(session: ConnectionSession, binding: VerifiedBinding): Promise<void> {
+    const context = this.inquiryContext(binding);
+    let intent = this.inquiryPolicy.intent(binding);
+    if (intent !== "revoke") {
+      let remote = await this.client.readPublicInquiryConsent(context, this.identity);
+      intent = this.inquiryPolicy.intent(binding);
+      if (intent !== "revoke") {
+        if (!remote.granted) {
+          this.inquiryPolicy.set(binding, true, false);
+          await this.client.setPublicInquiryConsent(context, this.identity, true);
+          remote = await this.client.readPublicInquiryConsent(context, this.identity);
+        }
+        if (this.inquiryPolicy.intent(binding) !== "revoke") {
+          this.inquiryPolicy.set(binding, true, remote.granted && remote.policyActive);
+          if (!remote.policyActive) return;
+        }
+      }
+    }
+    this.persist((fresh) => fresh.sessions.map((item) => {
+      const current = item as ConnectionSession;
+      if (current.enrollment_id !== session.enrollment_id || current.status !== "published" ||
+          !current.public_inquiry_default_pending) return item;
+      const updated = { ...current };
+      delete updated.public_inquiry_default_pending;
+      return updated;
+    }));
   }
 
   /**
@@ -2228,6 +2274,7 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       ...session,
       status: "published" as const,
       card_revision: activated.revision,
+      ...(this.defaultPublicInquiry ? { public_inquiry_default_pending: true } : {}),
     };
     // 同 catalog agent 的旧 published 会话由新绑定取代（标 replaced）；其余一律保留。
     this.persist((fresh) =>

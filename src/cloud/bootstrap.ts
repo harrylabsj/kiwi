@@ -45,6 +45,7 @@ import { NegotiationApprovalStore } from "../a2a/server/negotiation-approvals.js
 import { createNegotiationOps } from "../merchant/negotiation-ops.js";
 import { ALIPAY_PRIVATE_PATH, createAlipayCollectionHttp, hasAlipayReadSignature } from "./alipay-collection-http.js";
 import { OpenInquiryLocalPolicy } from "./access/open-inquiry-policy.js";
+import { isWorkbuddyAppOrigin } from "./access/workbuddy-share-link.js";
 import { closeDatabase, closeHttpServer, createCleanup, CleanupError } from "../lifecycle/close.js";
 import { A2A_SIGNING_KEY_FILE, loadA2aSigningIdentityFromFile, loadOrCreateA2aSigningIdentity, toJwsSigningIdentity } from "../a2a/signing-key.js";
 import { publicKeyThumbprint } from "../trust/binding/thumbprint.js";
@@ -1649,7 +1650,7 @@ export async function bootstrapCloudRuntime(
     res.end(renderMerchantManagementPage({
       productAuthority: fileProductSource !== undefined ? "file" : "exact",
       catalogConnection: directConnection !== undefined,
-      workbuddyAccess: new URL(config.publicOrigin).hostname.endsWith(".app.workbuddy.host"),
+      workbuddyAccess: isWorkbuddyAppOrigin(new URL(config.publicOrigin)),
       weixinChannel: weixinChannel !== undefined,
     }));
   };

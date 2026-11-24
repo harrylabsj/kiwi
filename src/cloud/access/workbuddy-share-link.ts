@@ -39,6 +39,10 @@ export const WORKBUDDY_SECRET_MAX_LENGTH = 4096;
  */
 export const WORKBUDDY_CUSTODY_TERMS_VERSION = "workbuddy-share-v1-2026-10-27";
 
+export function isWorkbuddyAppOrigin(origin: URL): boolean {
+  return origin.protocol === "https:" && origin.hostname.endsWith(".app.workbuddy.host");
+}
+
 export type WorkbuddyShareLinkErrorCode =
   | "MALFORMED_URL"
   | "NOT_HTTPS"
