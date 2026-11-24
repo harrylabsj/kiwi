@@ -20,9 +20,12 @@ import { resolveSecret } from "../config/profile.js";
 import { ShoppingCliCommerceDataSource } from "../commerce/shopping-cli-source.js";
 import { createMerchantManagementApiHandler } from "../http/merchant-management/api.js";
 import { MerchantWeixinChannel } from "./weixin-channel.js";
+import { createWorkbenchWeixinOwnerOptions } from "./weixin-owner-source.js";
 import { MerchantImportDraftStore } from "../http/merchant-management/draft-store.js";
 import { MerchantManagementOperationStore } from "../http/merchant-management/operation-store.js";
 import { renderMerchantManagementPage } from "../http/merchant-management/page.js";
+import { startLocalManualSupportBuyer, type ManualSupportPreviewOptions } from "../http/customer-support-buyer.js";
+import { ManualSupportError, type ManualSupportService } from "../merchant-core/support/manual-service.js";
 import { MutableServiceState } from "../http/merchant-management/service-state.js";
 import { createTrustedWorkbenchPageHandler } from "../http/merchant-management/trusted-page.js";
 import { WorkbenchConfirmationStore } from "../http/merchant-management/webauthn-confirmation.js";
@@ -52,11 +55,14 @@ export interface StandaloneWorkbenchOptions {
   port: number;
   /** 对外 origin（https），用于同源写请求 Origin 校验；缺省允许 loopback。 */
   publicOrigin?: string;
+  /** 本地验收注入，不从 CLI、生产环境变量或配置文件启用。 */
+  manualSupportPreview?: ManualSupportPreviewOptions;
   log?: (line: string) => void;
 }
 
 export interface StandaloneWorkbenchHandle {
   url: string;
+  supportOrigin?: string;
   close: () => Promise<void>;
 }
 
@@ -182,6 +188,9 @@ export async function startStandaloneMerchantWorkbench(
   options: StandaloneWorkbenchOptions,
 ): Promise<StandaloneWorkbenchHandle> {
   const { profile, dataDir, host, port } = options;
+  if (options.manualSupportPreview !== undefined && (host !== "127.0.0.1" || options.publicOrigin !== undefined)) {
+    throw new ManualSupportError("forbidden");
+  }
   const log = options.log ?? ((line: string) => process.stderr.write(line));
   if (profile.role !== "merchant") {
     throw new Error("standalone workbench requires a merchant profile");
@@ -213,6 +222,16 @@ export async function startStandaloneMerchantWorkbench(
   const db = new DatabaseSync(`${dataDir}/state.sqlite`);
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA busy_timeout = 5000");
+  let manualSupport: ManualSupportService | undefined;
+  if (options.manualSupportPreview !== undefined) {
+    try {
+      manualSupport = assembly.openManualSupportPreview();
+    } catch (error) {
+      db.close();
+      await assembly.close().catch(() => undefined);
+      throw error;
+    }
+  }
   const deliveryConsent = new DeliveryConsentRepository({ db, now: () => new Date().toISOString() });
   const serviceState = MutableServiceState.fromDeclared(process.env.KIWI_WORKBENCH_SERVICE_STATE);
   serviceState.attachPersistence(db, profile.owner_id);
@@ -384,9 +403,23 @@ export async function startStandaloneMerchantWorkbench(
     port,
     options.publicOrigin ?? profile.merchant_mcp?.public_url,
   );
-  const weixinChannel = new MerchantWeixinChannel({ dataDir, merchantId: profile.owner_id });
+  const weixinChannel = new MerchantWeixinChannel({
+    dataDir,
+    merchantId: profile.owner_id,
+    conversation: createWorkbenchWeixinOwnerOptions({
+      flag: process.env.KIWI_WEIXIN_OWNER_PREVIEW,
+      replyFlag: process.env.KIWI_WEIXIN_OWNER_REPLIES,
+      dataDir,
+      adminDir: admin.adminDir,
+      merchantId: profile.owner_id,
+      agentId: profile.agent_id,
+      origin: options.publicOrigin ?? profile.merchant_mcp?.public_url,
+      ...(admin.surface.getExactProduct !== undefined ? { readExactProduct: admin.surface.getExactProduct } : {}),
+    }),
+  });
   const api = createMerchantManagementApiHandler({
     weixinChannel,
+    ...(manualSupport === undefined ? {} : { manualSupport }),
     receiveCustomerIdentity: createCustomerIdentityReceiver({
       db, now, merchantId: profile.owner_id, assertOwner: assembly.assertGovernanceOwner,
     }),
@@ -415,6 +448,7 @@ export async function startStandaloneMerchantWorkbench(
     readiness,
     workbenchConfirmations,
     ...(merchantOperations !== undefined ? { merchantOperations } : {}),
+    operationsSchedulerAvailable: () => operationsScheduler !== undefined,
     deliveryConsent,
     customerDeliveries: deliveryRepository,
     ...(governance !== undefined ? { governance } : {}),
@@ -426,22 +460,27 @@ export async function startStandaloneMerchantWorkbench(
     catalogConnection: false,
     workbuddyAccess: false,
     weixinChannel: true,
+    manualSupport: manualSupport !== undefined,
   });
-  const server = createServer(
-    routeRequest({
-      page,
-      api,
-      admin: adminHandle.handler,
-      trusted: trustedPage,
-      version: PRODUCT_VERSION,
-    }),
-  );
+  const route = routeRequest({ page, api, admin: adminHandle.handler, trusted: trustedPage, version: PRODUCT_VERSION });
+  let previewHost: string | undefined;
+  const server = createServer((req, res) => {
+    if (manualSupport !== undefined && (previewHost === undefined || req.headersDistinct.host?.length !== 1 || req.headers.host !== previewHost)) {
+      res.writeHead(403, { "cache-control": "no-store" });
+      res.end();
+      return;
+    }
+    route(req, res);
+  });
   const listening = await new Promise<{ url: string; close: (cb: () => void) => void }>((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, host, () => {
       const address = server.address();
       const actualPort = typeof address === "object" && address !== null ? address.port : port;
-      if (["0.0.0.0", "::", "127.0.0.1", "::1", "localhost"].includes(host)) {
+      if (manualSupport !== undefined) {
+        previewHost = `127.0.0.1:${actualPort}`;
+        writeOrigins.splice(0, writeOrigins.length, `http://${previewHost}`);
+      } else if (["0.0.0.0", "::", "127.0.0.1", "::1", "localhost"].includes(host)) {
         writeOrigins.push(`http://127.0.0.1:${actualPort}`, `http://localhost:${actualPort}`);
       }
       resolve({
@@ -457,13 +496,22 @@ export async function startStandaloneMerchantWorkbench(
     throw error;
   });
   let memoryServer: Awaited<ReturnType<typeof startMemoryProposalServer>> | undefined;
+  let supportServer: Awaited<ReturnType<typeof startLocalManualSupportBuyer>> | undefined;
   try {
+    if (manualSupport !== undefined && options.manualSupportPreview !== undefined) {
+      supportServer = await startLocalManualSupportBuyer(manualSupport, options.manualSupportPreview);
+    }
     const socketPath = process.env.KIWI_MEMORY_SOCKET_PATH;
     if (socketPath) {
       if (!assembly.proposeReceptionMemory) throw new Error("memory writer unavailable");
       memoryServer = await startMemoryProposalServer(socketPath, assembly.proposeReceptionMemory);
     }
   } catch (error) {
+    await supportServer?.close();
+    operationsScheduler?.stop();
+    customerDataMaintenance?.stop();
+    deliveryDispatcher?.stop();
+    deliveryGate?.close();
     await weixinChannel.close();
     await new Promise<void>((resolve) => listening.close(resolve));
     await adminHandle.close().catch(() => undefined);
@@ -480,6 +528,7 @@ export async function startStandaloneMerchantWorkbench(
     customerDataMaintenance?.stop();
     deliveryDispatcher?.stop();
     deliveryGate?.close();
+    await supportServer?.close();
     if (memoryServer) await new Promise<void>((resolve) => memoryServer!.close(() => resolve()));
     await weixinChannel.close();
     await new Promise<void>((resolve) => listening.close(resolve));
@@ -492,7 +541,7 @@ export async function startStandaloneMerchantWorkbench(
     }
   };
   log(`[merchant workbench] ${profile.agent_id} listening at ${listening.url}（auth: ${assembly.authLabel}）\n`);
-  return { url: listening.url, close };
+  return { url: listening.url, close, ...(supportServer === undefined ? {} : { supportOrigin: supportServer.origin }) };
 }
 
 /** 测试接缝：只构造请求路由，不启动监听/装配。 */

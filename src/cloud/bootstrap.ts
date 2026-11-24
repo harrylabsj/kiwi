@@ -51,6 +51,7 @@ import { publicKeyThumbprint } from "../trust/binding/thumbprint.js";
 import { loadProfile, ProfileError } from "../config/profile.js";
 import { createMerchantManagementApiHandler } from "../http/merchant-management/api.js";
 import { MerchantWeixinChannel } from "../merchant/weixin-channel.js";
+import { createWorkbenchWeixinOwnerOptions } from "../merchant/weixin-owner-source.js";
 import { createMerchantFeedApiHandler } from "../http/merchant-feed-api.js";
 import { createMerchantFollowApiHandler } from "../http/merchant-follow-api.js";
 import { createMerchantEngagementApiHandler } from "../http/merchant-engagement-api.js";
@@ -790,7 +791,22 @@ export async function bootstrapCloudRuntime(
   const adminOptions = assembly.serverOptions.admin;
   const productsFilePath = config.productsFile;
   const applyPolicyOverride = assembly.service.policyApplier;
-  const weixinChannel = adminOptions === undefined ? undefined : new MerchantWeixinChannel({ dataDir: config.dataDir, merchantId: profile.owner_id });
+  const weixinChannel = adminOptions === undefined ? undefined : new MerchantWeixinChannel({
+    dataDir: config.dataDir,
+    merchantId: profile.owner_id,
+    conversation: createWorkbenchWeixinOwnerOptions({
+      flag: (options.env ?? process.env).KIWI_WEIXIN_OWNER_PREVIEW,
+      replyFlag: (options.env ?? process.env).KIWI_WEIXIN_OWNER_REPLIES,
+      dataDir: config.dataDir,
+      adminDir: adminOptions.adminDir,
+      merchantId: profile.owner_id,
+      agentId: profile.agent_id,
+      origin: config.publicOrigin,
+      // 文件商品模式不把另一目录的 SKU 或库存视作当前实例的事实。
+      ...(fileProductSource === undefined && adminOptions.surface.getExactProduct !== undefined
+        ? { readExactProduct: adminOptions.surface.getExactProduct } : {}),
+    }),
+  });
   let managementDb: DatabaseSync | undefined;
   let merchantApiHandler: CloudRequestListener | undefined;
   let publicFeedHandler: CloudRequestListener | undefined;
@@ -1273,6 +1289,7 @@ export async function bootstrapCloudRuntime(
       },
       policyCurrent: () => assembly.currentPolicy(),
       merchantOperations,
+      operationsSchedulerAvailable: () => operationsScheduler !== undefined && governanceRuntime?.active === true,
       deliveryConsent: new DeliveryConsentRepository({ db: managementDb, now: () => new Date().toISOString() }),
       ...(governanceRuntime.active ? {
         governance: {

@@ -192,19 +192,17 @@ describe("经营任务运行时调度", () => {
         (opportunity_id, merchant_id, status, owner, revision, created_at, updated_at)
        VALUES ('opp-1', ?, 'NEW', 'admin-1', 1, ?, ?)`,
     ).run(MERCHANT, NOW, NOW);
-    dueRule();
+    const ruleId = dueRule();
     const projection = new OperationsProjection({ db, now: () => clock });
     const result = await scheduler(
       async () => advice(["opportunity:opp-1"]),
       { prefilter: (rule) => projection.prefilter(rule) },
     ).tick();
     expect(result).toMatchObject({ evaluations: 1, claimed: 1, committed: 1 });
-    const artifact = db
-      .prepare("SELECT result_kind, payload_json FROM operation_artifacts")
-      .get() as { result_kind: string; payload_json: string };
-    expect(artifact.result_kind).toBe("internal_summary");
-    expect(JSON.parse(artifact.payload_json)).toMatchObject({
-      advice: { evidence_refs: ["opportunity:opp-1"] },
-    });
+    expect(service.listArtifacts(MERCHANT)).toMatchObject([{
+      rule_id: ruleId,
+      result_kind: "internal_summary",
+      payload: { advice: { evidence_refs: ["opportunity:opp-1"] } },
+    }]);
   });
 });

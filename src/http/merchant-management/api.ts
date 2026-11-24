@@ -44,6 +44,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { WriteApprovalCandidate } from "../../agent/merchant/action-candidate.js";
 import { MerchantWeixinError, type MerchantWeixinChannel } from "../../merchant/weixin-channel.js";
+import { OwnerConversationError } from "../../merchant/weixin-owner-conversation.js";
+import { ManualSupportError, type ManualSupportService } from "../../merchant-core/support/manual-service.js";
 import type { MerchantPolicy } from "../../config/profile.js";
 import { contentHash } from "../../agent/merchant/action-candidate.js";
 import type { AdminSession, MerchantAdminSessions } from "../../auth/merchant-sessions.js";
@@ -377,6 +379,9 @@ export interface MerchantManagementApiOptions {
   workbenchEvents?: WorkbenchEventProjectionStore;
   /** 商家持续经营（v0.2）：经营计划/机会/方案/跟进；未配置时对应路由 404。 */
   merchantOperations?: MerchantOperationsSurface;
+  operationsSchedulerAvailable?: () => boolean;
+  /** 私有 M0 验收装配显式提供；默认不注册客服路由。 */
+  manualSupport?: ManualSupportService;
   /** M6-3 收件人绑定/订阅（P1 管理面；无则路由不存在）。 */
   deliveryConsent?: import("../../merchant-core/customer-delivery/consent-repository.js").DeliveryConsentRepository;
   /** M6 投递记录（UNKNOWN 核对路径；无则路由不存在）。 */
@@ -661,6 +666,10 @@ export function createMerchantManagementApiHandler(
       const rest =
         pathname === WORKBENCH_API_PREFIX ? "/" : pathname.slice(WORKBENCH_API_PREFIX.length);
       try {
+        if (options.manualSupport !== undefined && (rest === "/support" || rest.startsWith("/support/"))) {
+          await routeManualSupport(options.manualSupport, req, res, method, rest);
+          return;
+        }
         if (rest === "/channels/weixin" || rest.startsWith("/channels/weixin/")) {
           await routeWeixin(req, res, method, rest);
           return;
@@ -715,6 +724,55 @@ export function createMerchantManagementApiHandler(
     writeJson(res, 404, errorBody("not_found", "unknown management api path"));
   }
 
+  async function routeManualSupport(
+    support: ManualSupportService, req: IncomingMessage, res: ServerResponse, method: string, rest: string,
+  ): Promise<void> {
+    const auth = requireActor(req);
+    if (auth.ctx.merchantId !== options.merchantId) throw new ManagementError("not_found", "工单不存在。");
+    if (auth.ctx.role !== "owner") throw new ManagementError("forbidden", "当前预览仅店主可处理售后工单。");
+    const match = /^\/support\/cases\/(CS-[0-9a-f-]{36})(?:\/(claim|reply|resolve|revoke))?$/.exec(rest);
+    try {
+      if (method === "GET" && rest === "/support/cases") { writeJson(res, 200, { cases: support.list(auth.ctx) }); return; }
+      if (method === "GET" && match?.[1] !== undefined && match[2] === undefined) {
+        writeJson(res, 200, support.detail(auth.ctx, match[1]));
+        return;
+      }
+      if (method === "POST" && match?.[1] !== undefined && match[2] !== undefined) {
+        assertWriteGuards(req, auth.sessionId);
+        const kind = match[2];
+        const fields = objectFields(await readJsonBody(req, 8192), kind === "reply" || kind === "resolve"
+          ? ["expected_revision", "text"] : ["expected_revision"]);
+        const revision = fields.expected_revision;
+        if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1) {
+          throw new ManagementError("invalid_input", "工单版本无效。");
+        }
+        // 请求体读取期间可能已经注销或撤销授权；不要提交旧会话已缓存的权限。
+        const fresh = requireActor(req);
+        if (fresh.ctx.generation !== auth.ctx.generation) throw new ManagementError("forbidden", "管理部署代次已变化。");
+        if (kind === "reply" || kind === "resolve") {
+          if (typeof fields.text !== "string") throw new ManagementError("invalid_input", "请输入人工说明。");
+          writeJson(res, 200, support.change(fresh.ctx, match[1], revision, { kind, text: fields.text }));
+        } else if (kind === "claim" || kind === "revoke") {
+          writeJson(res, 200, support.change(fresh.ctx, match[1], revision, { kind }));
+        }
+        return;
+      }
+    } catch (error) {
+      if (error instanceof BodyTooLarge) throw new ManagementError("invalid_input", "工单请求过大。");
+      if (error instanceof ManualSupportError) {
+        switch (error.code) {
+          case "validation": throw new ManagementError("invalid_input", "工单输入无效。");
+          case "not_found": throw new ManagementError("not_found", "工单不存在。");
+          case "conflict": throw new ManagementError("precondition_changed", "工单版本、坐席或浏览器权限已变化。");
+          case "forbidden": throw new ManagementError("forbidden", "当前主体无权处理该工单。");
+          default: throw new ManagementError("unavailable", "工单服务暂不可用。");
+        }
+      }
+      throw error;
+    }
+    throw new ManagementError("not_found", "工单路由不存在。");
+  }
+
   async function routeWeixin(req: IncomingMessage, res: ServerResponse, method: string, rest: string): Promise<void> {
     const channel = options.weixinChannel;
     if (channel === undefined) throw new ManagementError("not_found", "微信通道未启用。");
@@ -723,27 +781,9 @@ export function createMerchantManagementApiHandler(
     if (actor.merchantId !== options.merchantId) throw new ManagementError("not_found", "微信通道不存在。");
     if (actor.role !== "owner") throw new ManagementError("forbidden", "仅店主可管理微信通道。");
     const base = "/channels/weixin";
-    if (method === "GET" && rest === base) {
-      writeJson(res, 200, channel.status());
-      return;
-    }
-    const action = rest.slice(base.length + 1);
-    if (method !== "POST" || !["begin", "poll", "cancel", "disconnect"].includes(action)) {
-      throw new ManagementError("not_found", "微信通道路由不存在。");
-    }
-    assertWriteGuards(req, auth.sessionId);
-    let fields: Record<string, unknown>;
-    try {
-      fields = objectFields(await readJsonBody(req, 2048),
-        action === "poll" ? ["attempt_id", "verify_code"] : action === "cancel" ? ["attempt_id"] : []);
-    } catch (error) {
-      if (error instanceof BodyTooLarge || error instanceof ManagementError) {
-        throw new ManagementError("invalid_input", "微信通道请求字段无效或请求过大。");
-      }
-      throw error;
-    }
     const owner = {
       sessionId: auth.sessionId,
+      principalId: actor.actorId,
       generation: actor.generation,
       current: () => {
         if (actor.generation !== options.generation()) return false;
@@ -752,8 +792,64 @@ export function createMerchantManagementApiHandler(
           session.principal_id === actor.actorId;
       },
     };
+    const action = rest.slice(base.length + 1);
+    const draftId = /^reply-drafts\/([0-9a-f-]{36})$/.exec(action)?.[1];
     try {
-      if (action === "begin") {
+      if (method === "GET" && rest === base) {
+        const status = channel.status(owner.principalId);
+        writeJson(res, 200, !("conversation" in status) ? status : {
+          ...status, operations_available: options.governance?.flags.jobs_enabled === true && options.merchantOperations !== undefined &&
+            options.operationsSchedulerAvailable?.() === true,
+        });
+        return;
+      }
+      if (method === "GET" && action === "followup-preference") {
+        writeJson(res, 200, channel.followupPreference(owner));
+        return;
+      }
+      if (method === "GET" && action === "reply-drafts") {
+        writeJson(res, 200, { items: channel.replyDrafts(owner) });
+        return;
+      }
+      if (method === "GET" && draftId !== undefined) {
+        writeJson(res, 200, channel.replyDraft(owner, draftId));
+        return;
+      }
+      if (method !== "POST" || (draftId === undefined &&
+          !["begin", "poll", "cancel", "disconnect", "confirm-conversation", "clear-conversation", "revoke-conversation", "followup-preference"].includes(action))) {
+        throw new ManagementError("not_found", "微信通道路由不存在。");
+      }
+      assertWriteGuards(req, auth.sessionId);
+      let fields: Record<string, unknown>;
+      try {
+        fields = objectFields(await readJsonBody(req, draftId === undefined ? 2048 : 8192),
+          draftId !== undefined ? ["version", "body"] : action === "followup-preference" ? ["version", "style"] : action === "poll" ? ["attempt_id", "verify_code"] : action === "cancel" ? ["attempt_id"] : []);
+      } catch (error) {
+        if (error instanceof BodyTooLarge || error instanceof ManagementError) {
+          throw new ManagementError("invalid_input", "微信通道请求字段无效或请求过大。");
+        }
+        throw error;
+      }
+      if (draftId !== undefined) {
+        const version = fields["version"];
+        if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 1) {
+          throw new ManagementError("invalid_input", "草稿版本无效。");
+        }
+        writeJson(res, 200, channel.replyDraft(owner, draftId, { version, body: requireString(fields["body"], "body") }));
+      } else if (action === "followup-preference") {
+        const version = fields["version"];
+        const style = fields["style"];
+        if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 0 ||
+            (style !== null && style !== "concise" && style !== "warm")) {
+          throw new ManagementError("invalid_input", "偏好的版本或语气无效。");
+        }
+        writeJson(res, 200, channel.followupPreference(owner, { version, style }));
+      } else if (action === "confirm-conversation" || action === "clear-conversation" || action === "revoke-conversation") {
+        if (action === "confirm-conversation") channel.confirmConversation(owner);
+        else if (action === "clear-conversation") channel.clearConversation(owner);
+        else channel.revokeConversation(owner);
+        writeJson(res, 200, { ok: true });
+      } else if (action === "begin") {
         writeJson(res, 200, await channel.begin(owner));
       } else if (action === "disconnect") {
         await channel.disconnect(owner);
@@ -769,7 +865,9 @@ export function createMerchantManagementApiHandler(
         }
       }
     } catch (error) {
-      if (error instanceof MerchantWeixinError) throw new ManagementError(error.code, error.message);
+      if (error instanceof MerchantWeixinError || error instanceof OwnerConversationError) {
+        throw new ManagementError(error.code, error.message);
+      }
       throw error;
     }
   }
@@ -2132,13 +2230,14 @@ export function createMerchantManagementApiHandler(
         writeJson(res, 201, writeGoverned(() => ops.activateRule(body)), { "x-request-id": requestId });
         return;
       }
-      const pauseRuleMatch = /^\/automation\/rules\/([^/]+)\/pause$/.exec(rest);
-      if (pauseRuleMatch !== null) {
+      const ruleControlMatch = /^\/automation\/rules\/([^/]+)\/(pause|resume)$/.exec(rest);
+      if (ruleControlMatch !== null) {
         const auth = requireActor(req);
         assertWriteGuards(req, auth.sessionId);
         authorizeOrThrow(auth.ctx, "followups:manage");
         const { body } = await readOpsBody();
-        writeJson(res, 200, writeGoverned(() => ops.pauseRule(pathSegment(pauseRuleMatch[1] ?? ""), body)), {
+        const id = pathSegment(ruleControlMatch[1] ?? "");
+        writeJson(res, 200, writeGoverned(() => ruleControlMatch[2] === "pause" ? ops.pauseRule(id, body) : ops.resumeRule(id, body)), {
           "x-request-id": requestId,
         });
         return;

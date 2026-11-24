@@ -228,12 +228,41 @@ describe("getUpdates", () => {
     expect(req.url).toBe("/ilink/bot/getupdates");
     const body = JSON.parse(req.body) as Record<string, unknown>;
     expect(body.get_updates_buf).toBe("buf-prev");
-    const bi = body.base_info as Record<string, unknown>;
-    expect(bi.ilink_bot_id).toBe("bot-1");
-    expect(bi.bot_token).toBe("tok-123");
-    // iLink 用 bot_agent 标识驱动应用（缺省会显示成 OpenClaw）
-    expect(bi.bot_agent).toBe(`Kiwi/${pkg.version}`);
-    expect(bi.channel_version).toBe(pkg.version);
+    // iLink 用 bot_agent 标识驱动应用（缺省会显示成 OpenClaw）；凭据不进请求体。
+    expect(body.base_info).toEqual({ bot_agent: `Kiwi/${pkg.version}`, channel_version: pkg.version });
+  });
+
+  it("only marks single user-to-bot text as eligible for the owner preview", async () => {
+    const direct = {
+      from_user_id: "wxid_friend", to_user_id: CREDS.ilink_bot_id, message_type: 1,
+      message_id: 42, context_token: "test-context", item_list: [{ type: 1, text_item: { text: "询价" } }],
+    };
+    const base = await startMock((_req, res) => json(res, 200, { ret: 0, msgs: [
+      direct,
+      { ...direct, message_type: undefined },
+      { ...direct, to_user_id: "different-bot" },
+      { ...direct, group_id: "test-room" },
+      { ...direct, item_list: [...direct.item_list, { type: 9 }] },
+    ] }));
+    const result = await new IlinkClient({ baseUrl: base }).getUpdates("", CREDS);
+    expect(result.messages.map((message) => message.direct_text)).toEqual([true, undefined, undefined, undefined, undefined]);
+    expect(result.messages[0]?.message_id).toBe("42");
+  });
+
+  it("preserves distinct uint64 message IDs from raw JSON before applying the owner message filter", async () => {
+    const direct = {
+      from_user_id: CREDS.ilink_user_id, to_user_id: CREDS.ilink_bot_id, message_type: 1,
+      context_token: "test-context", item_list: [{ type: 1, text_item: { text: "询价" } }],
+    };
+    const ids = ["9007199254740992", "9007199254740993", "18446744073709551615", "18446744073709551616"];
+    const msg = JSON.stringify(direct).slice(1);
+    const base = await startMock((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(`{"ret":0,"msgs":[${ids.map((id) => `{"message_id":${id},${msg}`).join(",")}]}`);
+    });
+    const result = await new IlinkClient({ baseUrl: base }).getUpdates("", CREDS);
+    expect(result.messages.slice(0, 3).map((message) => message.message_id)).toEqual(ids.slice(0, 3));
+    expect(result.messages.map((message) => message.direct_text)).toEqual([true, true, true, undefined]);
   });
 
   it("session expired (-14) → session_stale", async () => {
@@ -274,7 +303,7 @@ describe("sendMessage", () => {
     expect(body.msg.message_type).toBe(2);
     expect(body.msg.message_state).toBe(2);
     expect(body.msg.item_list).toEqual([{ type: 1, text_item: { text: "回复" } }]);
-    expect(body.base_info.bot_token).toBe("tok-123");
+    expect(body.base_info).toEqual({ bot_agent: `Kiwi/${pkg.version}`, channel_version: pkg.version });
   });
 
   it("omits context_token when absent", async () => {
@@ -286,6 +315,56 @@ describe("sendMessage", () => {
 });
 
 describe("request 纪律", () => {
+  it("authenticates both iLink message endpoints without putting the bot token in the body or QR requests", async () => {
+    // 扫码令牌是服务端不透明字符串，不能假定仅使用 Base64 字符集。
+    const credentials = { ...CREDS, bot_token: "fixture@opaque:token" };
+    const base = await startMock((req, res) => {
+      if (req.url?.startsWith("/ilink/bot/get_bot_qrcode?")) {
+        json(res, 200, { qrcode: "fixture", qrcode_img_content: "https://liteapp.weixin.qq.com/q/fixture" });
+        return;
+      }
+      if (req.url?.startsWith("/ilink/bot/get_qrcode_status?")) {
+        json(res, 200, { status: "wait" });
+        return;
+      }
+      const encodedUin = req.headers["x-wechat-uin"];
+      const uin = typeof encodedUin === "string" ? Buffer.from(encodedUin, "base64").toString("ascii") : "";
+      const authenticated = req.headers.authorizationtype === "ilink_bot_token" &&
+        req.headers.authorization === `Bearer ${credentials.bot_token}` && /^(0|[1-9]\d{0,9})$/.test(uin) &&
+        Number(uin) <= 0xffffffff && Buffer.from(uin, "ascii").toString("base64") === encodedUin;
+      json(res, 200, authenticated ? { ret: 0, get_updates_buf: "first-cursor" } : { ret: -14 });
+    });
+    const client = new IlinkClient({ baseUrl: base });
+    await client.getBotQrcode();
+    await client.getQrcodeStatus("fixture");
+    expect((await client.getUpdates("", credentials)).next_sync_buf).toBe("first-cursor");
+    await client.sendMessage({ to_user_id: credentials.ilink_user_id, text: "fixture", context_token: "fixture-context" }, credentials);
+    expect(requests).toHaveLength(4);
+    for (const req of requests.slice(0, 2)) {
+      expect(req.headers.authorization).toBeUndefined();
+      expect(req.headers.authorizationtype).toBeUndefined();
+    }
+    for (const req of requests.slice(2)) expect(req.body).not.toContain(credentials.bot_token);
+  });
+
+  it.each(["", "  ", "tok\r\ninjected: value", "tok\n"])("rejects invalid message authentication before opening a connection", async (bot_token) => {
+    const base = await startMock((_req, res) => json(res, 200, { ret: 0 }));
+    const client = new IlinkClient({ baseUrl: base });
+    await expect(client.getUpdates("", { ...CREDS, bot_token })).rejects.toMatchObject({ code: "auth" });
+    expect(requests).toHaveLength(0);
+  });
+
+  it("does not forward message authentication to a redirect destination", async () => {
+    const other = await startMock((_req, res) => json(res, 200, { ret: 0 }));
+    const base = await startMock((_req, res) => {
+      res.writeHead(307, { location: other });
+      res.end();
+    });
+    await expect(new IlinkClient({ baseUrl: base }).getUpdates("", CREDS)).rejects.toMatchObject({ code: "redirect" });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.headers.authorization).toBe(`Bearer ${CREDS.bot_token}`);
+  });
+
   it("redirect → WeixinError redirect", async () => {
     const base = await startMock((_req, res) => {
       res.writeHead(302, { location: "https://evil.example.com" });

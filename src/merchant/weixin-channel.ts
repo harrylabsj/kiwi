@@ -7,6 +7,11 @@ import { loadCredentials, loadSyncState, saveCredentials, saveSyncState } from "
 import { IlinkClient } from "../weixin/ilink-client.js";
 import { encodeQrMatrix } from "../weixin/qr.js";
 import { WeixinError, type BotCredentials } from "../weixin/types.js";
+import { bindingFingerprint, OwnerConversationError, WeixinOwnerConversation, type FollowupStyle, type WeixinOwnerConversationOptions } from "./weixin-owner-conversation.js";
+
+function fingerprint(credentials: BotCredentials): string {
+  return bindingFingerprint(credentials.ilink_user_id ?? "", credentials.ilink_bot_id, credentials.bot_token, credentials.saved_at);
+}
 
 const QR_TTL_MS = 8 * 60_000;
 const POLL_INTERVAL_MS = 1_500;
@@ -23,6 +28,7 @@ export class MerchantWeixinError extends Error {
 export interface WeixinBindingOwner {
   sessionId: string;
   generation: number;
+  principalId?: string;
   /** Revalidate after external I/O, before disclosing a QR or writing credentials. */
   current: () => boolean;
 }
@@ -48,6 +54,9 @@ export class MerchantWeixinChannel {
   private readonly credentialsFile: string;
   private readonly cursorFile: string;
   private readonly lockFile: string;
+  private readonly conversationFile: string;
+  private readonly conversationOptions: WeixinOwnerConversationOptions | undefined;
+  private conversation?: WeixinOwnerConversation;
   private readonly now: () => number;
   private readonly client: (baseUrl?: string) => Client;
   private attempt?: Attempt;
@@ -58,14 +67,68 @@ export class MerchantWeixinChannel {
   private worker?: { abort: AbortController; done: Promise<void> };
   private closed = false;
 
-  constructor(options: { dataDir: string; merchantId: string; client?: (baseUrl?: string) => Client; now?: () => number }) {
+  constructor(options: { dataDir: string; merchantId: string; client?: (baseUrl?: string) => Client; now?: () => number; conversation?: WeixinOwnerConversationOptions }) {
     const merchantKey = createHash("sha256").update(options.merchantId).digest("hex");
     this.directory = path.join(options.dataDir, "weixin-workbench", merchantKey);
     this.credentialsFile = path.join(this.directory, "credentials.json");
     this.cursorFile = path.join(this.directory, "sync.json");
     this.lockFile = path.join(this.directory, "owner.sqlite");
+    this.conversationFile = path.join(this.directory, "owner-conversation.v1.sqlite");
+    this.conversationOptions = options.conversation;
     this.client = options.client ?? ((baseUrl) => new IlinkClient({ baseUrl }));
     this.now = options.now ?? Date.now;
+  }
+
+  private openConversation(): WeixinOwnerConversation | undefined {
+    if (this.conversationOptions === undefined) return undefined;
+    if (!this.conversationOptions.enabled && !existsSync(this.conversationFile)) return undefined;
+    this.lock();
+    this.conversation ??= new WeixinOwnerConversation(this.conversationFile, this.conversationOptions, this.now);
+    return this.conversation;
+  }
+
+  private ownerConversation(owner: WeixinBindingOwner) {
+    this.assertOwner(owner);
+    const principal = owner.principalId;
+    const conversation = this.openConversation();
+    if (!principal || conversation === undefined) throw new OwnerConversationError("unavailable", "店主对话未装配。");
+    if (!this.conversationOptions?.ownerRevision(principal)) throw new OwnerConversationError("forbidden", "当前主体不能管理店主对话。");
+    return { principal, conversation };
+  }
+
+  confirmConversation(owner: WeixinBindingOwner): void {
+    const { principal, conversation } = this.ownerConversation(owner);
+    if (!this.configured || !existsSync(this.credentialsFile)) throw new OwnerConversationError("conflict", "请先连接微信。");
+    const current = fingerprint(loadCredentials(this.credentialsFile));
+    if (!conversation.status(principal, current).authorized) conversation.bind(principal, current);
+  }
+
+  clearConversation(owner: WeixinBindingOwner): void {
+    const { principal, conversation } = this.ownerConversation(owner);
+    if (!this.configured || !existsSync(this.credentialsFile)) throw new OwnerConversationError("conflict", "请先连接微信。");
+    conversation.clear(principal, fingerprint(loadCredentials(this.credentialsFile)));
+  }
+
+  revokeConversation(owner: WeixinBindingOwner): void {
+    const { conversation } = this.ownerConversation(owner);
+    conversation.revoke();
+  }
+
+  followupPreference(owner: WeixinBindingOwner, change?: { version: number; style: FollowupStyle | null }) {
+    const { principal, conversation } = this.ownerConversation(owner);
+    return change === undefined ? conversation.preference(principal) : conversation.setPreference(principal, change.version, change.style);
+  }
+
+  replyDrafts(owner: WeixinBindingOwner) {
+    const { principal, conversation } = this.ownerConversation(owner);
+    return conversation.listDrafts(principal);
+  }
+
+  replyDraft(owner: WeixinBindingOwner, id: string, edit?: { version: number; body: string }) {
+    const { principal, conversation } = this.ownerConversation(owner);
+    const row = edit === undefined ? conversation.draft(principal, id) : conversation.edit(principal, id, edit.version, edit.body);
+    const { inquiry, version, body, current, publication } = row;
+    return { id: row.id, inquiry, version, body, current, publication };
   }
 
   restore(): void {
@@ -81,9 +144,18 @@ export class MerchantWeixinChannel {
     }
   }
 
-  status() {
+  status(ownerPrincipal?: string) {
     this.restore();
-    return { status: this.state, configured: this.configured };
+    const base = { status: this.state, configured: this.configured };
+    if (!ownerPrincipal || !this.conversationOptions?.enabled) return base;
+    const delivery = this.conversationOptions.replyToOwner ? "paired_owner" as const : "workbench_only" as const;
+    try {
+      const key = this.configured ? fingerprint(loadCredentials(this.credentialsFile)) : undefined;
+      const conversation = key === undefined ? undefined : this.openConversation()?.status(ownerPrincipal, key);
+      return { ...base, conversation: conversation ?? { enabled: true, authorized: false, delivery } };
+    } catch {
+      return { ...base, conversation: { enabled: true, authorized: false, unavailable: true, delivery } };
+    }
   }
 
   async begin(owner: WeixinBindingOwner) {
@@ -141,10 +213,16 @@ export class MerchantWeixinChannel {
         case "confirmed": {
           if (!result.credentials.ilink_user_id) throw new WeixinError("validation", "missing paired account");
           rmSync(this.cursorFile, { force: true });
-          saveCredentials(this.credentialsFile, { ...result.credentials, saved_at: new Date(this.now()).toISOString() });
+          const credentials = { ...result.credentials, saved_at: new Date(this.now()).toISOString() };
+          const conversation = this.openConversation();
+          if (conversation !== undefined) {
+            if (this.conversationOptions?.enabled && owner.principalId) conversation.bind(owner.principalId, fingerprint(credentials));
+            else conversation.revoke();
+          }
+          saveCredentials(this.credentialsFile, credentials);
           this.configured = true;
           this.clearAttempt(attempt);
-          this.listen(result.credentials);
+          this.listen(conversation === undefined ? result.credentials : credentials);
           return { status: "confirmed" as const };
         }
         case "scaned_but_redirect":
@@ -191,6 +269,7 @@ export class MerchantWeixinChannel {
     // No await between the session check, deleting credentials and aborting the worker.
     // An already-resolved poll is also fenced by the abort signal before it can write.
     try {
+      this.openConversation()?.revoke();
       rmSync(this.cursorFile, { force: true });
       rmSync(this.credentialsFile, { force: true });
     } catch {
@@ -210,6 +289,8 @@ export class MerchantWeixinChannel {
     this.closed = true;
     if (this.attempt !== undefined) this.clearAttempt(this.attempt);
     await this.stopWorker();
+    this.conversation?.close();
+    this.conversation = undefined;
     this.lease?.close();
     this.lease = undefined;
   }
@@ -252,17 +333,39 @@ export class MerchantWeixinChannel {
   private async receive(credentials: BotCredentials, signal: AbortSignal): Promise<void> {
     const client = this.client(credentials.base_url);
     let cursor = loadSyncState(this.cursorFile).get_updates_buf;
+    const account = credentials.ilink_user_id;
+    const key = fingerprint(credentials);
+    const replyToOwner = this.conversationOptions?.replyToOwner === true;
+    const runOwnerTurn = async (conversation: WeixinOwnerConversation): Promise<void> => {
+      if (!replyToOwner || !account) {
+        await conversation.prepare(key, signal);
+        return;
+      }
+      // 收件人只取当前扫码凭据，不能由模型、消息正文或商家事实指定。
+      await conversation.process(key, signal, ({ text, context }) => {
+        signal.throwIfAborted();
+        if (!existsSync(this.credentialsFile) || fingerprint(loadCredentials(this.credentialsFile)) !== key) {
+          throw new WeixinError("session_stale", "店主微信绑定已变化。");
+        }
+        return client.sendMessage({ to_user_id: account, text, context_token: context }, credentials, signal);
+      });
+    };
     while (!signal.aborted) {
       let pauseMs = 1_000;
       try {
+        const conversation = account ? this.openConversation() : undefined;
+        if (conversation !== undefined) await runOwnerTurn(conversation);
+        if (signal.aborted) return;
+        const consent = conversation?.consent(key);
         const updates = await client.getUpdates(cursor, credentials, signal);
         if (signal.aborted) return;
         this.state = "connected";
+        if (account) conversation?.admit(key, account, updates.messages, consent);
         if (cursor !== updates.next_sync_buf) {
           saveSyncState(this.cursorFile, { get_updates_buf: updates.next_sync_buf, seen: [] });
           cursor = updates.next_sync_buf;
         }
-        // This is a connectivity check, not a general chat bot. No chat content is stored.
+        // /ping 保持为既有连通性检查；业务答复走持久、去重的店主对话。
         for (const message of updates.messages) {
           if (signal.aborted) return;
           if (message.from_user_id !== credentials.ilink_user_id || message.text.trim() !== "/ping" || !message.context_token) continue;
@@ -272,6 +375,7 @@ export class MerchantWeixinChannel {
             context_token: message.context_token,
           }, credentials, signal);
         }
+        if (conversation !== undefined) await runOwnerTurn(conversation);
       } catch (error) {
         if (signal.aborted) return;
         if (error instanceof WeixinError && (error.code === "auth" || error.code === "session_stale")) {
