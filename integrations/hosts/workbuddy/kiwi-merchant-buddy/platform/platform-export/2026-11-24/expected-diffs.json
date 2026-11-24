@@ -1,7 +1,7 @@
 {
   "schema": "kiwi.workbuddy.platform-export-expected-diffs.v1",
   "export_date": "2026-11-24",
-  "diff_count": 29,
+  "diff_count": 6,
   "diffs": [
     {
       "path": "chat.placeholderEn",
@@ -48,172 +48,11 @@
       }
     },
     {
-      "path": "modes.catalog.scenes.cap-copy.systemPrompt",
-      "live_sha256": "sha256:7d555537a105952df02503cd0c33a696a73a719328cf9f0f28771ad57f5c65a0",
-      "local_sha256": "sha256:a21f769a4ea1b8b98ae614f1d4c4196c13b08818849a30298a4b796f89675edd",
-      "live_length": 105,
-      "local_length": 72
-    },
-    {
-      "path": "modes.catalog.scenes.cap-copy.templates.t44.prompt",
-      "live_sha256": "sha256:f561b838e0b55a3d7d82ba4d69d26c2a5a1b168dc77d40e51dd0069510814a48",
-      "local_sha256": "sha256:f8b5b8977ddf077dd95d41110c4b672a3c04427ae743c99efc7fdacade813c3a",
-      "live_length": 27,
-      "local_length": 32
-    },
-    {
-      "path": "modes.catalog.scenes.cap-copy.templates.t44.promptEn",
-      "live_sha256": "sha256:6a3a644e42cb0c313a83e1e6729c57e6098122bb06e0f07d17549c9461d0e60d",
-      "local_sha256": "sha256:60b8fadba9db41c23a343bfcc70e74e56167db4bf690fc2311db96f7f5fbe969",
-      "live_length": 79,
-      "local_length": 109
-    },
-    {
-      "path": "modes.catalog.scenes.cap-import.systemPrompt",
-      "live_sha256": "sha256:ae2d6ff787f93a939ffa2d46c592efb3279b74e0d1b2921220e2f21237fa2520",
-      "local_sha256": "sha256:225e2d65cb3abe29a90f33fa107b5cf3e2cac18b1f26997329a17e0eb4902b25",
-      "live_length": 117,
-      "local_length": 77
-    },
-    {
-      "path": "modes.catalog.scenes.cap-import.templates.t29.prompt",
-      "live_sha256": "sha256:2723b646c405b45ebd799fab8d8c8d6bb1d5afea5401b2f778b28b68312cfadd",
-      "local_sha256": "sha256:52adb4dace443c407a3dc5bf43210a475d7c5745ad41cf5bb139d67fadfab7ee",
-      "live_length": 27,
-      "local_length": 32
-    },
-    {
-      "path": "modes.catalog.scenes.cap-import.templates.t29.promptEn",
-      "live_sha256": "sha256:e490cbe409433f606a0e8f77c9fe06b2197cf2799fa46648ca9a1776c6679023",
-      "local_sha256": "sha256:4dfd58819aa2e35643a670f81d3e0389954201d3e0ad501af0cf3db1c906f475",
-      "live_length": 93,
-      "local_length": 87
-    },
-    {
-      "path": "modes.catalog.scenes.cap-import.templates.t30.prompt",
-      "live_sha256": "sha256:a6988e696728a3a05967fb9ba5a930b4bc4337b2fa597e5175a219a6b2691881",
-      "local_sha256": "sha256:cf13e78a33bf52a6b3c5f03c55c2983266042bb02cbb7a8483304b3f90245933",
-      "live_length": 28,
-      "local_length": 31
-    },
-    {
-      "path": "modes.catalog.scenes.cap-import.templates.t30.promptEn",
-      "live_sha256": "sha256:ccb8a9df67c60302d6ca121546ffd5896178277a7f81da3ee8541f39e2daa291",
-      "local_sha256": "sha256:f27ee8050516ba40bd04f3c5d52463cfc8ada5bf278d7c854997a87c38ba3156",
-      "live_length": 84,
-      "local_length": 90
-    },
-    {
-      "path": "modes.catalog.scenes.cap-import.templates.t30.title",
-      "live_sha256": "sha256:a14c2e9a5dc1d6f00b8e7c6cbc60ceb6240b7e5b27e36278f888bcace818fd2b",
-      "local_sha256": "sha256:7143d4df6930113b8057d5bbfa1105a0037f95c41f28388f8c9807392c3cc768",
-      "live_length": 8,
-      "local_length": 8
-    },
-    {
-      "path": "modes.catalog.scenes.cap-import.templates.t30.titleEn",
-      "live_sha256": "sha256:5ce1cffcb473dc2ee491c498bf15582e7bd97e96b1717a346f1246bcb9ec999c",
-      "local_sha256": "sha256:9f678ae86a82d7afa365d17b99b6db7673995b80399e7cc38c94387edcb79787",
-      "live_length": 13,
-      "local_length": 13
-    },
-    {
-      "path": "modes.catalog.scenes.cap-products.systemPrompt",
-      "live_sha256": "sha256:53a415b81377b06f90ddfab01f31d72329a0a8722d9f579fdf51f38dee8623c1",
-      "local_sha256": "sha256:81d986d7a727e10dd5f94b8e8af9fc47ad736308fa93d4df8dc7810abbcc787e",
-      "live_length": 160,
-      "local_length": 248
-    },
-    {
-      "path": "modes.catalog.systemPrompt",
-      "live_sha256": "sha256:639d4a1890662e57c92dfccbb67a71d38250f1ae4307b6888a8a246bc619b32d",
-      "local_sha256": "sha256:7e5bce5ab706f0e9a552c17e250e8d837a7a708023bbf9516ae4048a797b04df",
-      "live_length": 1130,
-      "local_length": 1173
-    },
-    {
-      "path": "modes.onboarding.scenes.cap-cloud.systemPrompt",
-      "live_sha256": "sha256:a2445e838b93827de7a71599d0a6fa2f21b6ae59ac0081067585135470b83bc9",
-      "local_sha256": "sha256:e2fe1d3c086ac62f6c54a469994fa0815836ba45f3c1c4a533be79b5db55db1f",
-      "live_length": 245,
-      "local_length": 269
-    },
-    {
-      "path": "modes.onboarding.scenes.cap-cloud.templates.t16.promptEn",
-      "live_sha256": "sha256:9d72203b8b2b3d27f192a0ec8ec36a4ecd73a96b104f49447eea7e4ebb67b254",
-      "local_sha256": "sha256:919fa3c929bd89ed16040be70865442bc5b0b0317cdf9da440fbbac2a451bd30",
-      "live_length": 66,
-      "local_length": 75
-    },
-    {
-      "path": "modes.onboarding.scenes.cap-connect.systemPrompt",
-      "live_sha256": "sha256:2464abf997304139240bac16b9eb2b6cfa5d85756dad1a32960f2460dcd074be",
-      "local_sha256": "sha256:24272bdadbbebcf8f693913557468b7213c34fda60df384e608ca90bc8c6f0f4",
-      "live_length": 169,
-      "local_length": 110
-    },
-    {
-      "path": "modes.onboarding.scenes.cap-connect.templates.t10.promptEn",
-      "live_sha256": "sha256:a594aed1aba1071d9bd1ca66a5fb1c656d62a6cbdbf802f5dd479054f2d97619",
-      "local_sha256": "sha256:098e7617acba30c1d0cbe14b11e52f48fa6e0f478544f3f9ae0bd577ca2cbae0",
-      "live_length": 84,
-      "local_length": 92
-    },
-    {
-      "path": "modes.onboarding.scenes.cap-connect.templates.t11.promptEn",
-      "live_sha256": "sha256:0d257846bb48d85524e77b1c5b244cd2ac8f219d108b97d66515e2d1e07c59f5",
-      "local_sha256": "sha256:ebba8dc35e5d0edccefefa83e8d92fc280ba56dc195968d7858c899914e8be2e",
-      "live_length": 60,
-      "local_length": 60
-    },
-    {
-      "path": "modes.onboarding.scenes.cap-connect.templates.t9.promptEn",
-      "live_sha256": "sha256:99e0dab5e8e28952f3852653004d0ea9071c0ca342c3adb720a73b5213d98827",
-      "local_sha256": "sha256:b29346568420fa1d81006e3b53415a1b98841807e449441e1db433ea6df4bcb6",
-      "live_length": 76,
-      "local_length": 76
-    },
-    {
-      "path": "modes.onboarding.scenes.cap-email.systemPrompt",
-      "live_sha256": "sha256:e16827f1126ec5eeb4e57f94a912a99c226cf34eab7b416031bf673a63cad4da",
-      "local_sha256": "sha256:63097da0164582db0508163c7d600408554e61088c5c21e3d04f090dfdfe8622",
-      "live_length": 79,
-      "local_length": 45
-    },
-    {
-      "path": "modes.onboarding.scenes.cap-email.templates.t8.titleEn",
-      "live_sha256": "sha256:948715c8c02bfa0ef2ccb7b8b6405db679ce4ab11fdcf5226352d898cfa9c523",
-      "local_sha256": "sha256:8c0523e6ca1eef40a38bc916b8151c13c386b0289e34f78fdb630e1b55287184",
-      "live_length": 18,
-      "local_length": 27
-    },
-    {
-      "path": "modes.onboarding.scenes.cap-golive.systemPrompt",
-      "live_sha256": "sha256:2c8c50b9efb62931a3045c0e9e09e2c5eececf272c8b0ab70bee0c3c710ddf84",
-      "local_sha256": "sha256:e1606acc68595820e8cdef5aa7761a37be49e0495039b48c8fa2ba7d2bf7ea8e",
-      "live_length": 114,
-      "local_length": 79
-    },
-    {
-      "path": "modes.onboarding.scenes.cap-register.systemPrompt",
-      "live_sha256": "sha256:28a74446afdd18a58e7d86e088307c03d348ebd8b81d4fcebc65060e907e91a9",
-      "local_sha256": "sha256:b3263b1aad5ba656750bd5a1ec4adce9172134c366bdaff2a8c2ab3ab14f8e1f",
-      "live_length": 229,
-      "local_length": 140
-    },
-    {
-      "path": "modes.onboarding.scenes.cap-register.templates.t2.promptEn",
-      "live_sha256": "sha256:5a3675bc1144d69e522bbc55c179d3771e285a9c86cdf81dd2a726dfe56cb5ab",
-      "local_sha256": "sha256:39aec54bebb80316ed3efbae99285dc96a82a8bd32ba7c6a22616dd59d4cc45a",
-      "live_length": 78,
-      "local_length": 62
-    },
-    {
       "path": "modes.onboarding.systemPrompt",
       "live_sha256": "sha256:2d3886777b967739e57d50f7874f45039d8db378bc2d973af1cf68c084c3acac",
-      "local_sha256": "sha256:5a3f320e22814c89977c2ce02977ea17f087fd8c9adeeb97cc2e8797b9f2e19f",
+      "local_sha256": "sha256:82127cd58e95f44d25c476e167dafc0709b2be2d2ca95302cb0aad64013a3599",
       "live_length": 1355,
-      "local_length": 1147
+      "local_length": 1365
     }
   ],
   "live_market": {

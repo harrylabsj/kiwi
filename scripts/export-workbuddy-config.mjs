@@ -11,7 +11,7 @@
  *   node scripts/export-workbuddy-config.mjs \
  *     --base platform/platform-export/2026-11-24/industry-config.json \
  *     --local platform/out/industry-config.json \
- *     --out platform/out/industry-config.platform-import.json
+ *     --out platform/out/industry-config.platform-import.json --onboarding-refresh
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -45,7 +45,20 @@ function requireField(value, label) {
   return value;
 }
 
-export function convertToPlatformImport(base, local, { onSkip } = {}) {
+// Scenes covered by the SKU import and draft guidance in the onboarding refresh.
+const QUOTE_REFRESH_SCENES = new Set(["cap-products", "cap-import", "cap-copy"]);
+
+// Reorder shared scene IDs at their current slots so platform-only scenes stay in place.
+function orderSharedScenes(baseScenes, localScenes) {
+  const baseById = new Map(baseScenes.map((scene) => [scene.id, scene]));
+  const ordered = localScenes.map((scene) => baseById.get(scene.id)).filter(Boolean);
+  let index = 0;
+  return baseScenes.map((scene) => localScenes.some((local) => local.id === scene.id)
+    ? ordered[index++]
+    : scene);
+}
+
+export function convertToPlatformImport(base, local, { onSkip, onboardingRefresh = false } = {}) {
   // base 独有（本地已删除）的模式/胶囊/模板会被跳过：导入包保留平台旧文案。
   // 这是合法操作，但必须让调用方看见，不能静默——否则「发布物里带已删除内容」
   // 没有任何提示。
@@ -57,63 +70,68 @@ export function convertToPlatformImport(base, local, { onSkip } = {}) {
   const localHome = homeItem(local);
   if (!baseHome || !localHome) throw new Error("配置缺少 home item");
 
-  const localHeader = localHome.config?.header ?? {};
-  const headerTitle = requireField(localHeader.title, "local header.title");
-  const headerTitleEn = requireField(localHeader.titleEn, "local header.titleEn");
-  const brandZh = headerTitle.split(/[·|]/)[0]?.trim() || headerTitle;
-  const brandEn = headerTitleEn.split(/[·|]/)[0]?.trim() || headerTitleEn;
-  setI18n(output, "home.header.title", headerTitle, headerTitleEn);
-  setI18n(output, "brand.title", brandZh, brandEn);
-  if (baseHome.config.header) baseHome.config.header.title = "home.header.title";
-  if (output.brand) output.brand.title = "brand.title";
+  if (!onboardingRefresh) {
+    const localHeader = localHome.config?.header ?? {};
+    const headerTitle = requireField(localHeader.title, "local header.title");
+    const headerTitleEn = requireField(localHeader.titleEn, "local header.titleEn");
+    const brandZh = headerTitle.split(/[·|]/)[0]?.trim() || headerTitle;
+    const brandEn = headerTitleEn.split(/[·|]/)[0]?.trim() || headerTitleEn;
+    setI18n(output, "home.header.title", headerTitle, headerTitleEn);
+    setI18n(output, "brand.title", brandZh, brandEn);
+    if (baseHome.config.header) baseHome.config.header.title = "home.header.title";
+    if (output.brand) output.brand.title = "brand.title";
 
-  const localChat = local.ui?.chatInput?.placeholder;
-  if (typeof localChat === "string" && localChat.trim()) {
-    // zh 写了而 en 不写，导入包的英文占位符会停留在平台旧文案（zh/en 不一致
-    // 随包发布）。英文占位符是必填源字段，缺失直接报错而不是悄悄保留旧值。
-    const localChatEn = local.ui?.chatInput?.placeholderEn;
-    if (typeof localChatEn !== "string" || localChatEn.trim() === "") {
-      throw new Error("缺少 local ui.chatInput.placeholderEn（英文输入框占位符）");
+    const localChat = local.ui?.chatInput?.placeholder;
+    if (typeof localChat === "string" && localChat.trim()) {
+      // zh 写了而 en 不写，导入包的英文占位符会停留在平台旧文案（zh/en 不一致
+      // 随包发布）。英文占位符是必填源字段，缺失直接报错而不是悄悄保留旧值。
+      const localChatEn = local.ui?.chatInput?.placeholderEn;
+      if (typeof localChatEn !== "string" || localChatEn.trim() === "") {
+        throw new Error("缺少 local ui.chatInput.placeholderEn（英文输入框占位符）");
+      }
+      setI18n(output, "home.chatInput.placeholder", localChat, localChatEn);
     }
-    setI18n(output, "home.chatInput.placeholder", localChat, localChatEn);
-  }
 
-  if (output.authConfig && local.authConfig?.capabilityDescription !== undefined) {
-    output.authConfig.capabilityDescription = local.authConfig.capabilityDescription;
+    if (output.authConfig && local.authConfig?.capabilityDescription !== undefined) {
+      output.authConfig.capabilityDescription = local.authConfig.capabilityDescription;
+    }
   }
 
   const localModes = new Map(
     (localHome.config?.modes?.items ?? []).map((mode) => [mode.modeId, mode]),
   );
   for (const baseMode of baseHome.config?.modes?.items ?? []) {
+    const isOnboarding = baseMode.modeId === "onboarding";
+    if (onboardingRefresh && !isOnboarding && baseMode.modeId !== "catalog") continue;
     const localMode = localModes.get(baseMode.modeId);
     if (!localMode) {
       skip(`modes.${baseMode.modeId}`);
       continue;
     }
     baseMode.systemPromptAppend = localMode.systemPromptAppend ?? "";
-    if (Array.isArray(localMode.skills) && localMode.skills.length > 0) {
-      baseMode.skills = localMode.skills.map((skill) => ({ id: skill.id }));
-    } else {
-      delete baseMode.skills;
+    if (!onboardingRefresh) {
+      if (Array.isArray(localMode.skills) && localMode.skills.length > 0) {
+        baseMode.skills = localMode.skills.map((skill) => ({ id: skill.id }));
+      } else {
+        delete baseMode.skills;
+      }
+      setI18n(output, baseMode.title, localMode.title, localMode.titleEn);
     }
-    setI18n(output, baseMode.title, localMode.title, localMode.titleEn);
+    if (!onboardingRefresh || isOnboarding) {
+      baseMode.scenes = orderSharedScenes(baseMode.scenes ?? [], localMode.scenes ?? []);
+    }
 
     const localScenes = new Map((localMode.scenes ?? []).map((scene) => [scene.id, scene]));
-    if (baseMode.modeId === "onboarding" && Array.isArray(baseMode.scenes)) {
-      const order = [...localScenes.keys()];
-      const byId = new Map(baseMode.scenes.map((scene) => [scene.id, scene]));
-      // 只重排现有开通场景；平台独有条目及其元数据仍保留。
-      baseMode.scenes = [...order.filter((id) => byId.has(id)).map((id) => byId.get(id)),
-        ...baseMode.scenes.filter((scene) => !localScenes.has(scene.id))];
-    }
     for (const baseScene of baseMode.scenes ?? []) {
+      if (onboardingRefresh && !isOnboarding && !QUOTE_REFRESH_SCENES.has(baseScene.id)) continue;
       const localScene = localScenes.get(baseScene.id);
       if (!localScene) {
         skip(`modes.${baseMode.modeId}.scenes.${baseScene.id}`);
         continue;
       }
-      baseScene.systemPromptAppend = localScene.systemPromptAppend ?? "";
+      if (!onboardingRefresh || localScene.systemPromptAppend !== undefined) {
+        baseScene.systemPromptAppend = localScene.systemPromptAppend ?? "";
+      }
       setI18n(output, baseScene.title, localScene.title, localScene.titleEn);
 
       const localTemplates = new Map(
@@ -164,7 +182,7 @@ function main() {
   const converted = convertToPlatformImport(
     JSON.parse(readFileSync(basePath, "utf8")),
     JSON.parse(readFileSync(localPath, "utf8")),
-    { onSkip: (label) => console.warn(`警告：平台侧存在但本地已删除，导入包保留平台旧文案：${label}`) },
+    { onboardingRefresh: args.includes("--onboarding-refresh"), onSkip: (label) => console.warn(`警告：平台侧存在但本地已删除，导入包保留平台旧文案：${label}`) },
   );
   writeFileSync(outPath, `${JSON.stringify(converted, null, 2)}\n`);
   console.log(`已生成平台导入格式：${outPath}`);
