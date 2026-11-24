@@ -164,9 +164,9 @@ describe("WP19 首页标题", () => {
 describe("WP19 sites_deploy 新口径（WP17 后）", () => {
   const deprecatedPatterns = [/\binspect\b/i, /\bactivate\b/i, /(?<![\w-])deploy(?![\w-])/i] as const;
 
-  it("一键上云胶囊的执行步骤为 取包校验→首次发布取地址→prepare --origin→同一应用再发布→自检→上线核对", () => {
+  it("一键上云胶囊的执行步骤为 取包校验→首次发布取地址→prepare --origin→同一应用再发布→自检", () => {
     const cloud = allScenes.find((s) => s.id === "cap-cloud")!;
-    expect(cloud.systemPromptAppend).toContain("取包校验→首次发布取地址→prepare --origin→同一应用再发布→自检→上线核对");
+    expect(cloud.systemPromptAppend).toContain("取包校验→首次发布取地址→prepare --origin→同一应用再发布→自检");
     expect(cloud.systemPromptAppend).toContain("kiwi_catalog_get_service_status");
     expect(cloud.systemPromptAppend).toContain("方案 B");
   });

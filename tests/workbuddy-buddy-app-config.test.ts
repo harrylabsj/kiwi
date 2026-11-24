@@ -79,8 +79,8 @@ describe("Buddy 应用配置（buddy-app.config.json）", () => {
     expect(catalog?.capsules.find((c) => c.label === "整理商品")?.bindSkills).toEqual(["kiwi-product-import"]);
   });
 
-  it("版本为 1.8.2（四工作场景 + P0 审核修复 + 合并线上 V5）", () => {
-    expect(config.version).toBe("1.8.2");
+  it("版本为 1.8.3（基于线上 v6 的开通改版）", () => {
+    expect(config.version).toBe("1.8.3");
   });
 
   it("1.8.2 合并线上 V5：品牌/标题/简介与模型配置引导", () => {

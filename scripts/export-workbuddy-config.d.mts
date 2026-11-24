@@ -6,4 +6,5 @@ export declare const DEFAULT_LOCAL: string;
 export declare function convertToPlatformImport(
   base: unknown,
   local: unknown,
+  options?: { onSkip?: (label: string) => void; onboardingRefresh?: boolean },
 ): Record<string, unknown>;
