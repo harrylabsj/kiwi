@@ -3,19 +3,16 @@ import {execFileSync} from "node:child_process";
 import {cpSync,mkdirSync,mkdtempSync,readFileSync,writeFileSync,rmSync,symlinkSync} from "node:fs";
 import path from "node:path";
 import {tmpdir} from "node:os";
+import {createRequire} from "node:module";
 import {beforeAll,afterAll,it,expect} from "vitest";
-import {assertBundledEdges} from "../scripts/lib/npm-bundled-edges.mjs";
-// Fixed local 0.12.32 source authority checkpoint; normal publisher source
-// admission is independently testable. This is not a claimed Linux release proof.
-// Re-baselined to the frozen 0.12.32 source/contract when the release version
-// moved beyond 0.12.31: this test runs assertBundledEdges against the
-// checkpoint, which reads that commit's contract and npm payload manifest and
-// runs toolchain() on it, so the checkpoint can only stay valid while its
-// manifest matches the npm CI installs. The checkpoint must be a commit that
-// exists in the published history (a pre-merge local SHA is not fetchable by CI).
+// The frozen 0.12.32 checkpoint stays in published history. Exercise the helper
+// with that checkout's matching guard/contract so a version bump does not need
+// to pin a pre-rebase commit. Check that the production helper and guard logic
+// still match the fixture; this is not a release proof for the current source.
 const VERIFIED_SOURCE = "8ce4e0e2531d63bfd7bdd6afd8e2157e309ff00d";
 const VERIFIED_CONTRACT_SHA = "8e49bb10d0cfa160620ce2a09680004ecf0404474386b80365eaa79c438505bc";
 const VERIFIED_GUARD_CLOSURE = {
+  "scripts/lib/npm-bundled-edges.mjs": "23ffad0d820443ac3cb608a693dca0ce35a865f6e5efca38c32291dc88cd48fe",
   "scripts/lib/npm-shipping.mjs": "236a075d447cf1f40d6f97530f03892659135686cdedd227aff5ba4c916e8ffb",
   "scripts/check-install-toolchain.mjs": "ccb86a2707cb23f385f6428eb8c3f28df9ad0c0fe59b584e2b29ffe4eafd9c69",
   "build-inputs/release0124-npm12-payload.json": "ae7810234dbf422fba678c4c0956d31b82563131286c4adca6c2810cb435058a"
@@ -27,13 +24,19 @@ function assertVerifiedSourceIdentity(root:string){
  for(const [file,sha] of Object.entries(VERIFIED_GUARD_CLOSURE))expect(digest(path.join(root,file))).toBe(sha);
 }
 let home:string,authority:string,leaf:string;
+let assertBundledEdges: typeof import("../scripts/lib/npm-bundled-edges.mjs").assertBundledEdges;
 beforeAll(()=>{
  home=mkdtempSync(path.join(tmpdir(),"leaf-edge-test-"));authority=path.join(home,"authority");leaf=path.join(home,"leaf");
  execFileSync("git",["clone","--no-hardlinks",process.cwd(),authority],{stdio:"pipe"});
  execFileSync("git",["--no-replace-objects","-C",authority,"checkout","--detach",VERIFIED_SOURCE],{stdio:"pipe"});
  assertVerifiedSourceIdentity(authority);
- // Invoke the current imported d8 helper (includes realpath alias support), not the cloned helper.
- expect(digest(path.join(process.cwd(),"scripts/lib/npm-bundled-edges.mjs"))).toBe("23ffad0d820443ac3cb608a693dca0ce35a865f6e5efca38c32291dc88cd48fe");
+ const helper = "scripts/lib/npm-bundled-edges.mjs";
+ expect(digest(path.join(process.cwd(),helper))).toBe(VERIFIED_GUARD_CLOSURE[helper]);
+ const guard = "scripts/lib/npm-shipping.mjs";
+ const withoutRelease = (root:string) => readFileSync(path.join(root,guard), "utf8")
+   .replace(/^export const VERSION = "\d+\.\d+\.\d+";$/m, "export const VERSION = <release>;");
+ expect(withoutRelease(process.cwd())).toBe(withoutRelease(authority));
+ ({assertBundledEdges} = createRequire(import.meta.url)(path.join(authority,helper)));
  mkdirSync(path.join(leaf,"node_modules"),{recursive:true});
  cpSync(path.join(process.cwd(),"node_modules/yaml"),path.join(leaf,"node_modules/alias-yaml"),{recursive:true});
  writeFileSync(path.join(leaf,"package.json"),JSON.stringify({name:"synthetic-leaf",version:"1.0.0",dependencies:{"alias-yaml":"npm:yaml@2.9.1"},bundleDependencies:["alias-yaml"],bundledDependencies:["alias-yaml"]}));
