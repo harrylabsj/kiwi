@@ -5,33 +5,33 @@
   "runtime_dependencies": [
     {
       "name": "@earendil-works/chord",
-      "spec": "1.5.0",
-      "resolved": "1.5.0",
-      "integrity": "sha512-jf555zbCM21E03DVBDPD/Tuae0lz64YjaHx/athUxNZ/H7phVVb0dWfZsaYnxaXPQ1odW8iHEoVLOlE/prvUPg=="
+      "spec": "1.6.0",
+      "resolved": "1.6.0",
+      "integrity": "sha512-8dQXEKUR6qQPc4zNEblmv6hEfr2JAAU+nUprt+mhtdfRRZzl1At5ZhnJqTqesElAdR7RpAyaRIAilyteNHzyWA=="
     },
     {
       "name": "@earendil-works/pi-agent-core",
-      "spec": "1.5.0",
-      "resolved": "1.5.0",
-      "integrity": "sha512-FOj+jXj48DbzMycR/ghNa2KcsqWmvOln24e0FnQOVgnd8vn5H79g335WdHaZUVdRo+zCeogb40/qPPlCWFuvmA=="
+      "spec": "1.6.0",
+      "resolved": "1.6.0",
+      "integrity": "sha512-IU/x+2XtE4KIdIkEndZssdLPbIUR38Btj+Q7vjIIXIK7GSamLtDH5jOw/dzBWAvWFAgZ2dslF5sPc6GcGOnS+w=="
     },
     {
       "name": "@earendil-works/pi-ai",
-      "spec": "1.5.0",
-      "resolved": "1.5.0",
-      "integrity": "sha512-VeWxNqTHSqRCf8AcY/6kvNwh+neRL6MPxZPePVztIQy6qqK9MR/YoCSN/ZgDnIyCD3pqEXgRyQbzk4KV4uvjbg=="
+      "spec": "1.6.0",
+      "resolved": "1.6.0",
+      "integrity": "sha512-9hL+eygFDEiFp//cydeUfmFsKmEqpmvsNPb10Y1W8+m5K9O+sx1hMStfu6nukrBD5sl6mP4RykCYBBNEgsVLfw=="
     },
     {
       "name": "@earendil-works/pi-coding-agent",
-      "spec": "1.5.0",
-      "resolved": "1.5.0",
-      "integrity": "sha512-xNDZ5kqowO6Z03FS2gwAkPEGk1ssxVcYKQ6qZId84mFEvwACvvyc2l0vAMOS+c5zvxLRMLBE9r4y44IGYkMJaQ=="
+      "spec": "1.6.0",
+      "resolved": "1.6.0",
+      "integrity": "sha512-zX1BVEsshx7A2MRuQ6jfr3RJGWw4Wn+vLq5ZfmlvS1RskhRmByaSZVXH/zcwRrWHO7qPgs98pNCbPOEti/t0fQ=="
     },
     {
       "name": "@earendil-works/pi-durable",
-      "spec": "1.5.0",
-      "resolved": "1.5.0",
-      "integrity": "sha512-xeBP2vIo5NvsCMQ4Y/V+Z164xQEi9JWiBWHdjn4Z15EnFqV3c0FxJAX26FqyyyintrYyk+Enre94GNcvRlBA5g=="
+      "spec": "1.6.0",
+      "resolved": "1.6.0",
+      "integrity": "sha512-nyPjInj/7ZjLEUCDMS7oNGRj1ynftOCVqXilWRBhIuT/xoRHrPy5yFNle/64hvs3F1rukMZ7Ar/4reA7auvUWQ=="
     },
     {
       "name": "@modelcontextprotocol/sdk",
@@ -72,13 +72,13 @@
   ],
   "artifact": {
     "name": "harrylabsj-kiwi-0.12.33.tgz",
-    "sha256": "b733dfc42b4a50a6311629e77a17ca6b0b0be1f791e59d3201145298ee2583da",
-    "bytes": 3371197
+    "sha256": "82e820130dedf8b60c06d24da828e113408c6663fa00cc1e06e5f3bcaed4c5e9",
+    "bytes": 3418082
   },
   "mcp_protocol_versions": [
     "2024-11-05",
     "2025-06-18",
     "2025-11-25"
   ],
-  "generated_at": "2026-11-24T00:53:24.027Z"
+  "generated_at": "2026-11-24T03:24:05.850Z"
 }

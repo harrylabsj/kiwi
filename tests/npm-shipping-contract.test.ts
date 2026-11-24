@@ -41,20 +41,29 @@ describe("current 0.12.33 full shipping contract", () => {
     const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
     const staged = stagePackage(root);
     expect(staged.dependencies).toEqual(pkg.dependencies);
-    // Pi 运行时**精确**钉住 1.5.0：owner storage admission 已同时接受 durable
-    // schema v1（Pi <=1.4）与 v2（Pi 1.5，tasks 增加 sleeping 状态）。
-    for (const name of [
-      "@earendil-works/chord",
-      "@earendil-works/pi-agent-core",
-      "@earendil-works/pi-ai",
-      "@earendil-works/pi-coding-agent",
-      "@earendil-works/pi-durable",
-    ]) {
-      expect(staged.dependencies[name]).toBe("1.5.0");
+    // Pi 和 Chord 一起发布；直接依赖、传递 override 和两份锁都必须同版。
+    const directPi = ["chord", "pi-agent-core", "pi-ai", "pi-coding-agent", "pi-durable"];
+    const pinnedPi = ["chord", "pi-codemode", "pi-mcp", "pi-telemetry", "pi-tui", "pi-schema"];
+    for (const name of directPi) {
+      expect(staged.dependencies[`@earendil-works/${name}`]).toBe("1.6.0");
+    }
+    for (const name of pinnedPi) {
+      expect(staged.overrides).toHaveProperty([`@earendil-works/${name}`], "1.6.0");
+    }
+    for (const file of ["package-lock.json", "build-inputs/release0124-stage/package-lock.json"]) {
+      const { packages } = JSON.parse(readFileSync(path.join(root, file), "utf8"));
+      const lockedPi = Object.keys(packages).filter((key) =>
+        /(?:^|\/)node_modules\/@earendil-works\/[^/]+$/.test(key),
+      );
+      expect(lockedPi.map((key) => key.split("/").at(-1)).sort()).toEqual(
+        [...new Set([...directPi, ...pinnedPi])].sort(),
+      );
+      for (const key of lockedPi) expect(packages[key].version, `${file}: ${key}`).toBe("1.6.0");
     }
     expect(staged.dependencies["@simplewebauthn/server"]).toBe("14.0.2");
     expect(staged.overrides).toEqual(pkg.overrides);
     expect(staged.allowScripts).toEqual(pkg.allowScripts);
+    expect(staged.allowScripts).toHaveProperty(["@google/genai@2.32.0"], false);
     expect(staged.scripts.preinstall).toBe(pkg.scripts.preinstall);
     expect(() => assertStageLock(root)).not.toThrow();
   });

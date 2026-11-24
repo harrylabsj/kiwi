@@ -326,7 +326,7 @@ export function guardOwnerStorage(storage: Storage, cap: OwnerStorageAdmission):
         return async (
           batches: readonly (readonly StorageWrite[])[],
           receive: (index: number, seq: import("@earendil-works/pi-durable").Seq) => void,
-          context: import("@earendil-works/chord").Context,
+          context: import("@earendil-works/chord/context").Context,
         ) => {
           const writes = batches.flat();
           const creates = writes.filter(
