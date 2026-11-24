@@ -265,6 +265,11 @@ export function diffPlatformConfigs(live, local) {
         local: localScenes.size,
       });
     }
+    const liveOrder = [...liveScenes.keys()].filter((id) => localScenes.has(id));
+    const localOrder = [...localScenes.keys()].filter((id) => liveScenes.has(id));
+    if (liveOrder.some((id, index) => id !== localOrder[index])) {
+      diffs.push({ path: `modes.${modeId}.scenes.order`, live: liveOrder, local: localOrder });
+    }
     for (const [sceneId, liveScene] of liveScenes) {
       const localScene = localScenes.get(sceneId);
       if (!localScene) {
