@@ -1281,7 +1281,7 @@ export class CatalogClient {
     return response["email"];
   }
 
-  /** Separate owner opt-in; existing share-code custody consent is not sufficient. */
+  /** Read the binding's inquiry policy independently of gateway credential custody. */
   async readPublicInquiryConsent(
     context: RuntimeAccessContext,
     identity: RuntimeSigningIdentity,

@@ -88,6 +88,7 @@ export function renderMerchantManagementPage(options: {
   .pill { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 5px; font-size: 12px; line-height: 1.7; font-weight: 550; background: #edf1ed; color: #53665b; white-space: nowrap; }
   .ok { background: #e9f4ec; color: #24623b; } .warn { background: #fcf2de; color: #795309; } .bad { background: #fcebea; color: #a03933; }
   .act { display: inline-flex; align-items: center; justify-content: center; border: 1px solid #c8d5cc; background: #fff; color: #344c3d; border-radius: 7px; padding: 8px 14px; min-height: 38px; text-decoration: none; font-size: 13px; font-weight: 550; line-height: 1.5; }
+  .act[hidden] { display: none; }
   .act:hover { background: #f4f8f3; border-color: #8ba695; }
   .act.primary { background: var(--kiwi); color: #fff; border-color: var(--kiwi); }
   .act.primary:hover { background: #164a34; }
@@ -106,6 +107,7 @@ export function renderMerchantManagementPage(options: {
   .consent-label { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
   .consent-label span { flex: 1; min-width: 0; }
   .consent-label input { flex: none; margin: 3px 0 0; }
+  .catalog-settings { margin-block: 12px; }
   details summary { cursor: pointer; color: var(--kiwi); text-decoration: underline; text-underline-offset: 3px; }
   .row > .muted { flex: 1 1 180px; }
   pre.digest { font: 11px ui-monospace, monospace; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0; max-width: 320px; }
@@ -173,7 +175,7 @@ export function renderMerchantManagementPage(options: {
   <p class="nav-foot">日常经营，井然有序。<br>Kiwi Merchant</p>
 </nav>
 <div class="workspace">
-  <section class="page-head" aria-labelledby="page-title"><p class="eyebrow">MERCHANT WORKSPACE</p><h1 id="page-title">服务状态</h1><p id="page-description">掌握接待状态，管理店铺与目录连接。</p></section>
+  <section class="page-head" aria-labelledby="page-title"><p class="eyebrow">MERCHANT WORKSPACE</p><h1 id="page-title">服务状态</h1><p id="page-description">掌握接待状态，管理店铺与名片发布。</p></section>
   <main id="view" tabindex="-1" aria-label="商家工作区"><div class="card">加载中…</div></main>
 </div>
 <div id="bar" role="status" aria-live="polite" aria-atomic="true"></div>
@@ -195,8 +197,6 @@ var ACCESS_CONSENT_TERMS = "workbuddy-share-v1-2026-10-27";
 var catalogBeginKey = "";
 var catalogBeginPending = false;
 var catalogConnectionState = null;
-var catalogAccessState = null;
-var catalogAccessDetection = null;
 var publicationDraft = null;
 var publicationPicks = null;
 var publicationBusy = false;
@@ -321,45 +321,67 @@ function statePill(state) {
 }
 
 var PAIRING_CODE_HINTS = {
-  PAIRING_WINDOW_EXPIRED: "上次授权已过期：请重新发起，并在 10 分钟内到目录完成确认",
-  BIND_REJECTED: "目录拒绝了本次绑定请求：请重新发起，反复出现请联系管理员",
-  BIND_CLAIM_CARD_URL_MISMATCH: "目录名片地址与已确认的公开预览不一致：请重新核对后再发起",
-  BIND_CLAIM_FIELD_MISMATCH: "目录绑定材料与预览不一致：请重新发起",
-  BIND_CLAIM_INVALID: "目录签名材料未通过本机校验：请重新发起",
-  CARD_PUBLISH_REJECTED: "名片发布被目录拒绝：请稍后重试或联系管理员",
+  PAIRING_WINDOW_EXPIRED: "上次授权已过期：请重新发起，并在 10 分钟内到Kiwi网关完成确认",
+  BIND_REJECTED: "Kiwi网关拒绝了本次绑定请求：请重新发起，反复出现请联系管理员",
+  BIND_CLAIM_CARD_URL_MISMATCH: "Kiwi网关名片地址与已确认的公开预览不一致：请重新核对后再发起",
+  BIND_CLAIM_FIELD_MISMATCH: "Kiwi网关绑定材料与预览不一致：请重新发起",
+  BIND_CLAIM_INVALID: "Kiwi网关签名材料未通过本机校验：请重新发起",
+  CARD_PUBLISH_REJECTED: "名片发布被Kiwi网关拒绝：请稍后重试或联系管理员",
   CARD_PUBLISH_INVALID: "名片发布回执不完整：请刷新后重试",
-  PAIRING_COMMUNICATION_FAILED: "与目录通信暂时失败：请稍后刷新重试"
+  PAIRING_COMMUNICATION_FAILED: "与Kiwi网关通信暂时失败：请稍后刷新重试"
 };
 
 function catalogStatusText(s) {
-  if (s.published) return "目录名片已发布";
+  if (s.published) return "名片已发布";
   var labels = { idle: "尚未连接", preparing: "等待你确认授权", pending: "等待你确认授权",
     awaiting_confirmation: "等待你确认授权", authorized: "授权已收到，正在连接",
     bound: "已连接，正在检查接待能力", expired: "授权已过期，请重新发起",
-    blocked: "连接未完成，请核对状态", paused: "目录服务已暂停", revoked: "授权已撤销" };
+    blocked: "连接未完成，请核对状态", paused: "Kiwi网关服务已暂停", revoked: "授权已撤销" };
   return labels[s.status] || "连接尚未完成";
 }
-function appendCatalogConnection(html) {
-  // 调用方固定按 appendCatalogConnection(...).then(appendCatalogAccess) 串联：
-  // 没有目录连接或非 owner 时必须返回已决议的 Promise，返回字符串会在默认
-  // 「服务状态」页抛 TypeError（旧流程整页停在“加载中…”）。
+function waitingForCatalogConfirmation(s) {
+  return !s.bindingId && ["preparing", "pending", "awaiting_confirmation"].indexOf(s.status) >= 0;
+}
+function appendCatalogSetup(html) {
   if (!CATALOG_CONNECT || ROLE !== "owner") return Promise.resolve(html);
+  var sequence = viewSequence;
   catalogConnectionState = null;
   return call("GET", "/catalog/connect").then(function (s) {
-    catalogConnectionState = s;
-    return html + '<div class="card"><h2>连接 Kiwi 目录</h2><p id="catalog-status">' + esc(catalogStatusText(s)) +
-      (s.errorCode ? ' <span class="muted">[' + esc(s.errorCode) + ']</span>' : '') + '</p>' +
-      (s.bindingId ? '<p>Kiwi 账户：<span id="bound-account">正在核对…</span></p>' : '<p>Kiwi 账户：尚未连接</p>') +
-      (s.errorCode && PAIRING_CODE_HINTS[s.errorCode] ? '<p class="muted">' + esc(PAIRING_CODE_HINTS[s.errorCode]) + '</p>' : '') +
-      '<p class="muted">连接后，采购方可在目录发现本店。请本人核对配对码与公开资料，并在目录授权页确认发布。</p>' +
-      (s.published ? "" : ('<p class="muted">接入方式默认自动检测：连接时先尝试无码读取；单次失败不会判定为已加白或未加白。如平台门禁要求分享码，请在下方提交并授权。</p>' +
-        '<button class="act primary" onclick="beginCatalogConnect()">发起或继续连接</button> ' +
-        (WORKBUDDY_ACCESS && !s.bindingId ? '<button class="act" onclick="stageAccessAndBegin()">提交分享链接并发起</button> ' : '') +
-        '<button class="act" onclick="showCatalogPairing()">本人查看配对信息</button>')) +
-      ' <button class="act" onclick="refresh()">刷新连接状态</button><div id="catalog-pairing"></div></div>';
+    return call("GET", "/catalog/access").then(function (result) {
+      return result.access || null;
+    }).catch(function () { return null; }).then(function (a) {
+      if (sequence === viewSequence) catalogConnectionState = s;
+      return html + renderCatalogSetup(s, a);
+    });
   }).catch(function () {
-    return html + '<div class="card"><h2>连接 Kiwi 目录</h2><p>暂时无法读取连接状态，请稍后刷新。</p></div>';
+    return html + '<div class="card"><h2>Kiwi网关</h2><p>暂时无法读取连接状态。</p>' +
+      '<button class="act" onclick="refresh()">刷新状态</button></div>';
   });
+}
+function renderCatalogSetup(s, a) {
+  var waiting = waitingForCatalogConfirmation(s);
+  var canBegin = !s.published && !s.bindingId && !waiting && s.status !== "authorized";
+  var shareForm = a ? renderShareSettings(a, WORKBUDDY_ACCESS && canBegin) : "";
+  return '<div class="card"><h2>Kiwi网关</h2><p id="catalog-status">' + esc(catalogStatusText(s)) + '</p>' +
+    (s.bindingId ? '<p>Kiwi 账户 <span id="bound-account">正在核对…</span></p>' : '') +
+    (s.errorCode ? '<p class="muted">' + esc(PAIRING_CODE_HINTS[s.errorCode] || s.errorCode) + '</p>' : '') +
+    (s.published ? '<p id="public-inquiry-status" class="muted" aria-live="polite">正在读取开放询价状态…</p>' :
+      '<p class="muted">' + (WORKBUDDY_ACCESS
+        ? '发布后默认开放询价，买家无需注册即可通过Kiwi网关询价。'
+        : '发布后，采购方可在Kiwi网关发现本店。') + '</p>') +
+    (waiting ? '<div id="catalog-pairing" aria-live="polite">正在读取配对信息…</div>' : '') +
+    (WORKBUDDY_ACCESS && canBegin ? shareForm : '') +
+    '<div class="row">' +
+    (canBegin ? '<button id="catalog-begin" class="act primary" onclick="connectCatalog()">发布名片</button>' : '') +
+    '<button class="act" onclick="refreshCatalogSetup()">刷新状态</button></div>' +
+    (WORKBUDDY_ACCESS && !canBegin ? shareForm : '') +
+    (a || s.published ? '<details class="catalog-settings"><summary>高级设置</summary>' +
+      (a ? renderAccessSettings(a) : '<p class="muted">暂时无法读取接入设置。</p>') +
+      (!WORKBUDDY_ACCESS ? shareForm : '') +
+      (s.published ? '<div class="catalog-settings"><h3>开放询价</h3>' +
+        '<p class="muted">买家可通过Kiwi网关询价，无需注册或逐个审批。Kiwi网关转发询价与报价，可读取报文，不保存磋商内容。</p>' +
+        '<button id="inquiry-toggle" class="act" onclick="togglePublicInquiry()" disabled>正在读取状态…</button></div>' : '') +
+      '</details>' : '') + '</div>';
 }
 function accessModeLabel(mode) {
   return { auto: "自动检测（默认）", share_code: "使用分享码", no_share_code: "无分享码（直连）" }[mode] || "自动检测（默认）";
@@ -368,156 +390,108 @@ function safeAccessMode(mode) {
   return ["auto", "share_code", "no_share_code"].indexOf(mode) >= 0 ? mode : "auto";
 }
 function detectionText(d) {
-  if (!d) {
-    return "尚未检测。默认自动检测：连接时先尝试无码读取；单次失败不会判定为已加白或未加白，也不会删除已保存的分享码。";
-  }
-  if (d.status === "direct_ok") {
-    return "检测结果：本次无码读取公开名片成功。这不等于平台已加白，检测本身不改写已保存的接入方式或买家路由状态；如后续仍被门禁拦截，请重新检测或改用分享码。";
-  }
-  if (d.status === "share_code_ok") {
-    return "检测结果：本次分享码可通过平台门禁。平台是否加白仍未确认；切换接入方式或重新检测都不会删除已保存的分享码。";
-  }
-  return "检测结果：不确定。" + (d.guidance || "单次 401/403、网络错误或不完整响应不能判定实例未加白。请先确认服务、公网入口与 TLS 正常，再提交分享链接或稍后重试。");
+  if (!d) return "";
+  if (d.status === "direct_ok") return "本次可直接访问公开名片。平台白名单需由 WorkBuddy 确认。";
+  if (d.status === "share_code_ok") return "本次分享码可通过平台门禁。";
+  return d.guidance || "暂时无法确认接入方式，请检查公网服务或分享链接。";
 }
 function showAccessDetection(d) {
-  catalogAccessDetection = d || null;
   var target = $("access-detection");
   if (target) target.textContent = detectionText(d);
 }
 function accessStatusText(a) {
-  if (!a) return "暂时无法读取访问配置状态";
-  // 目录已有分享码，本次随绑凭据被按版本冲突跳过（目录保留原配置、不覆盖）。
-  // 唯一可恢复路径是商家用权威版本显式更新，所以文案必须指向这个动作。
-  if (a.statusReason === "catalog_access_exists")
-    return "目录已有分享码配置，本次绑定没有覆盖它（不会用旧码顶掉已生效的码）。如需更换或启用，请重新粘贴分享链接并「提交或更新」，会按目录当前版本更新。";
-  if (a.status === "active") {
-    var routeSynced = a.catalogSync === undefined || a.catalogSync === "synced";
-    if (a.mode === "no_share_code") {
-      return routeSynced
-        ? "目录已保存分享码（配置版本 " + a.configVersion + "），但当前接入方式为无分享码：买家按无码直连，已保存的分享码不用于路由，也不会被删除。"
-        : "目录已保存分享码（配置版本 " + a.configVersion + "），本机选择无分享码，但目录路由状态尚未同步；买家仍按旧状态路由。已保存的分享码不会删除。";
-    }
-    return routeSynced
-      ? "分享码已生效（配置版本 " + a.configVersion + "）：买家按目录中继传输，中继只传输，不决定磋商。"
-      : "分享码已生效（配置版本 " + a.configVersion + "），但目录路由状态尚未同步；买家仍按旧状态路由。目录中继只传输，不决定磋商。";
+  if (!a) return "分享链接状态暂不可用。";
+  if (a.statusReason === "catalog_access_exists") return "Kiwi网关保留了原分享码。更换请粘贴新链接并保存。";
+  if (a.statusReason === "local_saved_not_used" || (a.status === "active" && a.mode === "no_share_code")) {
+    return "分享码已保存，当前接入方式为无分享码。";
   }
-  if (a.statusReason === "local_saved_not_used") return "分享码已加密保存，但当前接入方式为无分享码；连接时不会提交或发送。切换为自动检测或使用分享码后可继续，已保存的分享码不会被删除。";
-  if (a.status === "pending" && a.statusReason === "local_staged") return "分享码已加密暂存，请继续连接；绑定完成后由目录验证";
-  if (a.status === "pending") return "分享码已提交，等待平台校验";
-  if (a.status === "invalid") return "分享码校验未通过，请重新提交分享链接";
-  if (a.status === "revoked") {
-    return a.statusReason === "superseded"
-      ? "分享码已被新版本替换（旧码不再发放）"
-      : "分享码已撤回，采购方当前无法经平台网关访问";
-  }
-  return "未保存分享码；当前接入方式：" + accessModeLabel(a.mode) + "。默认自动检测会先尝试无码读取；如平台门禁拦截，请提交本实例分享链接。";
+  if (a.status === "active") return "分享码已生效。";
+  if (a.status === "pending" && a.statusReason === "local_staged") return "分享码已加密保存，发布时由Kiwi网关校验。";
+  if (a.status === "pending") return "分享码等待平台校验。";
+  if (a.status === "invalid") return "分享码校验未通过，请更新分享链接。";
+  if (a.status === "revoked") return "分享码已撤销。";
+  return "平台要求分享码时，请填写本应用的分享链接。";
 }
 function accessSyncText(a) {
   var state = a && a.catalogSync;
-  if (state === "synced")
-    return "目录路由状态已同步" + (a.catalogRevision ? "（revision " + a.catalogRevision + "）" : "") + "。";
-  if (state === "pending")
-    return "本机已保存，但目录尚未确认同步；买家仍按旧状态路由。请点击“保存接入方式”或“刷新状态”重试。已保存的分享码不会被删除。";
-  if (state === "failed")
-    // 错误码只做纯文本插值：HTML 调用点在拼接时统一 esc()，textContent
-    // 调用点本身安全；此处再转义会变成双重转义。
-    return "目录同步失败（" + (a.catalogSyncError || "SYNC_FAILED") + "）；本机选择已保留，买家仍按旧状态路由。已保存的分享码不会被删除。";
-  if (state === "unsupported")
-    return "目录不支持接入方式同步，或当前没有可用的活动绑定；买家仍按旧规则/安全回退。请确认目录连接后重新保存，本机选择与已保存分享码均已保留。";
-  if (state === "unbound")
-    return "尚未完成目录连接：接入方式只在本机保存，完成绑定后会自动同步。";
-  return "目录同步状态未知；请点击“刷新状态”核对。买家不会按未经确认的本机选择路由。";
+  if (state === "synced") return "Kiwi网关路由已同步。";
+  if (state === "pending" || state === "failed") return "接入方式已保存在本机。买家仍按Kiwi网关原有设置接入，可刷新重试。";
+  if (state === "unsupported") return "当前Kiwi网关暂不支持同步接入方式。";
+  if (state === "unbound") return "接入方式将在完成名片发布后同步。";
+  return "";
 }
-function appendCatalogAccess(html) {
-  if (!CATALOG_CONNECT || ROLE !== "owner") return html;
-  return call("GET", "/catalog/access").then(function (result) {
-    var a = result.access || {};
-    catalogAccessState = a;
-    catalogAccessDetection = a.detection || null;
-    var mode = safeAccessMode(a.mode);
-    var modeOptions = ["auto", "share_code", "no_share_code"].map(function (value) {
-      return '<option value="' + value + '"' + (mode === value ? ' selected' : '') + '>' + accessModeLabel(value) + '</option>';
-    }).join("");
-    var firstConnect = WORKBUDDY_ACCESS && catalogConnectionState && !catalogConnectionState.bindingId && !catalogConnectionState.published;
-    return html + '<div class="card"><h2>接入方式与平台门禁</h2>' +
-      '<div class="row"><label for="access-mode">接入方式</label>' +
-      '<select id="access-mode" aria-label="接入方式">' + modeOptions + '</select>' +
-      '<button class="act" onclick="saveAccessMode()">保存接入方式</button>' +
-      '<button class="act" onclick="detectAccessMode()">检测当前接入方式</button></div>' +
-      '<p id="access-detection" class="muted">' + esc(detectionText(a.detection)) + '</p>' +
-      '<p id="access-sync" class="muted">' + esc(accessSyncText(a)) + '</p>' +
-      '<p class="muted">默认自动检测。接入方式经目录公开为买家路由状态：使用分享码时买家中继，无分享码时买家直连，自动检测按目录已有分享码保守回退。无分享码不等于平台已确认加白；平台没有公开的白名单验证接口。切换接入方式不会删除已保存分享码；只有「撤回授权并撤销」会清除分享码。</p>' +
-      (a.modeInvalid ? '<p class="warn">接入方式偏好无法解析，已安全回退自动检测；未删除任何分享码。</p>' : '') +
-      '<h3>WorkBuddy 分享码（平台门禁）</h3>' +
-      '<p id="access-status">' + esc(accessStatusText(a)) + '</p>' +
-      (a.custodyEnabled === false
-        ? '<p class="warn">目录代管当前已被运营关闭，无法新建或更新；你仍可撤回授权。</p>'
-        : '') +
-      '<div class="row"><input id="access-link" type="text" oninput="updateAccessButton()" autocomplete="off" spellcheck="false" aria-label="WorkBuddy 分享链接" placeholder="粘贴 WorkBuddy 分享链接">' +
-      (firstConnect ? '<button class="act primary" onclick="stageAccessAndBegin()">授权并发起或继续连接</button>' : '<button id="access-submit" class="act primary" onclick="submitAccessLink()" disabled>提交或更新</button>') +
-      '<button class="act" onclick="refreshAccess()">刷新状态</button>' +
-      (a.consentGranted ? '<button id="access-revoke" class="act danger" onclick="revokeAccess()">撤回授权并撤销</button>' : '') + '</div>' +
-      '<div class="row"><label class="consent-label"><input id="access-consent" type="checkbox" aria-label="同意分享码代管授权">' +
-      ' <span>我同意 Kiwi 目录代管分享码，并按需向我已接受的采购方出示。</span></label> ' +
-      '<details><summary>查看代管授权与使用说明</summary><p>平台仍以分享码门禁拦截时，请以本应用的具体应用 ID 向腾讯云提交工单，申请白名单并取消平台分享码门禁。本页不会自动识别平台是否加白。</p>' +
-      '<p>加白前，新版买家经 Kiwi 目录中继传输询价与磋商。平台确认加白且你自行核实无需分享码后，可在本页选择「无分享码（直连）」并保存；待目录同步确认后，新版买家改为直连，不再经中继。</p>' +
-      '<p>旧客户端可能仍使用旧访问机制，并非所有买家都会立即切换；已接受的采购方仍可能按旧访问机制获取分享码，目录仅向他们按需出示并按买家限流。</p>' +
-      '<p>分享码用于通过 WorkBuddy 网关，不是商家身份或业务授权；本页不会显示分享码。你可随时撤回，撤回后目录会清空已保存的分享码。</p>' +
-      '<p>关闭「发布为网站」后链接立即失效；删除源任务或源文件不会使分享链接失效，需要主动下线。平台不承诺分享码的固定有效期或自动轮换；换码后请重新提交。</p>' +
-      '<p>分享码等价于访问凭据，平台未提供机器专用入口，网关不透传 Authorization，也不适合大规模机器自动分发。如不希望依赖此方式，可使用自托管公网入口。</p></details></div>' +
-      (a.recentFaults > 0
-        ? '<p class="warn">最近 24 小时有 ' + a.recentFaults +
-          ' 次采购方报告门禁失败' + (a.recentFaultsLastAt ? '（最后一次 ' + esc(a.recentFaultsLastAt) + '）' : '') +
-          '。请核对分享码是否已在平台侧更换或失效，必要时重新粘贴分享链接。</p>'
-        : '') +
-      (a.consentGranted && a.status === "active" ? '<p class="muted">目录代管授权已生效' + (a.consentTermsVersion ? '（条款 ' + esc(a.consentTermsVersion) + '）' : '') + '</p>' : '') +
-      (a.authMode ? '<p class="muted">业务认证：' + esc(a.authMode) + ' · 适配版本：' + esc(a.adapterVersion || "-") + '</p>' : '') +
-      '</div>' +
-      '<div class="card"><h2>开放询价</h2>' +
-      '<p id="public-inquiry-status" class="muted">请查询当前授权状态。</p>' +
-      '<div class="row"><label class="consent-label"><input id="public-inquiry-consent" type="checkbox" aria-label="同意开放询价"> <span>我同意买家无需注册或事先批准即可通过 Kiwi 目录询价。</span></label> <details><summary>查看开放询价授权与使用说明</summary><p>允许买家无需注册、关注或商家逐个批准，通过 Kiwi 目录主动询价。询价与报价报文会经 Kiwi 目录转发给商家；目录不裁决条款、不保存磋商内容，但能读到报文明文。Kiwi 负责通过平台门禁；商家后台仍仅供管理员登录。需先完成目录连接；如平台门禁要求分享码，还需完成受控代管。本项为单独授权，可随时关闭；关闭后停止新的开放询价。</p></details></div>' +
-      '<div class="row"><button id="inquiry-submit" class="act primary" onclick="setPublicInquiry(true)" disabled>授权开放询价</button> ' +
-      '<button class="act" onclick="refreshPublicInquiry()">查询授权状态</button> ' +
-      '<button class="act danger" onclick="setPublicInquiry(false)">关闭开放询价</button></div></div>';
-  }).catch(function () {
-    return html + '<div class="card"><h2>接入方式与平台门禁</h2><p>暂时无法读取访问配置状态，请稍后刷新。</p></div>';
-  });
+function renderAccessSettings(a) {
+  var mode = safeAccessMode(a.mode);
+  var options = ["auto", "share_code", "no_share_code"].map(function (value) {
+    return '<option value="' + value + '"' + (mode === value ? ' selected' : '') + '>' + accessModeLabel(value) + '</option>';
+  }).join("");
+  return '<h3>接入方式</h3><div class="row"><label for="access-mode">买家接入</label>' +
+    '<select id="access-mode">' + options + '</select>' +
+    '<button class="act" onclick="saveAccessMode()">保存</button>' +
+    '<button class="act" onclick="detectAccessMode()">检测</button></div>' +
+    '<p id="access-detection" class="muted">' + esc(a.detection ? detectionText(a.detection) : "") + '</p>' +
+    '<p id="access-sync" class="muted">' + esc(accessSyncText(a)) + '</p>' +
+    '<p class="muted">自动检测优先尝试直接访问。切换接入方式会保留分享码；撤销代管可清除。平台白名单需由 WorkBuddy 确认。</p>' +
+    (a.modeInvalid ? '<p class="warn">已将无法识别的接入方式恢复为自动检测。</p>' : '');
 }
-function showPublicInquiryStatus(consent, notify) {
-  var target = $("public-inquiry-status");
-  var text = !consent || !consent.granted ? "尚未授权开放询价" :
-    consent.policyActive && consent.localEnabled ? "已授权；买家接入仍需完成实际验证" : "已授权，当前尚未就绪；请检查目录连接和分享码";
+function renderShareSettings(a, connectUsesLink) {
+  var needsLink = a.status === "invalid" || (a.mode === "share_code" && !a.consentGranted);
+  return '<details class="catalog-settings" id="access-share-settings"' + (needsLink ? ' open' : '') + '>' +
+    '<summary>WorkBuddy 分享链接' + (a.statusReason === "local_staged" ? '（已保存）' : connectUsesLink ? '（按需填写）' : '') + '</summary>' +
+    '<p id="access-status" class="muted">' + esc(accessStatusText(a)) + '</p>' +
+    (a.custodyEnabled === false ? '<p class="warn">分享码代管暂不可用。</p>' : '') +
+    '<input id="access-link" type="text" oninput="updateAccessButton()" autocomplete="off" spellcheck="false" aria-label="WorkBuddy 分享链接" placeholder="粘贴本应用的 WorkBuddy 分享链接">' +
+    '<p><label class="consent-label"><input id="access-consent" type="checkbox" aria-label="同意分享码代管授权">' +
+    '<span>我同意Kiwi网关代管分享码，用于通过平台门禁转发询价，并按需向已接受的采购方出示。</span></label></p>' +
+    '<details class="catalog-settings"><summary>查看代管授权与使用说明</summary>' +
+    '<p class="muted">WorkBuddy 要求分享码时，请填写本应用的分享链接。链接失效或换码后，请在此更新。撤销代管会清除已保存的分享码。</p></details>' +
+    '<div class="row">' +
+    (connectUsesLink ? '<p class="muted">填写后，点击下方「发布名片」。</p>' : '<button id="access-submit" class="act" onclick="submitAccessLink()" disabled>保存分享链接</button>') +
+    '<button id="access-revoke" class="act danger" onclick="revokeAccess()"' + (a.consentGranted ? '' : ' hidden') + '>撤销代管</button>' +
+    '</div>' +
+    (a.recentFaults > 0 ? '<p class="warn">最近 24 小时有 ' + esc(a.recentFaults) + ' 次门禁失败，请检查分享链接。</p>' : '') +
+    '</details>';
+}
+var publicInquiryConsent = null;
+function showPublicInquiryStatus(consent) {
+  publicInquiryConsent = consent || null;
+  var target = $("public-inquiry-status"), button = $("inquiry-toggle");
+  var text = !consent ? "开放询价状态暂不可用" :
+    consent.pending ? "开放询价正在开通，请稍后刷新" :
+    !consent.granted ? "开放询价已暂停" :
+    consent.policyActive && consent.localEnabled ? "开放询价已开启" : "开放询价暂不可用，请检查接入方式和分享链接";
   if (target) target.textContent = text;
-  var button = $("inquiry-submit");
-  if (button) button.disabled = !!(consent && consent.granted);
-  // 后台刷新不得覆盖全局状态条（例如“已撤销”）。只有显式查询/操作才写 bar。
-  if (notify !== false) bar(text, false);
+  if (button) {
+    button.textContent = consent && (consent.granted || consent.pending) ? "暂停开放询价" : "开启开放询价";
+    button.disabled = !consent;
+  }
 }
-function refreshPublicInquiry(notify) {
-  var button = $("inquiry-submit"); if (button) button.disabled = true;
+function refreshPublicInquiry(sequence) {
+  var button = $("inquiry-toggle"); if (button) button.disabled = true;
   return call("POST", "/catalog/public-inquiry/status", {}).then(function (result) {
-    showPublicInquiryStatus(result.consent, notify);
-  }).catch(function (error) {
-    // 后台刷新失败同样不得覆盖全局状态条。
-    if (notify !== false) bar(error && error.message ? error.message : "无法查询开放询价状态", true);
+    if (sequence === viewSequence) showPublicInquiryStatus(result.consent);
+  }).catch(function () {
+    if (sequence === viewSequence) showPublicInquiryStatus(null);
   });
 }
-function setPublicInquiry(granted) {
-  var button = $("inquiry-submit");
-  if (granted && button && button.disabled) return;
-  var checkbox = $("public-inquiry-consent");
-  if (granted && (!checkbox || !checkbox.checked)) { bar("请先勾选开放询价授权。", true); return; }
-  if (!granted && !window.confirm("关闭后，新的买家将不能通过 Kiwi 目录向本店发起开放询价。确定关闭？")) return;
-  if (button) button.disabled = true;
+function togglePublicInquiry() {
+  var button = $("inquiry-toggle");
+  if (!button || button.disabled || !publicInquiryConsent) return;
+  var granted = !publicInquiryConsent.granted && !publicInquiryConsent.pending;
+  button.disabled = true;
+  var sequence = viewSequence;
   return call("POST", "/catalog/public-inquiry/consent", { granted: granted, terms_version: "open-inquiry-v1" }).then(function (result) {
-    if (checkbox) checkbox.checked = false;
-    showPublicInquiryStatus(result.consent);
-  }).catch(function () { bar("开放询价状态尚未确认，请先查询授权状态后再决定是否重试。", true); });
+    if (sequence === viewSequence) showPublicInquiryStatus(result.consent);
+  }).catch(function () {
+    bar("开放询价状态尚未确认，请刷新状态。", true);
+    if (sequence === viewSequence) showPublicInquiryStatus(null);
+  });
 }
 function accessSummaryBar(a, verb) {
   var target = $("access-status"); if (target) target.textContent = accessStatusText(a);
   var sync = $("access-sync"); if (sync) sync.textContent = accessSyncText(a);
   if (a && a.detection !== undefined) showAccessDetection(a.detection);
+  var revoke = $("access-revoke"); if (revoke && a) revoke.hidden = !a.consentGranted;
   bar(verb + "：" + accessStatusText(a) + " " + accessSyncText(a), a && (a.status === "invalid" || (a.catalogSync && a.catalogSync !== "synced")));
 }
 function saveAccessMode() {
@@ -528,11 +502,12 @@ function saveAccessMode() {
     return;
   }
   return call("POST", "/catalog/access/mode", { mode: mode }).then(function (result) {
-    catalogAccessState = result.access || {};
-    showAccessDetection(catalogAccessState.detection);
-    var sync = $("access-sync"); if (sync) sync.textContent = accessSyncText(catalogAccessState);
-    var synced = catalogAccessState.catalogSync === "synced";
-    bar("接入方式已保存：" + accessModeLabel(mode) + "。" + accessSyncText(catalogAccessState) + " 已保存的分享码没有被删除。", !synced);
+    var a = result.access || {};
+    var status = $("access-status"); if (status) status.textContent = accessStatusText(a);
+    var sync = $("access-sync"); if (sync) sync.textContent = accessSyncText(a);
+    showAccessDetection(a.detection);
+    bar("已保存接入方式。" + accessSyncText(a));
+    if (catalogConnectionState && catalogConnectionState.published) refreshPublicInquiry(viewSequence);
   }).catch(function (error) {
     bar(error && error.message ? error.message : "接入方式未保存，请刷新后重试。", true);
   });
@@ -550,112 +525,100 @@ function detectAccessMode() {
 var accessSubmitPending = false;
 function updateAccessButton() {
   var button = $("access-submit"), input = $("access-link");
-  if (button) button.disabled = accessSubmitPending || !input || !String(input.value || "").trim();
+  if (button) button.disabled = accessSubmitPending || !input || !input.value.trim();
 }
-function submitAccessLink() {
-  var button = $("access-submit");
-  if (button && button.disabled) return;
-  var input = $("access-link");
-  var consent = $("access-consent");
-  var link = input ? String(input.value || "").trim() : "";
-  if (!link) { bar("请先粘贴 WorkBuddy 分享链接。", true); return; }
-  if (!consent || !consent.checked) {
-    bar("请先勾选并同意《分享码代管授权》。", true);
-    return;
-  }
-  accessSubmitPending = true;
-  if (button) button.disabled = true;
-  return call("POST", "/catalog/access/share-link", {
-    link: link,
-    consent_terms_version: ACCESS_CONSENT_TERMS
-  }).then(function (result) {
-    catalogAccessState = result.access;
+function saveShareLink(link) {
+  var input = $("access-link"), consent = $("access-consent");
+  return call("POST", "/catalog/access/share-link", { link: link, consent_terms_version: ACCESS_CONSENT_TERMS }).then(function (result) {
     if (input) input.value = "";
-    accessSubmitPending = false;
-    updateAccessButton();
     if (consent) consent.checked = false;
-    accessSummaryBar(result.access, "已提交");
-  }).catch(function (e) {
-    // 错误文本由服务端给自有码说明；不把链接回显到页面。
-    // 审查 C-11：失败时保留输入框内容，允许用户核对后直接重试。
-    accessSubmitPending = false;
-    updateAccessButton();
-    bar(e && e.message ? e.message : "提交未完成，请先刷新状态后再试。", true);
+    return result.access;
   });
 }
-function stageAccessAndBegin() {
-  if (catalogBeginPending) return;
-  var input = $("access-link");
-  var consent = $("access-consent");
-  var link = input ? String(input.value || "").trim() : "";
-  var staged = catalogAccessState && catalogAccessState.status === "pending" && catalogAccessState.statusReason === "local_staged";
-  if (!link && staged) return beginCatalogConnect();
-  if (!link) { bar("请先粘贴 WorkBuddy 分享链接。", true); return; }
-  if (!consent || !consent.checked) { bar("请先勾选并同意《分享码代管授权》。", true); return; }
-  catalogBeginPending = true;
-  return call("POST", "/catalog/access/share-link", { link: link, consent_terms_version: ACCESS_CONSENT_TERMS })
-    .then(function (result) {
-      catalogAccessState = result.access;
-      if (input) input.value = "";
-      if (consent) consent.checked = false;
-      // Only a successful owner-authorized stage may advance to enrollment.
-      catalogBeginPending = false;
-      return beginCatalogConnect();
-    }).catch(function () {
-      bar("分享链接暂存未确认，请先刷新状态；确认已暂存后可继续连接。", true);
-    }).finally(function () { catalogBeginPending = false; });
+function submitAccessLink() {
+  if (accessSubmitPending) return;
+  var input = $("access-link"), consent = $("access-consent");
+  var link = input ? input.value.trim() : "";
+  if (!link) return;
+  if (!consent || !consent.checked) { bar("请先勾选并同意分享码代管。", true); return; }
+  accessSubmitPending = true;
+  updateAccessButton();
+  return saveShareLink(link).then(function (a) {
+    accessSummaryBar(a, "已保存");
+    if (catalogConnectionState && catalogConnectionState.published) refreshPublicInquiry(viewSequence);
+  }).catch(function (error) {
+    bar(error.message || "保存未完成，请重试。", true);
+  }).finally(function () {
+    accessSubmitPending = false;
+    updateAccessButton();
+  });
 }
-function refreshAccess() {
-  call("POST", "/catalog/access/refresh", {}).then(function (result) {
-    catalogAccessState = result.access;
-    accessSummaryBar(result.access, "已刷新");
-  }).catch(function () { bar("刷新访问配置状态失败。", true); });
+function refreshCatalogSetup() {
+  if (!catalogConnectionState || !catalogConnectionState.bindingId) return refresh();
+  return call("POST", "/catalog/access/refresh", {}).catch(function () {
+    bar("暂时无法同步接入设置。", true);
+  }).then(refresh);
 }
 function revokeAccess() {
-  if (!window.confirm("撤回授权后：采购方将无法经 WorkBuddy 访问本店，目录会清空已保存的分享码。确定撤回？")) return;
+  if (!window.confirm("撤回授权后：采购方将无法经 WorkBuddy 访问本店，Kiwi网关会清空已保存的分享码。确定撤回？")) return;
   call("POST", "/catalog/access/revoke", {}).then(function (result) {
-    catalogAccessState = result.access;
     accessSummaryBar(result.access, "已撤销");
     var button = $("access-revoke"); if (button) button.disabled = true;
-    refreshPublicInquiry(false);
     refresh();
   }).catch(function () { bar("撤销未完成，请稍后重试。", true); });
 }
-function beginCatalogConnect() {
+function connectCatalog() {
   if (catalogBeginPending) return;
+  var input = $("access-link"), consent = $("access-consent"), button = $("catalog-begin");
+  var link = WORKBUDDY_ACCESS && input ? input.value.trim() : "";
+  if (link && (!consent || !consent.checked)) { bar("请先勾选并同意分享码代管。", true); return; }
   catalogBeginPending = true;
+  if (button) button.disabled = true;
+  var stage = link ? saveShareLink(link).then(function (a) { accessSummaryBar(a, "已保存"); }) : Promise.resolve();
+  return stage.then(beginCatalogConnect).catch(function (error) {
+    bar(error.message || "分享链接保存未确认，请重试。", true);
+  }).finally(function () {
+    catalogBeginPending = false;
+    if (button) button.disabled = false;
+  });
+}
+function beginCatalogConnect() {
   try { if (!catalogBeginKey) catalogBeginKey = sessionStorage.getItem("kiwi-catalog-connect-key") || ""; } catch (_) {}
   if (!catalogBeginKey) catalogBeginKey = key("catalog-connect");
   try { sessionStorage.setItem("kiwi-catalog-connect-key", catalogBeginKey); } catch (_) {}
   return call("POST", "/catalog/connect/begin", { idempotency_key: catalogBeginKey }).then(function (receipt) {
     if (receipt.status === "succeeded") { catalogBeginKey = ""; try { sessionStorage.removeItem("kiwi-catalog-connect-key"); } catch (_) {} }
-    bar(receipt.status === "succeeded" ? "连接申请已准备，请本人查看配对信息并确认公开资料。" : "连接结果尚未确认，请先查看状态，不要重复提交。");
+    bar(receipt.status === "succeeded" ? "连接申请已准备，请核对配对码和公开资料，并在Kiwi网关确认发布。" : "连接结果尚未确认，请先查看状态，不要重复提交。");
     refresh();
   }).catch(function (error) {
     var message = error && error.message ? error.message : "连接申请暂未完成，请先刷新状态后再试。";
     // 连接时的公开探测失败同样只能呈现“不确定”，不能把单次失败说成未加白。
     if (/接入方式|公开名片|公网入口|商家服务|分享码|不确定|超时/.test(message)) {
+      var share = $("access-share-settings"); if (share) share.open = true;
       showAccessDetection({
         status: "uncertain",
         guidance: message + " 单次失败不能判定实例未加白；已保存的分享码不会被删除。"
       });
     }
     bar(message, true);
-  })
-    .finally(function () { catalogBeginPending = false; });
+  });
 }
-function showCatalogPairing() {
+function showCatalogPairing(sequence) {
   return call("GET", "/catalog/connect/pairing").then(function (result) {
+    if (sequence !== viewSequence) return;
     var box = $("catalog-pairing");
     if (!box) return;
     var p = result.pairing;
     if (!p) { box.textContent = "当前没有待确认的配对信息，请先发起连接或刷新状态。"; return; }
     var url = new URL(p.verification_uri);
     if (url.protocol !== "https:" || url.username || url.password) throw new Error("invalid link");
-    box.innerHTML = '<p>请在目录授权页核对相同配对码：<strong>' + esc(p.user_code) + '</strong></p>' +
-      '<p class="muted">有效期至 ' + esc(p.expires_at) + '。配对码请自行核对，不要发送给助手。</p>' +
-      '<a target="_blank" rel="noopener noreferrer" href="' + esc(url.href) + '">前往 Kiwi 目录核对并授权</a>';
-  }).catch(function () { bar("无法读取配对信息，请刷新连接状态。", true); });
+    box.innerHTML = '<p>请在Kiwi网关核对配对码 <strong>' + esc(p.user_code) + '</strong></p>' +
+      '<p class="muted">有效期至 ' + esc(new Date(p.expires_at).toLocaleString()) + '。请勿转发配对码。</p>' +
+      '<p><a class="act primary" target="_blank" rel="noopener noreferrer" href="' + esc(url.href) + '">前往Kiwi网关确认发布</a></p>';
+  }).catch(function () {
+    var box = $("catalog-pairing");
+    if (sequence === viewSequence && box) box.textContent = "无法读取配对信息，请刷新状态。";
+  });
 }
 
 /** 商品状态文案：报价有效期不影响上架状态。 */
@@ -848,14 +811,14 @@ function renderProducts(items, publication) {
       esc(it.authority_version == null ? "-" : it.authority_version) + "</td></tr>";
   }).join("");
   var summary = canPublish
-    ? '<p class="muted" id="pub-summary">已发布到目录 ' + publishedCount + " 件，未发布 " + (list.length - publishedCount) + " 件。" +
-      (known ? "" : "目录发布状态暂不可读取，刷新后重试。") + "</p>"
+    ? '<p class="muted" id="pub-summary">已发布到Kiwi网关 ' + publishedCount + " 件，未发布 " + (list.length - publishedCount) + " 件。" +
+      (known ? "" : "Kiwi网关发布状态暂不可读取，刷新后重试。") + "</p>"
     : "";
   var selectAll = canPublish && list.length > 0
     ? '<div class="row"><label class="consent-label"><input type="checkbox" id="pub-select-all" aria-label="全选商品" onchange="togglePublicationPicks(this)"> 全选当前商品</label></div>'
     : "";
   var header = canPublish
-    ? "<tr><th>选择</th><th>SKU</th><th>名称</th><th>状态</th><th>目录状态</th><th>分类（必填）</th><th>单价</th><th>起订量</th><th>数据有效期</th><th>交易平台</th><th>平台商品ID</th><th>平台商品页链接</th></tr>"
+    ? "<tr><th>选择</th><th>SKU</th><th>名称</th><th>状态</th><th>Kiwi网关状态</th><th>分类（必填）</th><th>单价</th><th>起订量</th><th>数据有效期</th><th>交易平台</th><th>平台商品ID</th><th>平台商品页链接</th></tr>"
     : (FILE_PRODUCTS
       ? "<tr><th>SKU</th><th>名称</th><th>单价</th><th>起订量</th><th>数据有效期</th><th>状态</th><th>交易平台</th><th>平台商品ID</th><th>平台商品页链接</th></tr>"
       : "<tr><th>SKU</th><th>名称</th><th>价格（最小币单位）</th><th>库存</th><th>版本</th></tr>");
@@ -867,16 +830,16 @@ function renderProducts(items, publication) {
       '<button class="act" id="pub-clear" onclick="clearPublicationPicks()">清空选择</button></div>' +
       '<p class="muted">公开名称、SKU、分类、商品页链接与其余公开字段；价格、库存及私有规则不会发布。' +
       '可发布已导入或已有商品，不涉及下架其他商品。预览后选择会锁定，修改需先「重新选择」。' +
-      '上架状态和报价有效期在目录商家后台设置。报价过期后商品仍保持上架。</p>' +
+      '上架状态和报价有效期在Kiwi网关商家后台设置。报价过期后商品仍保持上架。</p>' +
       '<button class="act" id="pub-preview" onclick="previewPublication()">预览公开内容</button>' +
       '<div id="publication-result"></div>'
     : (canPublish ? '<p class="muted">暂无商品，请先在下方导入商品后再选择发布。</p>' : "");
-  return '<div class="card"><h2>' + (canPublish ? "商品与目录发布" : "当前商品") + "（" + list.length + "）</h2>" + summary +
+  return '<div class="card"><h2>' + (canPublish ? "商品与Kiwi网关发布" : "当前商品") + "（" + list.length + "）</h2>" + summary +
     selectAll + (rows ? table : '<p class="muted">暂无商品，请先导入商品。没有商品时服务不会报价或发布名片。</p>') +
     publishControls + "</div>" +
     '<div class="card"><h2>导入商品表（按 SKU 追加/更新）</h2>' +
     '<p class="muted">交易链接仅为平台商品页；是否成交、实际价格与付款结果由交易平台确认。</p>' +
-    '<p class="muted">支持 CSV、Excel（.xlsx）与商品表 JSON：先转换校验、预览新增/更新/保留，确认后整批生效（不成功的批次不改动现有商品）。文件里没有的商品会保留，只有同 SKU 会被更新；导入不会撤回已发布到目录的商品。</p>' +
+    '<p class="muted">支持 CSV、Excel（.xlsx）与商品表 JSON：先转换校验、预览新增/更新/保留，确认后整批生效（不成功的批次不改动现有商品）。文件里没有的商品会保留，只有同 SKU 会被更新；导入不会撤回已发布到Kiwi网关的商品。</p>' +
     '<p class="muted">模板：<a href="/merchant/api/v1/products/import-template?format=csv" download="kiwi-product-import-template.csv">下载 CSV 模板</a> · <a href="/merchant/api/v1/products/import-template?format=xlsx" download="kiwi-product-import-template.xlsx">下载 Excel 模板</a>（中文表头与示例行；中英文常见列名会自动识别）。</p>' +
     '<div class="row"><input type="file" id="pfile" aria-label="选择商品导入文件" accept=".json,.csv,.xlsx">' +
     '<button class="act" onclick="previewImport()">校验预览</button></div><div id="presult"></div></div>';
@@ -1151,7 +1114,7 @@ var views = {
           html += '<p class="muted">恢复接待需要 owner 角色。</p>';
         }
       }
-      return appendCatalogConnection(html + "</div>").then(appendCatalogAccess);
+      return appendCatalogSetup(html + "</div>");
     });
   },
   products: function () {
@@ -1324,7 +1287,7 @@ var views = {
         "<tr><th>规则版本</th><td>" + esc(pol.policy_revision) + "</td></tr>" +
         '<tr><th>内容摘要</th><td><pre class="digest">' + esc(pol.digest) + "</pre></td></tr></table>" +
         '<p class="muted">底价等敏感值不出现在本页接口；提交草稿后由系统校验并原子生效。' +
-        "上架/下架在目录商家后台设置；商品上架后长期有效。数据有效期只影响自动报价，不改变上架状态。</p></div>" +
+        "上架/下架在Kiwi网关商家后台设置；商品上架后长期有效。数据有效期只影响自动报价，不改变上架状态。</p></div>" +
         (ROLE === "owner" || ROLE === "operator"
           ? '<div class="card"><h2>常用规则表单</h2>' +
             '<p class="muted">留空的全局字段不会写进补丁；按商品规则只提交你填写或勾选清除的行。提交后生成规则变更草稿，再确认才生效。</p>' +
@@ -1728,9 +1691,9 @@ function refreshPublicationStatus() {
     }
     var summary = $("pub-summary");
     if (summary) {
-      summary.textContent = "已发布到目录 " + publishedCount + " 件，未发布 " + Math.max(0, trs.length - publishedCount) + " 件。";
+      summary.textContent = "已发布到Kiwi网关 " + publishedCount + " 件，未发布 " + Math.max(0, trs.length - publishedCount) + " 件。";
     }
-  }).catch(function () { bar("目录发布状态暂不可读取，请稍后刷新。", true); });
+  }).catch(function () { bar("Kiwi网关发布状态暂不可读取，请稍后刷新。", true); });
 }
 function commitPublication() {
   if (publicationBusy || !publicationDraft) return;
@@ -1847,7 +1810,7 @@ function renderParseReport(r) {
     (defaulted ? '<p class="muted">未提供、按默认值处理的列：' + esc(defaulted) +
       "（状态默认「在售」；更新时间默认取导入时刻）。</p>" : "") +
     '<p class="muted">确认列映射无误后继续；下一步做严格校验与合并预览。' +
-    '只会新增或更新文件中的 SKU，现有商品与已发布到目录的商品都不会被删除或撤回。</p>' +
+    '只会新增或更新文件中的 SKU，现有商品与已发布到Kiwi网关的商品都不会被删除或撤回。</p>' +
     '<button class="act primary" id="pcontinue">已确认列映射，继续校验预览</button></div>';
   var btn = $("pcontinue");
   if (btn) btn.addEventListener("click", function () {
@@ -1864,7 +1827,7 @@ function submitImportTable(table) {
         "<div>草稿 <b>" + esc(draft.draft_id) + "</b>：新增 " + pv.added + "，更新 " + pv.updated +
         "，不变 " + pv.unchanged + "，保留现有 " + (pv.kept || 0) + "（文件共 " + pv.rows_total + " 行）。</div>" +
         '<pre class="digest">' + esc(draft.digest) + "</pre>" +
-        '<p class="muted">确认后只合并本文件中的 SKU；不会撤回已发布到目录的商品。</p>' +
+        '<p class="muted">确认后只合并本文件中的 SKU；不会撤回已发布到Kiwi网关的商品。</p>' +
         '<button class="act primary" onclick="commitImport()">确认导入（整批生效）</button></div>';
     })
     .catch(function (e) { bar("校验未通过：" + e.message, true); });
@@ -2263,7 +2226,7 @@ function mountWeixin(sequence) {
 }
 var current = "status";
 var VIEW_COPY = {
-  status: ["服务状态", "掌握接待状态，管理店铺与目录连接。"],
+  status: ["服务状态", "掌握接待状态，管理店铺与名片发布。"],
   products: ["商品与导入", "维护商品资料，先预览，再确认变更。"],
   approvals: ["待审批", "核对每一项变更，重要决定由你确认。"],
   negotiations: ["会话旁观", "查看询价与磋商进展，掌握需要关注的会话。"],
@@ -2325,12 +2288,12 @@ function refresh() {
     if (current === "collection") { bindAlipayCollection(); bindAlipayApprovals(); }
     if (current === "support") mountSupport(sequence);
     if (current === "status" && CATALOG_CONNECT && ROLE === "owner") {
+      if (catalogConnectionState && waitingForCatalogConfirmation(catalogConnectionState)) showCatalogPairing(sequence);
       if (catalogConnectionState && catalogConnectionState.bindingId) {
         call("GET", "/catalog/bound-account").then(function (result) {
-          var target = $("bound-account"); if (target) target.textContent = result.email || "无法确定，请到 Kiwi 商家门户核对";
-        }).catch(function () { var target = $("bound-account"); if (target) target.textContent = "暂时无法读取，请稍后刷新"; });
-        // 后台刷新只更新局部状态，不覆盖全局提示条。
-        refreshPublicInquiry(false);
+          var target = $("bound-account"); if (sequence === viewSequence && target) target.textContent = result.email || "请到 Kiwi 商家门户核对";
+        }).catch(function () { var target = $("bound-account"); if (sequence === viewSequence && target) target.textContent = "暂时无法读取，请稍后刷新"; });
+        if (catalogConnectionState.published) refreshPublicInquiry(sequence);
       }
     }
   })

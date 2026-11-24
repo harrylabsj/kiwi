@@ -151,7 +151,7 @@ import {
   WORKBENCH_CURRENCY_TABLE_VERSION,
   type ExactMoney,
 } from "../../merchant/application/money.js";
-import { CONNECTION_PAIRING_SAFE_CODES } from "../../cloud/connect-service.js";
+import { CONNECTION_PAIRING_SAFE_CODES, type PublicInquiryConsentSummary } from "../../cloud/connect-service.js";
 import { EXACT_PRODUCT_TOOLS } from "../../merchant/exact-product-executors.js";
 import { SERVICE_CONTROL_TOOLS } from "../../merchant/service-control-executors.js";
 import type { WorkbenchQuoteResult } from "../../merchant/quote-calculator.js";
@@ -348,8 +348,8 @@ export interface MerchantManagementApiOptions {
     submitAccessShareLink?: (link: string, consentTermsVersion: string) => Promise<CatalogAccessSummary>;
     revokeAccess?: () => Promise<CatalogAccessSummary>;
     readBoundAccount?: () => Promise<string | null>;
-    readPublicInquiryConsent?: () => Promise<{ granted: boolean; policyActive: boolean; localEnabled: boolean; termsVersion: string }>;
-    setPublicInquiryConsent?: (granted: boolean) => Promise<{ granted: boolean; policyActive: boolean; localEnabled: boolean; termsVersion: string }>;
+    readPublicInquiryConsent?: () => Promise<PublicInquiryConsentSummary>;
+    setPublicInquiryConsent?: (granted: boolean) => Promise<PublicInquiryConsentSummary>;
   };
   /** Workbench v1 trusted confirmation authority; absent means strong-confirmation routes fail closed. */
   workbenchConfirmations?: WorkbenchConfirmationStore;
@@ -1000,7 +1000,7 @@ export function createMerchantManagementApiHandler(
       } catch (err) {
         if (err instanceof FileListingPublicationError) {
           // 不反射远端错误或凭据；页面按“状态未知”降级。
-          throw new ManagementError("precondition_changed", "目录发布状态暂不可读取，请检查连接状态后刷新。");
+          throw new ManagementError("precondition_changed", "Kiwi网关发布状态暂不可读取，请检查连接状态后刷新。");
         }
         throw err;
       }
@@ -1034,7 +1034,7 @@ export function createMerchantManagementApiHandler(
       authorizeOrThrow(auth.ctx, "onboarding:manage");
       if (auth.ctx.role !== "owner") throw new ManagementError("forbidden", "only owner can view the bound account");
       const read = options.catalogConnection?.readBoundAccount;
-      if (read === undefined) throw new ManagementError("unavailable", "目录账户信息不可用");
+      if (read === undefined) throw new ManagementError("unavailable", "Kiwi网关账户信息不可用");
       writeJson(res, 200, { email: await read() }, { "x-request-id": requestId, "cache-control": "no-store" });
       return;
     }
@@ -2279,7 +2279,7 @@ export function createMerchantManagementApiHandler(
       } catch (err) {
         if (err instanceof FileListingPublicationError) {
           // Never reflect remote errors or credential-bearing URLs to the page.
-          throw new ManagementError("precondition_changed", "商品发布条件已变化或目录暂不可用，请检查连接状态并重新预览。");
+          throw new ManagementError("precondition_changed", "商品发布条件已变化或Kiwi网关暂不可用，请检查连接状态并重新预览。");
         }
         if (err instanceof ManagementError) throw err;
         throw new ManagementError("unavailable", "商品发布结果暂无法确认，请查看原草稿回执后决定是否续办。");
@@ -2412,7 +2412,7 @@ export function createMerchantManagementApiHandler(
           // This condition is checked before the remote enrollment call, so the
           // operation has no uncertain external effect and can safely be retried.
           operations.release(begun.operationId);
-          throw new ManagementError("invalid_input", "请先提交并授权本实例的 WorkBuddy 分享链接，再发起目录连接。");
+          throw new ManagementError("invalid_input", "请先提交并授权本实例的 WorkBuddy 分享链接，再点击「发布名片」。");
         }
         if (error instanceof MerchantConnectError && CONNECT_BEGIN_PRE_EFFECT_CODES.has(error.code)) {
           // 其余本地校验类失败同样发生在触达目录之前（见常量处的约束）：释放占位
@@ -3875,7 +3875,7 @@ export function createMerchantManagementApiHandler(
     assertWriteGuards(req, auth.sessionId);
     authorizeOrThrow(auth.ctx, "onboarding:manage");
     if (options.catalogConnection !== undefined) {
-      throw new ManagementError("conflict", "本实例已启用目录直连，请在连接 Kiwi 目录入口继续，不能同时启动旧部署向导。");
+      throw new ManagementError("conflict", "本实例通过Kiwi网关发布名片，请使用工作台的「发布名片」入口。");
     }
     const body = await readJsonBody(req);
     const fields = objectFields(body, [

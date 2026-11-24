@@ -1,4 +1,4 @@
-/** Local, fail-closed mirror of the owner's separate public-inquiry consent. */
+/** Local, fail-closed mirror of the binding's public-inquiry policy. */
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { writeFileAtomic } from "../../fs/atomic-write.js";
