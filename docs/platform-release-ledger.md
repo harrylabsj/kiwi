@@ -6,13 +6,26 @@
 
 | 平台 | 产品 | 已确认版本 | 证据与限制 |
 |---|---|---:|---|
-| npm | `@harrylabsj/kiwi` | 0.12.33 | 2026-11-24 portfolio run [45314158644](https://github.com/harrylabsj/kiwi/actions/runs/45314158644) 发布；发布后手工回读 npm latest=0.12.33，并下载 tarball 核验 SHA-1 与发布日志一致（部分渠道发布时 `verify-registry` job 不运行）。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi/v/0.12.33)。 |
-| npm | `@harrylabsj/kiwi-merchant-cloud` | 0.12.33 | 2026-11-24 同一 portfolio run 发布；手工回读 npm latest=0.12.33，并下载 tarball 核验 SHA-1 与发布日志一致。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-merchant-cloud/v/0.12.33)。 |
+| npm | `@harrylabsj/kiwi` | 0.12.34 | 2026-11-24 portfolio run [45326524431](https://github.com/harrylabsj/kiwi/actions/runs/45326524431) 发布；发布后手工回读 npm latest=0.12.34，并下载 tarball 核验 SHA-1 与发布日志一致（部分渠道发布时 `verify-registry` job 不运行）。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi/v/0.12.34)。 |
+| npm | `@harrylabsj/kiwi-merchant-cloud` | 0.12.34 | 2026-11-24 同一 portfolio run 发布；手工回读 npm latest=0.12.34，并下载 tarball 核验 SHA-1 与发布日志一致。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-merchant-cloud/v/0.12.34)。 |
 | npm | `@harrylabsj/kiwi-dsh-plugin` | 0.1.4 | 2026-11-11 portfolio run 发布并回读核验；npm 可查 0.1.4。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-dsh-plugin/v/0.1.4)。 |
 | PyPI | `kiwi-catalog` | 0.5.28 | 2026-11-20 portfolio run [44714849898](https://github.com/harrylabsj/kiwi/actions/runs/44714849898) 发布，发布后手工回读 PyPI latest=0.5.28；**生产 kiwi-hk 已于同日部署 0.5.28 + admin 0.2.28，schema user_version=59**。[PyPI 版本页](https://pypi.org/project/kiwi-catalog/0.5.28/)。 |
 | PyPI | `shopping-cli` | 3.2.11 | 2026-11-11 portfolio run 发布并回读核验；PyPI 可查 3.2.11。[PyPI 版本页](https://pypi.org/project/shopping-cli/3.2.11/)。 |
 
-上表确认指定版本可查，不声称它们必然仍是 registry 当前 latest（2026-11-24 已确认 `@harrylabsj/kiwi` latest=0.12.33、`@harrylabsj/kiwi-merchant-cloud` latest=0.12.33；2026-11-20 已确认 `kiwi-catalog` latest=0.5.28）。`kiwi-catalog-admin` 0.2.18 已推送私有 tag `v0.2.18`，并作为生产 catalog 的扩展安装；它不是公开 registry 制品。
+上表确认指定版本可查，不声称它们必然仍是 registry 当前 latest（2026-11-24 已确认 `@harrylabsj/kiwi` latest=0.12.34、`@harrylabsj/kiwi-merchant-cloud` latest=0.12.34；2026-11-20 已确认 `kiwi-catalog` latest=0.5.28）。`kiwi-catalog-admin` 0.2.18 已推送私有 tag `v0.2.18`，并作为生产 catalog 的扩展安装；它不是公开 registry 制品。
+
+## 2026-11-24 kiwi 0.12.34 registry 发布与生产部署
+
+- 发布源：kiwi `31dd6d57`（0.12.34 候选准备 `bd28cb98`，真实验收回执与冻源刷新于 `31dd6d57`）；catalog `d2d237a5`、shopping-cli `5ee21630` 未变，未重发。代码更新包含 Pi/Chord 1.6.0 与微信 owner 会话能力。
+- 真实端到端验收：2026-11-24T04:22Z 对生产目录 `https://catalog.kiwi.harrylabsj.com` 与真实商家 Veyquo（`mkt_veyquo_A0UPvj7XuYk` / `VQ-001` / 2 个）跑通 search → quote → negotiation → preaccept → agreement → handoff，非约束 agreement `agreement-01a20bca-a069-76dc-9d52-1c248c030ef5`；不下单、不付款、不锁库存。
+- GitHub run：发布前签名 dry-run [45324209358](https://github.com/harrylabsj/kiwi/actions/runs/45324209358) 成功；发布 [45326524431](https://github.com/harrylabsj/kiwi/actions/runs/45326524431) 成功，channels=`npm,merchant-cloud`，经 `kiwi-release` 环境保护环境人工审批。部分通道发布时 `verify-registry` job 被跳过，以下为发布后手工回读。
+- registry 回读（2026-11-24 北京时间）：npm `@harrylabsj/kiwi` latest=0.12.34（metadata `dist.shasum`/下载 SHA-1：`f36a9f26e06b715e49292cc40bbe815264aba467`）；`@harrylabsj/kiwi-merchant-cloud` latest=0.12.34（SHA-1：`c3ae87747e4b62f419157e695d3424c26a48706b`）。干净安装 `@harrylabsj/kiwi@0.12.34` 通过。
+- 生产部署（kiwi-hk，2026-11-24 13:00–13:02 北京时间）：
+  - Veyquo runtime：切到 `/home/kiwi-merchant-v2/releases/kiwi-0.12.34-20261124-125927`；部署前状态快照 `/home/kiwi-merchant-v2/backups/pre-final-0.12.34-20261124-130031.tgz`；runtime health 无 alert，A2A/MCP 子进程正常，`https://veyquo.com/.well-known/agent-card.json` 200、`/a2a` GET 405 为预期。
+  - Veyquo workbench：切到 `/home/kiwi-merchant-v2/releases/kiwi-0.12.34-workbench-20261124-125927`；`https://veyquo.com/merchant/` 200。
+  - 网关：`/opt/kiwi-gateway/app` 切到 `@harrylabsj/kiwi@0.12.34`，旧版保留在 `/opt/kiwi-gateway/app.prev-20261124-130109`；`/health` 与 OAuth metadata 均 200。
+  - 部署后检查：kiwi-gateway、kiwi-merchant-v2、kiwi-workbench 均 active，三服务近 3 分钟 error 日志为空；catalog health 与 Veyquo catalog agent-card 均 200。
+- 未变/未做：kiwi-catalog 0.5.28、shopping-cli 3.2.11、DSH 插件 0.1.4 未重发；WorkBuddy / 商城平台资产未随本次发布更新或审核。
 
 ## 2026-11-24 kiwi 0.12.33 registry 发布与生产部署
 
