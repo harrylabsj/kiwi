@@ -187,14 +187,14 @@ describe("商品发布体验（勾选 + 分类 → 表格预览/结果）", () =
     expect(html).not.toContain("用英文竖线分隔");
   });
 
-  it("显示目录发布状态，并能用全选勾选当前商品", async () => {
+  it("显示Kiwi网关发布状态，并能用全选勾选当前商品", async () => {
     const rows = [row("SKU-1", false, ""), row("SKU-2", false, "")];
     const { context } = await mount({
       rows,
       published: [{ sku: "SKU-1", listing_id: "lst_1", publication_state: "ACTIVE" }],
     });
     const html = (await runInContext("views.products()", context)) as string;
-    expect(html).toContain("已发布到目录 1 件，未发布 1 件。");
+    expect(html).toContain("已发布到Kiwi网关 1 件，未发布 1 件。");
     expect(html).toContain("已发布");
     expect(html).toContain("未发布");
     await runInContext("togglePublicationPicks({ checked: true })", context);
@@ -322,7 +322,7 @@ describe("商品发布体验（勾选 + 分类 → 表格预览/结果）", () =
     };
     const { context, paths } = await mount({ productPages: [page1, page2] });
     const html = (await runInContext("views.products()", context)) as string;
-    expect(html).toContain("商品与目录发布（101）");
+    expect(html).toContain("商品与Kiwi网关发布（101）");
     expect(html).toContain('data-sku="S-0"');
     expect(html).toContain('data-sku="S-100"');
     expect(paths).toContain("/merchant/api/products?limit=100");

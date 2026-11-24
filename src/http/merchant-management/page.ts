@@ -175,7 +175,7 @@ export function renderMerchantManagementPage(options: {
   <p class="nav-foot">日常经营，井然有序。<br>Kiwi Merchant</p>
 </nav>
 <div class="workspace">
-  <section class="page-head" aria-labelledby="page-title"><p class="eyebrow">MERCHANT WORKSPACE</p><h1 id="page-title">服务状态</h1><p id="page-description">掌握接待状态，管理店铺与目录连接。</p></section>
+  <section class="page-head" aria-labelledby="page-title"><p class="eyebrow">MERCHANT WORKSPACE</p><h1 id="page-title">服务状态</h1><p id="page-description">掌握接待状态，管理店铺与名片发布。</p></section>
   <main id="view" tabindex="-1" aria-label="商家工作区"><div class="card">加载中…</div></main>
 </div>
 <div id="bar" role="status" aria-live="polite" aria-atomic="true"></div>
@@ -321,22 +321,22 @@ function statePill(state) {
 }
 
 var PAIRING_CODE_HINTS = {
-  PAIRING_WINDOW_EXPIRED: "上次授权已过期：请重新发起，并在 10 分钟内到目录完成确认",
-  BIND_REJECTED: "目录拒绝了本次绑定请求：请重新发起，反复出现请联系管理员",
-  BIND_CLAIM_CARD_URL_MISMATCH: "目录名片地址与已确认的公开预览不一致：请重新核对后再发起",
-  BIND_CLAIM_FIELD_MISMATCH: "目录绑定材料与预览不一致：请重新发起",
-  BIND_CLAIM_INVALID: "目录签名材料未通过本机校验：请重新发起",
-  CARD_PUBLISH_REJECTED: "名片发布被目录拒绝：请稍后重试或联系管理员",
+  PAIRING_WINDOW_EXPIRED: "上次授权已过期：请重新发起，并在 10 分钟内到Kiwi网关完成确认",
+  BIND_REJECTED: "Kiwi网关拒绝了本次绑定请求：请重新发起，反复出现请联系管理员",
+  BIND_CLAIM_CARD_URL_MISMATCH: "Kiwi网关名片地址与已确认的公开预览不一致：请重新核对后再发起",
+  BIND_CLAIM_FIELD_MISMATCH: "Kiwi网关绑定材料与预览不一致：请重新发起",
+  BIND_CLAIM_INVALID: "Kiwi网关签名材料未通过本机校验：请重新发起",
+  CARD_PUBLISH_REJECTED: "名片发布被Kiwi网关拒绝：请稍后重试或联系管理员",
   CARD_PUBLISH_INVALID: "名片发布回执不完整：请刷新后重试",
-  PAIRING_COMMUNICATION_FAILED: "与目录通信暂时失败：请稍后刷新重试"
+  PAIRING_COMMUNICATION_FAILED: "与Kiwi网关通信暂时失败：请稍后刷新重试"
 };
 
 function catalogStatusText(s) {
-  if (s.published) return "目录名片已发布";
+  if (s.published) return "名片已发布";
   var labels = { idle: "尚未连接", preparing: "等待你确认授权", pending: "等待你确认授权",
     awaiting_confirmation: "等待你确认授权", authorized: "授权已收到，正在连接",
     bound: "已连接，正在检查接待能力", expired: "授权已过期，请重新发起",
-    blocked: "连接未完成，请核对状态", paused: "目录服务已暂停", revoked: "授权已撤销" };
+    blocked: "连接未完成，请核对状态", paused: "Kiwi网关服务已暂停", revoked: "授权已撤销" };
   return labels[s.status] || "连接尚未完成";
 }
 function waitingForCatalogConfirmation(s) {
@@ -354,7 +354,7 @@ function appendCatalogSetup(html) {
       return html + renderCatalogSetup(s, a);
     });
   }).catch(function () {
-    return html + '<div class="card"><h2>Kiwi 目录</h2><p>暂时无法读取连接状态。</p>' +
+    return html + '<div class="card"><h2>Kiwi网关</h2><p>暂时无法读取连接状态。</p>' +
       '<button class="act" onclick="refresh()">刷新状态</button></div>';
   });
 }
@@ -362,24 +362,24 @@ function renderCatalogSetup(s, a) {
   var waiting = waitingForCatalogConfirmation(s);
   var canBegin = !s.published && !s.bindingId && !waiting && s.status !== "authorized";
   var shareForm = a ? renderShareSettings(a, WORKBUDDY_ACCESS && canBegin) : "";
-  return '<div class="card"><h2>Kiwi 目录</h2><p id="catalog-status">' + esc(catalogStatusText(s)) + '</p>' +
+  return '<div class="card"><h2>Kiwi网关</h2><p id="catalog-status">' + esc(catalogStatusText(s)) + '</p>' +
     (s.bindingId ? '<p>Kiwi 账户 <span id="bound-account">正在核对…</span></p>' : '') +
     (s.errorCode ? '<p class="muted">' + esc(PAIRING_CODE_HINTS[s.errorCode] || s.errorCode) + '</p>' : '') +
     (s.published ? '<p id="public-inquiry-status" class="muted" aria-live="polite">正在读取开放询价状态…</p>' :
       '<p class="muted">' + (WORKBUDDY_ACCESS
-        ? '发布后默认开放询价，买家无需注册即可通过 Kiwi 目录询价。'
-        : '发布后，采购方可在 Kiwi 目录发现本店。') + '</p>') +
+        ? '发布后默认开放询价，买家无需注册即可通过Kiwi网关询价。'
+        : '发布后，采购方可在Kiwi网关发现本店。') + '</p>') +
     (waiting ? '<div id="catalog-pairing" aria-live="polite">正在读取配对信息…</div>' : '') +
     (WORKBUDDY_ACCESS && canBegin ? shareForm : '') +
     '<div class="row">' +
-    (canBegin ? '<button id="catalog-begin" class="act primary" onclick="connectCatalog()">连接Kiwi网关</button>' : '') +
+    (canBegin ? '<button id="catalog-begin" class="act primary" onclick="connectCatalog()">发布名片</button>' : '') +
     '<button class="act" onclick="refreshCatalogSetup()">刷新状态</button></div>' +
     (WORKBUDDY_ACCESS && !canBegin ? shareForm : '') +
     (a || s.published ? '<details class="catalog-settings"><summary>高级设置</summary>' +
       (a ? renderAccessSettings(a) : '<p class="muted">暂时无法读取接入设置。</p>') +
       (!WORKBUDDY_ACCESS ? shareForm : '') +
       (s.published ? '<div class="catalog-settings"><h3>开放询价</h3>' +
-        '<p class="muted">买家可通过 Kiwi 目录询价，无需注册或逐个审批。目录转发询价与报价，可读取报文，不保存磋商内容。</p>' +
+        '<p class="muted">买家可通过Kiwi网关询价，无需注册或逐个审批。Kiwi网关转发询价与报价，可读取报文，不保存磋商内容。</p>' +
         '<button id="inquiry-toggle" class="act" onclick="togglePublicInquiry()" disabled>正在读取状态…</button></div>' : '') +
       '</details>' : '') + '</div>';
 }
@@ -401,12 +401,12 @@ function showAccessDetection(d) {
 }
 function accessStatusText(a) {
   if (!a) return "分享链接状态暂不可用。";
-  if (a.statusReason === "catalog_access_exists") return "目录保留了原分享码。更换请粘贴新链接并保存。";
+  if (a.statusReason === "catalog_access_exists") return "Kiwi网关保留了原分享码。更换请粘贴新链接并保存。";
   if (a.statusReason === "local_saved_not_used" || (a.status === "active" && a.mode === "no_share_code")) {
     return "分享码已保存，当前接入方式为无分享码。";
   }
   if (a.status === "active") return "分享码已生效。";
-  if (a.status === "pending" && a.statusReason === "local_staged") return "分享码已加密保存，连接后由目录校验。";
+  if (a.status === "pending" && a.statusReason === "local_staged") return "分享码已加密保存，发布时由Kiwi网关校验。";
   if (a.status === "pending") return "分享码等待平台校验。";
   if (a.status === "invalid") return "分享码校验未通过，请更新分享链接。";
   if (a.status === "revoked") return "分享码已撤销。";
@@ -414,10 +414,10 @@ function accessStatusText(a) {
 }
 function accessSyncText(a) {
   var state = a && a.catalogSync;
-  if (state === "synced") return "目录路由已同步。";
-  if (state === "pending" || state === "failed") return "接入方式已保存在本机。买家仍按目录原有设置接入，可刷新重试。";
-  if (state === "unsupported") return "当前目录暂不支持同步接入方式。";
-  if (state === "unbound") return "接入方式将在连接目录后同步。";
+  if (state === "synced") return "Kiwi网关路由已同步。";
+  if (state === "pending" || state === "failed") return "接入方式已保存在本机。买家仍按Kiwi网关原有设置接入，可刷新重试。";
+  if (state === "unsupported") return "当前Kiwi网关暂不支持同步接入方式。";
+  if (state === "unbound") return "接入方式将在完成名片发布后同步。";
   return "";
 }
 function renderAccessSettings(a) {
@@ -442,11 +442,11 @@ function renderShareSettings(a, connectUsesLink) {
     (a.custodyEnabled === false ? '<p class="warn">分享码代管暂不可用。</p>' : '') +
     '<input id="access-link" type="text" oninput="updateAccessButton()" autocomplete="off" spellcheck="false" aria-label="WorkBuddy 分享链接" placeholder="粘贴本应用的 WorkBuddy 分享链接">' +
     '<p><label class="consent-label"><input id="access-consent" type="checkbox" aria-label="同意分享码代管授权">' +
-    '<span>我同意 Kiwi 目录代管分享码，用于通过平台门禁转发询价，并按需向已接受的采购方出示。</span></label></p>' +
+    '<span>我同意Kiwi网关代管分享码，用于通过平台门禁转发询价，并按需向已接受的采购方出示。</span></label></p>' +
     '<details class="catalog-settings"><summary>查看代管授权与使用说明</summary>' +
     '<p class="muted">WorkBuddy 要求分享码时，请填写本应用的分享链接。链接失效或换码后，请在此更新。撤销代管会清除已保存的分享码。</p></details>' +
     '<div class="row">' +
-    (connectUsesLink ? '<p class="muted">填写后，点击下方「连接Kiwi网关」。</p>' : '<button id="access-submit" class="act" onclick="submitAccessLink()" disabled>保存分享链接</button>') +
+    (connectUsesLink ? '<p class="muted">填写后，点击下方「发布名片」。</p>' : '<button id="access-submit" class="act" onclick="submitAccessLink()" disabled>保存分享链接</button>') +
     '<button id="access-revoke" class="act danger" onclick="revokeAccess()"' + (a.consentGranted ? '' : ' hidden') + '>撤销代管</button>' +
     '</div>' +
     (a.recentFaults > 0 ? '<p class="warn">最近 24 小时有 ' + esc(a.recentFaults) + ' 次门禁失败，请检查分享链接。</p>' : '') +
@@ -560,7 +560,7 @@ function refreshCatalogSetup() {
   }).then(refresh);
 }
 function revokeAccess() {
-  if (!window.confirm("撤回授权后：采购方将无法经 WorkBuddy 访问本店，目录会清空已保存的分享码。确定撤回？")) return;
+  if (!window.confirm("撤回授权后：采购方将无法经 WorkBuddy 访问本店，Kiwi网关会清空已保存的分享码。确定撤回？")) return;
   call("POST", "/catalog/access/revoke", {}).then(function (result) {
     accessSummaryBar(result.access, "已撤销");
     var button = $("access-revoke"); if (button) button.disabled = true;
@@ -588,7 +588,7 @@ function beginCatalogConnect() {
   try { sessionStorage.setItem("kiwi-catalog-connect-key", catalogBeginKey); } catch (_) {}
   return call("POST", "/catalog/connect/begin", { idempotency_key: catalogBeginKey }).then(function (receipt) {
     if (receipt.status === "succeeded") { catalogBeginKey = ""; try { sessionStorage.removeItem("kiwi-catalog-connect-key"); } catch (_) {} }
-    bar(receipt.status === "succeeded" ? "连接申请已准备，请核对配对码和公开资料，并在 Kiwi 目录确认发布。" : "连接结果尚未确认，请先查看状态，不要重复提交。");
+    bar(receipt.status === "succeeded" ? "连接申请已准备，请核对配对码和公开资料，并在Kiwi网关确认发布。" : "连接结果尚未确认，请先查看状态，不要重复提交。");
     refresh();
   }).catch(function (error) {
     var message = error && error.message ? error.message : "连接申请暂未完成，请先刷新状态后再试。";
@@ -612,9 +612,9 @@ function showCatalogPairing(sequence) {
     if (!p) { box.textContent = "当前没有待确认的配对信息，请先发起连接或刷新状态。"; return; }
     var url = new URL(p.verification_uri);
     if (url.protocol !== "https:" || url.username || url.password) throw new Error("invalid link");
-    box.innerHTML = '<p>请在 Kiwi 目录核对配对码 <strong>' + esc(p.user_code) + '</strong></p>' +
+    box.innerHTML = '<p>请在Kiwi网关核对配对码 <strong>' + esc(p.user_code) + '</strong></p>' +
       '<p class="muted">有效期至 ' + esc(new Date(p.expires_at).toLocaleString()) + '。请勿转发配对码。</p>' +
-      '<p><a class="act primary" target="_blank" rel="noopener noreferrer" href="' + esc(url.href) + '">前往 Kiwi 目录确认发布</a></p>';
+      '<p><a class="act primary" target="_blank" rel="noopener noreferrer" href="' + esc(url.href) + '">前往Kiwi网关确认发布</a></p>';
   }).catch(function () {
     var box = $("catalog-pairing");
     if (sequence === viewSequence && box) box.textContent = "无法读取配对信息，请刷新状态。";
@@ -811,14 +811,14 @@ function renderProducts(items, publication) {
       esc(it.authority_version == null ? "-" : it.authority_version) + "</td></tr>";
   }).join("");
   var summary = canPublish
-    ? '<p class="muted" id="pub-summary">已发布到目录 ' + publishedCount + " 件，未发布 " + (list.length - publishedCount) + " 件。" +
-      (known ? "" : "目录发布状态暂不可读取，刷新后重试。") + "</p>"
+    ? '<p class="muted" id="pub-summary">已发布到Kiwi网关 ' + publishedCount + " 件，未发布 " + (list.length - publishedCount) + " 件。" +
+      (known ? "" : "Kiwi网关发布状态暂不可读取，刷新后重试。") + "</p>"
     : "";
   var selectAll = canPublish && list.length > 0
     ? '<div class="row"><label class="consent-label"><input type="checkbox" id="pub-select-all" aria-label="全选商品" onchange="togglePublicationPicks(this)"> 全选当前商品</label></div>'
     : "";
   var header = canPublish
-    ? "<tr><th>选择</th><th>SKU</th><th>名称</th><th>状态</th><th>目录状态</th><th>分类（必填）</th><th>单价</th><th>起订量</th><th>数据有效期</th><th>交易平台</th><th>平台商品ID</th><th>平台商品页链接</th></tr>"
+    ? "<tr><th>选择</th><th>SKU</th><th>名称</th><th>状态</th><th>Kiwi网关状态</th><th>分类（必填）</th><th>单价</th><th>起订量</th><th>数据有效期</th><th>交易平台</th><th>平台商品ID</th><th>平台商品页链接</th></tr>"
     : (FILE_PRODUCTS
       ? "<tr><th>SKU</th><th>名称</th><th>单价</th><th>起订量</th><th>数据有效期</th><th>状态</th><th>交易平台</th><th>平台商品ID</th><th>平台商品页链接</th></tr>"
       : "<tr><th>SKU</th><th>名称</th><th>价格（最小币单位）</th><th>库存</th><th>版本</th></tr>");
@@ -830,16 +830,16 @@ function renderProducts(items, publication) {
       '<button class="act" id="pub-clear" onclick="clearPublicationPicks()">清空选择</button></div>' +
       '<p class="muted">公开名称、SKU、分类、商品页链接与其余公开字段；价格、库存及私有规则不会发布。' +
       '可发布已导入或已有商品，不涉及下架其他商品。预览后选择会锁定，修改需先「重新选择」。' +
-      '上架状态和报价有效期在目录商家后台设置。报价过期后商品仍保持上架。</p>' +
+      '上架状态和报价有效期在Kiwi网关商家后台设置。报价过期后商品仍保持上架。</p>' +
       '<button class="act" id="pub-preview" onclick="previewPublication()">预览公开内容</button>' +
       '<div id="publication-result"></div>'
     : (canPublish ? '<p class="muted">暂无商品，请先在下方导入商品后再选择发布。</p>' : "");
-  return '<div class="card"><h2>' + (canPublish ? "商品与目录发布" : "当前商品") + "（" + list.length + "）</h2>" + summary +
+  return '<div class="card"><h2>' + (canPublish ? "商品与Kiwi网关发布" : "当前商品") + "（" + list.length + "）</h2>" + summary +
     selectAll + (rows ? table : '<p class="muted">暂无商品，请先导入商品。没有商品时服务不会报价或发布名片。</p>') +
     publishControls + "</div>" +
     '<div class="card"><h2>导入商品表（按 SKU 追加/更新）</h2>' +
     '<p class="muted">交易链接仅为平台商品页；是否成交、实际价格与付款结果由交易平台确认。</p>' +
-    '<p class="muted">支持 CSV、Excel（.xlsx）与商品表 JSON：先转换校验、预览新增/更新/保留，确认后整批生效（不成功的批次不改动现有商品）。文件里没有的商品会保留，只有同 SKU 会被更新；导入不会撤回已发布到目录的商品。</p>' +
+    '<p class="muted">支持 CSV、Excel（.xlsx）与商品表 JSON：先转换校验、预览新增/更新/保留，确认后整批生效（不成功的批次不改动现有商品）。文件里没有的商品会保留，只有同 SKU 会被更新；导入不会撤回已发布到Kiwi网关的商品。</p>' +
     '<p class="muted">模板：<a href="/merchant/api/v1/products/import-template?format=csv" download="kiwi-product-import-template.csv">下载 CSV 模板</a> · <a href="/merchant/api/v1/products/import-template?format=xlsx" download="kiwi-product-import-template.xlsx">下载 Excel 模板</a>（中文表头与示例行；中英文常见列名会自动识别）。</p>' +
     '<div class="row"><input type="file" id="pfile" aria-label="选择商品导入文件" accept=".json,.csv,.xlsx">' +
     '<button class="act" onclick="previewImport()">校验预览</button></div><div id="presult"></div></div>';
@@ -1287,7 +1287,7 @@ var views = {
         "<tr><th>规则版本</th><td>" + esc(pol.policy_revision) + "</td></tr>" +
         '<tr><th>内容摘要</th><td><pre class="digest">' + esc(pol.digest) + "</pre></td></tr></table>" +
         '<p class="muted">底价等敏感值不出现在本页接口；提交草稿后由系统校验并原子生效。' +
-        "上架/下架在目录商家后台设置；商品上架后长期有效。数据有效期只影响自动报价，不改变上架状态。</p></div>" +
+        "上架/下架在Kiwi网关商家后台设置；商品上架后长期有效。数据有效期只影响自动报价，不改变上架状态。</p></div>" +
         (ROLE === "owner" || ROLE === "operator"
           ? '<div class="card"><h2>常用规则表单</h2>' +
             '<p class="muted">留空的全局字段不会写进补丁；按商品规则只提交你填写或勾选清除的行。提交后生成规则变更草稿，再确认才生效。</p>' +
@@ -1691,9 +1691,9 @@ function refreshPublicationStatus() {
     }
     var summary = $("pub-summary");
     if (summary) {
-      summary.textContent = "已发布到目录 " + publishedCount + " 件，未发布 " + Math.max(0, trs.length - publishedCount) + " 件。";
+      summary.textContent = "已发布到Kiwi网关 " + publishedCount + " 件，未发布 " + Math.max(0, trs.length - publishedCount) + " 件。";
     }
-  }).catch(function () { bar("目录发布状态暂不可读取，请稍后刷新。", true); });
+  }).catch(function () { bar("Kiwi网关发布状态暂不可读取，请稍后刷新。", true); });
 }
 function commitPublication() {
   if (publicationBusy || !publicationDraft) return;
@@ -1810,7 +1810,7 @@ function renderParseReport(r) {
     (defaulted ? '<p class="muted">未提供、按默认值处理的列：' + esc(defaulted) +
       "（状态默认「在售」；更新时间默认取导入时刻）。</p>" : "") +
     '<p class="muted">确认列映射无误后继续；下一步做严格校验与合并预览。' +
-    '只会新增或更新文件中的 SKU，现有商品与已发布到目录的商品都不会被删除或撤回。</p>' +
+    '只会新增或更新文件中的 SKU，现有商品与已发布到Kiwi网关的商品都不会被删除或撤回。</p>' +
     '<button class="act primary" id="pcontinue">已确认列映射，继续校验预览</button></div>';
   var btn = $("pcontinue");
   if (btn) btn.addEventListener("click", function () {
@@ -1827,7 +1827,7 @@ function submitImportTable(table) {
         "<div>草稿 <b>" + esc(draft.draft_id) + "</b>：新增 " + pv.added + "，更新 " + pv.updated +
         "，不变 " + pv.unchanged + "，保留现有 " + (pv.kept || 0) + "（文件共 " + pv.rows_total + " 行）。</div>" +
         '<pre class="digest">' + esc(draft.digest) + "</pre>" +
-        '<p class="muted">确认后只合并本文件中的 SKU；不会撤回已发布到目录的商品。</p>' +
+        '<p class="muted">确认后只合并本文件中的 SKU；不会撤回已发布到Kiwi网关的商品。</p>' +
         '<button class="act primary" onclick="commitImport()">确认导入（整批生效）</button></div>';
     })
     .catch(function (e) { bar("校验未通过：" + e.message, true); });
@@ -2226,7 +2226,7 @@ function mountWeixin(sequence) {
 }
 var current = "status";
 var VIEW_COPY = {
-  status: ["服务状态", "掌握接待状态，管理店铺与目录连接。"],
+  status: ["服务状态", "掌握接待状态，管理店铺与名片发布。"],
   products: ["商品与导入", "维护商品资料，先预览，再确认变更。"],
   approvals: ["待审批", "核对每一项变更，重要决定由你确认。"],
   negotiations: ["会话旁观", "查看询价与磋商进展，掌握需要关注的会话。"],

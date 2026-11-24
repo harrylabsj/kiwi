@@ -754,7 +754,7 @@ function uncertainAccessError(
         : mode === "no_share_code"
           ? "当前选择「无分享码」；如平台门禁确实要求分享码，请提交本实例分享链接后切换为自动检测或使用分享码。"
           : "请先确认服务已启动、公网入口与 TLS 正常；如平台门禁确实拦截，可由商家提交本实例分享链接后重试。") +
-      "目录里已保存的分享码不会被删除。",
+      "Kiwi网关会保留已保存的分享码。",
   );
 }
 
@@ -828,7 +828,7 @@ async function fetchPublicCard(
     if (shareSecret === undefined) {
       throw new MerchantConnectError(
         "ACCESS_SHARE_LINK_REQUIRED",
-        "已选择「使用分享码」，但本进程没有可用的分享码。请由商家重新提交本实例的分享链接；目录里已保存的分享码不会被删除。",
+        "已选择「使用分享码」，但本进程没有可用的分享码。请由商家重新提交本实例的分享链接；Kiwi网关会保留已保存的分享码。",
       );
     }
     return verify(await requestPublicCard(origin, fetchImpl, shareSecret), true);
@@ -1005,7 +1005,7 @@ class ConnectionServiceImpl implements MerchantConnectionService {
           this.firstBindAccessConfig === undefined) {
         throw new MerchantConnectError(
           "ACCESS_SHARE_LINK_REQUIRED",
-          "已选择「使用分享码」，但本实例还没有可用的分享码。请先提交并授权本实例的 WorkBuddy 分享链接，再发起目录连接。",
+          "已选择「使用分享码」，但本实例还没有可用的分享码。请先提交并授权本实例的 WorkBuddy 分享链接，再点击「发布名片」。",
         );
       }
       const card = await this.loadPublicCard();
@@ -1693,7 +1693,7 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       this.inquiryPolicy.set(binding, granted, false);
       await this.client.setPublicInquiryConsent(context, this.identity, granted);
       const remote = await this.client.readPublicInquiryConsent(context, this.identity);
-      if (remote.granted !== granted) throw new MerchantConnectError("STATE_INVALID", "目录授权状态尚未确认");
+      if (remote.granted !== granted) throw new MerchantConnectError("STATE_INVALID", "Kiwi网关授权状态尚未确认");
       this.inquiryPolicy.set(binding, granted, granted ? remote.policyActive : true);
       return { ...remote, localEnabled: this.inquiryPolicy.isEnabled() };
     });
@@ -1804,7 +1804,7 @@ class ConnectionServiceImpl implements MerchantConnectionService {
           direct.status,
           `无码读取公开名片被拒绝（HTTP ${direct.status}）。`,
           mode === "share_code"
-            ? "已选择「使用分享码」，但当前进程没有可用分享码。请由商家提交本实例分享链接后重试；目录里已保存的分享码不会被删除。"
+            ? "已选择「使用分享码」，但当前进程没有可用分享码。请由商家提交本实例分享链接后重试；Kiwi网关会保留已保存的分享码。"
             : mode === "no_share_code"
               ? "当前选择「无分享码」，检测没有发送已保存的分享码。单次 401/403 不能判定实例未加白；如平台门禁确实要求分享码，请提交本实例分享链接后切换为自动检测或使用分享码。"
               : uncertainGuidance,
