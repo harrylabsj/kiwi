@@ -109,6 +109,15 @@ on:
         required: false
         default: ""
         type: string
+      acknowledge_unpinned_skips:
+        description: >-
+          Release-readiness gate escape hatch: allow the run to proceed even
+          when a component NOT selected in channels has unpublished changes on
+          its repo main (main != portfolio.lock pin). Recorded in the run
+          summary; prefer updating the pin and including the channel instead.
+        required: false
+        default: false
+        type: boolean
 
 # Serialize releases; never auto-cancel a release run.
 concurrency:
@@ -120,9 +129,27 @@ permissions:
   contents: read
 
 jobs:
+  release-readiness:
+    name: Drift gate (unpublished changes on unselected channels)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout central source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Check version drift on unselected channels
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          node scripts/check-version-drift.mjs --gate
+          --channels="${{ inputs.channels }}"
+          ${{ inputs.acknowledge_unpinned_skips && '--acknowledge-skips' || '' }}
   build-once:
     name: Build, verify, and sign release bundle
     runs-on: ubuntu-latest
+    needs: release-readiness
     permissions:
       contents: read
       id-token: write
