@@ -1080,15 +1080,17 @@ class ConnectionServiceImpl implements MerchantConnectionService {
           if (s.runtime_origin !== this.origin || s.key_thumbprint !== this.keyThumbprint)
             return false;
           if (!s.operation_claim || s.operation_claim.stage === "poll") return false;
-          // 僵尸 claim 不阻止重新配对：expired 会话，或副作用窗口（grant /
-          // binding 有效期）已过的会话，其后续写操作必被 Catalog 拒绝，不存在
-          // 未决副作用。published 不按本地有效期判死（同 selectSession），残留
-          // claim 仍需对账。
+          // expired 是经 reconcile 显式判死的会话：副作用窗口（grant/binding
+          // 有效期）已过，Catalog 必拒绝其后续写操作，不存在未决副作用；
+          // 残留 claim 属僵尸，不阻止人工显式重新配对。未判死的会话维持
+          // 原「不自动重试」语义（no stale lease stealing）。
           if (s.status === "expired") return false;
-          if (s.status !== "published") {
-            const effectExpiry = s.status === "bound" ? s.binding_expires_at : s.expires_at;
-            const expiryMs = Date.parse(effectExpiry ?? "");
-            if (Number.isFinite(expiryMs) && expiryMs <= this.now().getTime()) return false;
+          // bound 会话的副作用窗口是绑定有效期：过期后 Catalog 必拒绝其
+          // publish 写操作，残留 claim 同样属僵尸。该形态下 reconcile 报 idle
+          // （无判死路径），故在 begin 侧直接豁免。
+          if (s.status === "bound") {
+            const expiry = Date.parse(s.binding_expires_at ?? "");
+            if (Number.isFinite(expiry) && expiry <= this.now().getTime()) return false;
           }
           return true;
         })
