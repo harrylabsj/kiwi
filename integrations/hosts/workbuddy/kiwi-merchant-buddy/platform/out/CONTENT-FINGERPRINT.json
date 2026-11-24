@@ -1,11 +1,11 @@
 {
   "schema": "kiwi.workbuddy.platform-pack-fingerprint.v1",
-  "config_version": "1.8.2",
+  "config_version": "1.8.3",
   "source": "buddy-app.config.json",
   "files": {
-    "industry-config.json": "sha256:70dbe97e1080f7586d94d80de03a38d88669e152acdd4bfd05d3b5c51858c0b9",
-    "market.json": "sha256:ff1e15775e1ec58642eb7906e3237f9ece820118dc120b5b8a68e098363a794f",
-    "platform-pack.zip": "sha256:40a8cd58bc177a9834e210ac3b95c220bf4034af0cb06a28a512421d3a908506",
-    "market-draft/market-draft.json": "sha256:b6ab2d659217b625996b8e5bbf5822092ba0fdd375d58fbefab63f78ba7b0d5b"
+    "industry-config.json": "sha256:5194c534acd73721d1f816fa5adbca9c1388256f2be2dd8ec30d179b33851d64",
+    "market.json": "sha256:d99da2ca04c92c8b0a00552b01680c499e5cf8cffbd1cd95d7f7527df7bd7516",
+    "platform-pack.zip": "sha256:e14a0c7715d3d563488900ea1092a4d34e10fd2ae06990882288efc11f15d416",
+    "market-draft/market-draft.json": "sha256:b20d3e2fb5cca0efb742d0a240285257d145084f814ced4c897073fde1f52fac"
   }
 }

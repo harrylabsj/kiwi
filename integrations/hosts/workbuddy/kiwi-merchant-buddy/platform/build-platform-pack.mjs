@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * WP18/WP19/WP25：从 buddy-app.config.json（1.8.2）生成 WorkBuddy 开放平台可导入的配置包。
+ * WP18/WP19/WP25：从 buddy-app.config.json（1.8.3）生成 WorkBuddy 开放平台可导入的配置包。
  *
  * 输出（默认写到本目录 out/，市场草稿写到本目录 market-draft/）：
  *   - industry-config.json：平台「导入配置」用（格式为项目经理从平台前端 importer 反推的
@@ -192,7 +192,7 @@ const MODE_PACKS = [
         icon: "cap-register.svg",
         sourceCapsules: ["注册账号"],
         systemPromptAppend:
-          "「已有账号」直接回复「请打开 Kiwi 商家后台，用已有账号登录。」并提供 https://catalog.kiwi.harrylabsj.com/portal/account；不发起名片授权、不要求补公开商家名称或主推商品。 新账号先注册和验证邮箱。只读工具仅用于核对账号状态。",
+          "收到「已有账号」或要求打开商家后台时，直接给出 [Kiwi 商家后台](https://catalog.kiwi.harrylabsj.com/portal/account)，由商家在门户自行登录。此时不调用工具、不触发连接器授权、不创建草稿、不开通实例、不发布名片。商家询问 Kiwi 客服联系方式时，可以直接回答：Kiwi 客服微信号：hhdshwe，邮箱：1711496337@qq.com。其他开通问题按已确认的账号、邮箱、部署和名片状态提示下一步。",
         templates: [
           {
             title: "新商家注册",
@@ -204,7 +204,7 @@ const MODE_PACKS = [
             title: "已有账号",
             titleEn: "Existing account",
             prompt: "我已经有 Kiwi 商家账号，帮我打开kiwi商家后台",
-            promptEn: "I have a Kiwi merchant account. Open the Kiwi merchant portal.",
+            promptEn: "I already have a Kiwi merchant account. Help me open the Kiwi merchant portal.",
           },
           {
             title: "了解开通步骤",
@@ -227,7 +227,7 @@ const MODE_PACKS = [
         icon: "cap-email.svg",
         sourceCapsules: ["邮箱验证"],
         systemPromptAppend:
-          "邮箱验证成功后，没有实例时进入「一键上云」，已部署时回原实例续办；邮箱验证不等于名片发布。",
+          "处理收不到邮件、重发、换邮箱和验证后续办。邮箱验证后，已有工作台就继续发布名片，否则进入「一键上云」。可按需读取账号状态，验证码由商家在 Kiwi 页面处理。",
         templates: [
           {
             title: "没收到邮件",
@@ -250,7 +250,7 @@ const MODE_PACKS = [
           },
           {
             title: "验证后继续",
-            titleEn: "Continue after verification",
+            titleEn: "After verification",
             prompt: "我已经验证邮箱了，接下来怎么继续开通？",
             promptEn: "I verified my email. What should I do next?",
           },
@@ -258,12 +258,13 @@ const MODE_PACKS = [
       },
       {
         id: "cap-cloud",
+        templateStart: 13,
         title: "一键上云",
         titleEn: "One-click Cloud",
         icon: "cap-cloud.svg",
         sourceCapsules: ["一键上云"],
         systemPromptAppend:
-          "一键上云按 kiwi-cloud-deploy 执行，先核对账号与已有实例，用同一应用 ID 的部署回执、工作台地址和真实 /livez 核对；只拿到地址时报告「已取得地址」。首次发布名片后默认尝试开启开放询价，可在工作台高级设置暂停。 严格按 取包校验→首次发布取地址→prepare --origin→同一应用再发布→自检→上线核对 的顺序执行，缺少站点发布工具时按技能的方案 B 提示商家。核对名片与心跳时使用 kiwi_catalog_get_service_status。平台授权及费用由商家本人确认，失败或能力缺失时如实说明。",
+          "按 kiwi-cloud-deploy 技能执行，先核对商家账号和已有实例。已有实例使用原工作台。新部署按 取包校验→首次发布取地址→prepare --origin→同一应用再发布→自检 的顺序，依据应用 ID、工作台地址和 /livez 核实部署。只取得地址时继续核验。用 kiwi_catalog_get_service_status 查询已有的名片或心跳状态，空商品的完整报价就绪留到上线检查。部署确认后指引发布名片，说明询价默认开启及暂停入口。缺少工具时说明卡点，可提供方案 B。",
         templates: [
           {
             title: "开通云端接待",
@@ -288,38 +289,39 @@ const MODE_PACKS = [
             title: "现在能上云吗",
             titleEn: "Ready for cloud",
             prompt: "我已有 Kiwi 商家账号，现在能一键上云吗？",
-            promptEn: "I already have a Kiwi merchant account. Can I set up the cloud service now?",
+            promptEn: "I have a Kiwi merchant account. Can I set up my cloud service now?",
           },
         ],
       },
       {
         id: "cap-connect",
+        templateStart: 9,
         title: "发布名片",
         titleEn: "Publish Merchant Card",
         icon: "cap-connect.svg",
         sourceCapsules: ["发布名片"],
         systemPromptAppend:
-          "「发布名片」从已部署的原实例工作台发起，空商品也可发布名片。只接受状态工具返回的本次有效确认链接；缺失时回原工作台，不猜链接、不保存草稿。由店主本人在授权页输入工作台显示的配对码、核对公开预览并点击「确认发布商家名片」。",
+          "从已部署的原实例工作台进入「发布名片」。由商家在本次确认页输入工作台上的配对码（如有），核对实例和公开资料后，亲自点击「确认发布商家名片」。确认页必须来自当前实例的有效回执，链接过期从原工作台续办。你不读取、不转述配对码。用 kiwi_catalog_get_service_status 核对名片发布。没有可用工作台时，先引导一键上云。",
         templates: [
           {
             title: "找配对码",
             titleEn: "Where is the pairing code",
             prompt: "配对码在哪里看？怎么确认「发布名片」？",
             promptEn:
-              "Where can I find the pairing code? How do I confirm \"Publish merchant card\"?",
+              "Where can I find the pairing code? How do I confirm \"Publish Merchant Card\"?",
           },
           {
             title: "核对配对码",
             titleEn: "Verify the pairing code",
             prompt: "在确认页输入工作台上的配对码后提示不正确，怎么办？",
             promptEn:
-              "The pairing code from the workbench was rejected on the confirmation page. What should I do?",
+              "The confirmation page rejected the pairing code from my workbench. What should I do?",
           },
           {
             title: "发布须知",
             titleEn: "Before publishing",
             prompt: "点「发布名片」之前我要核对什么？",
-            promptEn: "What should I check before clicking \"Publish merchant card\"?",
+            promptEn: "What should I check before clicking \"Publish Merchant Card\"?",
           },
           {
             title: "配对码安全",
@@ -336,7 +338,7 @@ const MODE_PACKS = [
         icon: "cap-golive.svg",
         sourceCapsules: ["上线检查"],
         systemPromptAppend:
-          "分别核对名片激活回执、签名心跳、指定 SKU 发布回执和买家端实测。未实测，不宣称已能搜索或询价。 名片已发布但没有商品时，引导去「商品报价」和原实例工作台。",
+          "用 kiwi_catalog_get_service_status 核对名片和心跳。用 SKU 发布回执及实际买家搜索和询价回执逐项核对上线。名片发布后缺少商品时，引导到「商品报价」和原工作台确认发布；无实测的结果标「待核验」。",
         templates: [
           {
             title: "是否已上线",
@@ -414,7 +416,7 @@ const MODE_PACKS = [
         icon: "cap-products.svg",
         sourceCapsules: ["整理商品"],
         systemPromptAppend:
-          "按 kiwi-product-import 技能执行：先与商家逐列确认映射，生成与工作台「商品与导入」页可下载的 CSV/Excel 模板完全一致的文件，并附问题清单；列名不确定时请商家下载模板或提供列名，不要自创。绝不编造价格/库存/规格/有效期，缺失标「需商家补充」；疑似底价/成本/进价列一律剔除；导入按 SKU 追加或更新，未出现在文件里的商品保留，不自动下架。首次建议小批量。导入后在原实例工作台另行预览、由店主确认发布，并核对指定 SKU 回执。上传与确认导入由商家本人在工作台完成。",
+          "按 kiwi-product-import 技能与商家逐列确认映射，再生成与工作台「商品与导入」模板一致的文件。价格、库存、规格、有效期缺失标「需商家补充」，剔除底价、成本和进价。导入按 SKU 新增或更新，文件中未包含的现有商品与已发布商品保留。导入后核对 SKU，名片发布后，由商家在原工作台另行预览并确认发布商品。",
         templates: [
           {
             title: "整理成导入表",
@@ -450,19 +452,19 @@ const MODE_PACKS = [
         icon: "cap-import.svg",
         sourceCapsules: ["导入商品"],
         systemPromptAppend:
-          "导入按 SKU 追加或更新，未出现在文件里的商品保留，不自动下架。首次建议小批量。导入后在原实例工作台另行预览、由店主确认发布，并核对指定 SKU 回执。",
+          "由商家本人打开「商品与导入」上传商品表，核对预览后确认导入。导入按 SKU 新增或更新，文件中未包含的现有商品与已发布商品保留。导入后核对 SKU，名片发布后，由商家在原工作台另行预览并确认发布商品。失败时提供非敏感错误提示和下一步。",
         templates: [
           {
             title: "导入步骤",
             titleEn: "Import steps",
-            prompt: "商品表整理好了，怎么导入工作台，再确认发布和核对 SKU 回执？",
-            promptEn: "My sheet is ready. How do I import it, confirm publication, and check each SKU receipt?",
+            prompt: "商品表整理好了，怎么先导入，再在工作台预览并确认发布？",
+            promptEn: "My sheet is ready. How do I import it, then preview and confirm publication in the workbench?",
           },
           {
-            title: "按 SKU 导入",
-            titleEn: "Import by SKU",
-            prompt: "按 SKU 追加或更新是什么意思？没出现在表里的商品会下架吗？",
-            promptEn: "How does adding or updating by SKU work? Will products missing from the sheet be delisted?",
+            title: "按 SKU 更新",
+            titleEn: "Update by SKU",
+            prompt: "导入会按 SKU 更新哪些商品？表里没有的商品会保留吗？",
+            promptEn: "Which SKUs will the import update? Will products outside the sheet stay as they are?",
           },
           {
             title: "导入报错",
@@ -554,7 +556,7 @@ const MODE_PACKS = [
         icon: "cap-copy.svg",
         sourceCapsules: ["优化文案"],
         systemPromptAppend:
-          "改前读取现有资料，改后只存私有草稿、如实返回草稿状态；不把草稿当名片或商品发布回执，不返回废弃入口。商品公开发布由店主在原实例工作台预览并确认。",
+          "先读取现有公开文案，读取能力缺失时请商家提供原文。当前会话确有对应草稿工具且商家明确要求时才保存；成功只报告草稿已保存，工具不可用就提供会话内草稿。发布引导只使用已核验的工作台入口，不使用工具返回的旧门户地址。",
         templates: [
           {
             title: "改资料文案",
@@ -577,8 +579,8 @@ const MODE_PACKS = [
           {
             title: "存草稿",
             titleEn: "Save as draft",
-            prompt: "改好的文案先存草稿，告诉我草稿状态；公开发布我去原实例工作台确认",
-            promptEn: "Save the improved copy as a draft and tell me its status. I'll confirm publication in the original workbench.",
+            prompt: "请先把改好的文案保留为草稿，再告诉我从哪里核对和发布。",
+            promptEn: "Keep the revised copy as a draft and show me where I can review and publish it.",
           },
         ],
       },
@@ -1173,11 +1175,11 @@ const MARKET_EXPERTS = [
     name: "开通顾问",
     nameEn: "Onboarding Advisor",
     categoryId: "cat-onboarding",
-    description: "陪你走完注册、连接、一键上云与上线检查，卡在哪一步就先解决哪一步。",
-    descriptionEn: "Walks you through sign-up, connection, cloud setup and go-live, one step at a time.",
+    description: "陪你注册或登录、验证邮箱、一键上云、发布名片并检查上线。",
+    descriptionEn: "Walks you through sign-up, cloud setup, card publication and go-live.",
     skills: ["kiwi-cloud-deploy"],
     systemPrompt:
-      "你是 Kiwi 商家开通顾问。「已有账号」直接回复「请打开 Kiwi 商家后台，用已有账号登录。」并提供 https://catalog.kiwi.harrylabsj.com/portal/account；不发起名片授权、不要求补公开商家名称或主推商品。一键上云按 kiwi-cloud-deploy 执行，先核对账号与已有实例，用同一应用 ID 的部署回执、工作台地址和真实 /livez 核对；只拿到地址时报告「已取得地址」。首次发布名片后默认尝试开启开放询价，可在工作台高级设置暂停。「发布名片」从已部署的原实例工作台发起，空商品也可发布名片。只接受状态工具返回的本次有效确认链接；缺失时回原工作台，不猜链接、不保存草稿。由店主本人在授权页输入工作台显示的配对码、核对公开预览并点击「确认发布商家名片」。分别核对名片激活回执、签名心跳、指定 SKU 发布回执和买家端实测。未实测，不宣称已能搜索或询价。 不读取配对码、凭据或实例私有运营数据；不代商家确认，不伪造部署或上线回执。",
+      "你是 Kiwi 开通顾问。收到「已有账号」或要求打开商家后台时，直接给出 [Kiwi 商家后台](https://catalog.kiwi.harrylabsj.com/portal/account)，由商家在门户自行登录。此时不调用工具、不触发连接器授权、不创建草稿、不开通实例、不发布名片。邮箱验证后核对已有实例。云端部署和原地升级按 kiwi-cloud-deploy 执行。只拿到地址时继续核验部署。从已部署的原实例工作台进入「发布名片」。由商家在本次确认页输入工作台上的配对码（如有），核对实例和公开资料后，亲自点击「确认发布商家名片」。确认页必须来自当前实例的有效回执，链接过期从原工作台续办。你不读取、不转述配对码。名片发布后引导发布商品，分开核对名片、心跳、SKU、买家搜索和实测询价。",
   },
   {
     id: "oe_a2d0c6cc725719bd",
@@ -1188,7 +1190,7 @@ const MARKET_EXPERTS = [
     descriptionEn: "Turns product notes into import-ready sheets, drafts quote rules, and watches listing slots.",
     skills: ["kiwi-product-import"],
     systemPrompt:
-      "你是 Kiwi 商家应用的报价助理，帮商家把商品和价格准备到位。整理商品按 kiwi-product-import 技能执行：与商家逐列确认映射，生成与工作台「商品与导入」页可下载模板完全一致的文件；绝不编造价格/库存/规格/有效期，缺失标「需商家补充」；疑似底价/成本/进价列一律剔除；导入按 SKU 追加或更新，未出现在文件里的商品保留，不自动下架。首次建议小批量。导入后在原实例工作台另行预览、由店主确认发布，并核对指定 SKU 回执。上传与确认导入由商家本人在工作台完成。帮商家起草报价规则草稿与规则调整建议（可自动报价范围、底价口径、必须人工审批的情形），缺失信息标「需商家补充」。用 kiwi_catalog_get_service_status 读取商品名额与心跳状态并如实转述；名额以工作台已用/总数为准，商品与能力条目共用上限；套餐档位为 Lite 5 / Plus 20 / Pro 50 / Max 100 / Ultra 500（具体以工作台为准）；名额满时说明先下架商品释放名额或联系 Kiwi 运营调整套餐；是否调整及费用以运营确认为准，当前无自助支付。优化文案与搜索词时先用 kiwi_catalog_get_publication 逐条读取当前内容，改好用 kiwi_catalog_save_publication_draft 存草稿，发布由商家到门户确认。",
+      "你是 Kiwi 商家应用的报价助理，帮商家把商品和价格准备到位。整理商品按 kiwi-product-import 技能执行：与商家逐列确认映射，生成与工作台「商品与导入」页可下载模板完全一致的文件；绝不编造价格/库存/规格/有效期，缺失标「需商家补充」；疑似底价/成本/进价列一律剔除；每次提醒按 SKU 新增或更新，上传与确认导入由商家本人在工作台完成。帮商家起草报价规则草稿与规则调整建议（可自动报价范围、底价口径、必须人工审批的情形），缺失信息标「需商家补充」。用 kiwi_catalog_get_service_status 读取商品名额与心跳状态并如实转述；名额以工作台已用/总数为准，商品与能力条目共用上限；套餐档位为 Lite 5 / Plus 20 / Pro 50 / Max 100 / Ultra 500（具体以工作台为准）；名额满时说明先下架商品释放名额或联系 Kiwi 运营调整套餐；是否调整及费用以运营确认为准，当前无自助支付。优化文案与搜索词时先用 kiwi_catalog_get_publication 逐条读取当前内容，改好用 kiwi_catalog_save_publication_draft 存草稿，发布由商家到门户确认。",
   },
   {
     id: "oe_85c8bf08203ad422",
@@ -1333,8 +1335,8 @@ export {
 
 function readConfig(configPath = CONFIG_PATH) {
   const config = JSON.parse(readFileSync(configPath, "utf8"));
-  if (config.version !== "1.8.2") {
-    throw new Error(`buddy-app.config.json 版本应为 1.8.2，实际 ${config.version}`);
+  if (config.version !== "1.8.3") {
+    throw new Error(`buddy-app.config.json 版本应为 1.8.3，实际 ${config.version}`);
   }
   return config;
 }
@@ -1357,6 +1359,7 @@ export function buildPlatformPack(config) {
   const connectorId = extractConnectorId(config);
   const sourceModes = new Map(config.home.modes.map((m) => [m.key, m]));
   const warnings = [];
+  // Moved scenes retain their existing platform template IDs and i18n keys.
   let templateSeq = 0;
 
   const modeItems = MODE_PACKS.map((pack) => {
@@ -1385,18 +1388,15 @@ export function buildPlatformPack(config) {
         expertId: SCENE_EXPERT_IDS[scene.id],
       };
       if (scene.systemPromptAppend) item.systemPromptAppend = scene.systemPromptAppend;
-      item.templates = scene.templates.map((template, index) => {
-        templateSeq += 1;
-        // 发布名片与一键上云换位，但沿用已导入平台的 t9–t16 身份。
-        const stableStart = scene.id === "cap-connect" ? 9 : scene.id === "cap-cloud" ? 13 : null;
-        return {
-          id: `t${stableStart === null ? templateSeq : stableStart + index}`,
-          title: template.title,
-          titleEn: template.titleEn,
-          prompt: template.prompt,
-          promptEn: template.promptEn,
-        };
-      });
+      const templateStart = scene.templateStart ?? templateSeq + 1;
+      templateSeq += scene.templates.length;
+      item.templates = scene.templates.map((t, index) => ({
+        id: `t${templateStart + index}`,
+        title: t.title,
+        titleEn: t.titleEn,
+        prompt: t.prompt,
+        promptEn: t.promptEn,
+      }));
       return item;
     });
 
