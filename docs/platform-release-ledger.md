@@ -1,6 +1,6 @@
 # Kiwi 平台发布版本台账
 
-最近一次发布与生产部署核验为 2026-11-24（北京时间），各平台状态以对应条目的核验日期为准。本表记录**已观察到的版本与当时状态**，不是实时查询；候选代码、注册表版本、平台审核和实际云端运行分开记录。部署、上线或发布新版本后，应补充平台链接、版本、状态、核验时间与回执；不得以代码提交或审核提交代替上线证据。
+最近一次发布与生产部署核验为 2026-11-25（北京时间），各平台状态以对应条目的核验日期为准。本表记录**已观察到的版本与当时状态**，不是实时查询；候选代码、注册表版本、平台审核和实际云端运行分开记录。部署、上线或发布新版本后，应补充平台链接、版本、状态、核验时间与回执；不得以代码提交或审核提交代替上线证据。
 
 ## npm 与 PyPI
 
@@ -9,10 +9,24 @@
 | npm | `@harrylabsj/kiwi` | 0.12.35 | 2026-11-24 portfolio run [45389500990](https://github.com/harrylabsj/kiwi/actions/runs/45389500990) 发布；发布后手工回读 npm latest=0.12.35，并下载 tarball 核验 SHA-1 与发布日志一致（部分渠道发布时 `verify-registry` job 不运行）。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi/v/0.12.35)。 |
 | npm | `@harrylabsj/kiwi-merchant-cloud` | 0.12.35 | 2026-11-24 同一 portfolio run 发布；手工回读 npm latest=0.12.35，并下载 tarball 核验 SHA-1 与发布日志一致。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-merchant-cloud/v/0.12.35)。 |
 | npm | `@harrylabsj/kiwi-dsh-plugin` | 0.1.4 | 2026-11-11 portfolio run 发布并回读核验；npm 可查 0.1.4。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-dsh-plugin/v/0.1.4)。 |
-| PyPI | `kiwi-catalog` | 0.5.28 | 2026-11-20 portfolio run [44714849898](https://github.com/harrylabsj/kiwi/actions/runs/44714849898) 发布，发布后手工回读 PyPI latest=0.5.28；**生产 kiwi-hk 已于同日部署 0.5.28 + admin 0.2.28，schema user_version=59**。[PyPI 版本页](https://pypi.org/project/kiwi-catalog/0.5.28/)。 |
+| PyPI | `kiwi-catalog` | 0.5.29 | 2026-11-25 portfolio run [45504945623](https://github.com/harrylabsj/kiwi/actions/runs/45504945623) 发布，发布后手工回读 PyPI latest=0.5.29 并干净安装核验；**生产 kiwi-hk 已于同日部署 0.5.29 + admin 0.2.28，schema user_version 59→60 迁移成功**。[PyPI 版本页](https://pypi.org/project/kiwi-catalog/0.5.29/)。 |
 | PyPI | `shopping-cli` | 3.2.11 | 2026-11-11 portfolio run 发布并回读核验；PyPI 可查 3.2.11。[PyPI 版本页](https://pypi.org/project/shopping-cli/3.2.11/)。 |
 
-上表确认指定版本可查，不声称它们必然仍是 registry 当前 latest（2026-11-24 已确认 `@harrylabsj/kiwi` latest=0.12.35、`@harrylabsj/kiwi-merchant-cloud` latest=0.12.35；2026-11-20 已确认 `kiwi-catalog` latest=0.5.28）。`kiwi-catalog-admin` 0.2.18 已推送私有 tag `v0.2.18`，并作为生产 catalog 的扩展安装；它不是公开 registry 制品。
+上表确认指定版本可查，不声称它们必然仍是 registry 当前 latest（2026-11-24 已确认 `@harrylabsj/kiwi` latest=0.12.35、`@harrylabsj/kiwi-merchant-cloud` latest=0.12.35；2026-11-25 已确认 `kiwi-catalog` latest=0.5.29）。`kiwi-catalog-admin` 0.2.18 已推送私有 tag `v0.2.18`，并作为生产 catalog 的扩展安装；它不是公开 registry 制品。
+
+## 2026-11-25 kiwi-catalog 0.5.29 registry 发布与生产部署
+
+- 动因与发布源：修复商家海纳百川（catalog agent `cagt_7ASdi11188Fl`，merchant `mkt_m_OAF11HCJ-To`）「发布名片」重绑 409——0.5.28 的 `_insert_active_binding` 按「active 绑定数 +1」分配 `binding_version`，卸载重绑场景下与历史 revoked 行撞 `binding_id`（409）；修复 `fcc7253`（版本分配改为全历史 max+1）与 `bb644ba` 本已在 catalog main 但未发布，由新漂移巡检（PR #218）发现。catalog `21cd8d0c`（0.5.29 prepare）；kiwi 仓发布源 `f5cdf908`；shopping-cli `5ee21630` 未变、未重发。
+- GitHub run：签名 dry-run [45475827691](https://github.com/harrylabsj/kiwi/actions/runs/45475827691) 成功；发布 [45504945623](https://github.com/harrylabsj/kiwi/actions/runs/45504945623) 成功，`publish=true`、channels=`kiwi-catalog`，经 `kiwi-release` 保护环境人工审批。本次为 release-readiness 门禁（PR #220）首次实际运行：选中通道 kiwi-catalog 放行；shopping-cli main 有未发布的 certifi bump，经 `acknowledge_unpinned_skips=true` 显式豁免留痕。
+- registry 回读（2026-11-25 北京时间，手工）：PyPI `kiwi-catalog` latest=0.5.29，whl 与 sdist 均可下载；干净 venv `pip install kiwi-catalog==0.5.29` 并 import 通过。`verify-registry` job 因 needs 中含被跳过的其他 publish job 而整体 skipped（GitHub Actions 隐式 `success()` 语义，已知缺陷，本次仍为手工回读）。
+- 生产部署（kiwi-hk，2026-11-25 15:05–15:08 北京时间）：
+  - 部署前 DB 在线快照 `/opt/kiwi-catalog-backups/catalog-pre-0.5.29-20261125-070534.sqlite`（33M，sqlite backup API）。
+  - 新目录 `/opt/kiwi-catalog-0.5.29-admin-0.2.28`；venv freeze 与 0.5.28 的唯一差异为 `kiwi-catalog==0.5.29`。`kiwi-catalog==0.5.29` 从官方 PyPI 安装（阿里云内网镜像当时尚未同步 0.5.29）；`kiwi-catalog-admin==0.2.28` 用服务器留存的 `/tmp/kiwi_catalog_admin-0.2.28-py3-none-any.whl`（sha256 `adc8880c…`，与 0.5.28 venv 的 direct_url.json 记录一致）。
+  - 新 systemd drop-in `99999999999999999999999-package-0.5.29-admin-0.2.28.conf`（排序最后生效）；旧 0.5.28 drop-in 保留未动。回滚路径：将新 drop-in 改名 `.disabled` + `daemon-reload` + `restart` 即回 0.5.28 代码，DB 如有需要可从上述快照恢复。
+  - schema：启动时自动迁移 `user_version` 59→60，`quick_check=ok`（部署后实测；事先按「无 schema 变更」预期，实际有一个轻量迁移，结果正常）。
+  - 验证：服务 active、ExecStart 指向 0.5.29 目录；本地 `127.0.0.1:8600/health` 与公网 `https://catalog.kiwi.harrylabsj.com/health` 均 200；启动日志 issuer key / public origin 检查 OK、无报错；Caddy 访问日志显示 `/v1/*` 业务流量 200（根路径 404 为该纯 API 服务的固有行为）。
+  - 修复在位与商家现场：运行代码 `kiwi_catalog/api/handlers/cloud_binding.py` 的 `_next_binding_version` 为 `coalesce(max(binding_version),0)+1`（全历史）；海纳百川当前两条绑定均 revoked（v1 `bind_i11188Fl_1`、v2 `bind_i11188Fl_2`），重绑将分配 v3，不再与 revoked 行冲突。端到端恢复待商家重试：先清除工作台 sessionStorage 键 `kiwi-catalog-connect-key`（或用无痕窗口重新登录），再点「发布名片」。
+- 未做：npm `@harrylabsj/kiwi` 0.12.35、`@harrylabsj/kiwi-merchant-cloud` 0.12.35、shopping-cli 3.2.11、DSH 插件 0.1.4 未重发；`verify-registry` job 的 needs/`always()` 缺陷未修；WorkBuddy / 商城平台资产未随本次更新或审核。
 
 ## 2026-11-24 kiwi 0.12.35 registry 发布与生产部署
 
