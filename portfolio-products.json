@@ -1,12 +1,12 @@
 {
   "schema": "kiwi.portfolio.products.v1",
-  "snapshot_date": "2026-11-20",
+  "snapshot_date": "2026-11-24",
   "version_policy": "Versions remain independent by product. The portfolio release bundle binds each available source commit, package version, candidate artifact hash, and external approval state.",
   "products": [
     {
       "id": "kiwi-merchant-cloud",
       "name": "Kiwi Merchant Cloud",
-      "version": "0.12.32",
+      "version": "0.12.33",
       "version_source": {
         "type": "json",
         "scope": "central",
@@ -23,12 +23,12 @@
         "protected kiwi-release environment",
         "npm trusted publishing"
       ],
-      "last_known_registry_version": "0.12.31"
+      "last_known_registry_version": "0.12.32"
     },
     {
       "id": "kiwi",
       "name": "Kiwi runtime",
-      "version": "0.12.32",
+      "version": "0.12.33",
       "version_source": {
         "type": "json",
         "scope": "central",
@@ -39,7 +39,7 @@
       "release_controller": "portfolio-release",
       "artifact": "release/npm/*.tgz",
       "state": "candidate",
-      "last_known_registry_version": "0.12.31",
+      "last_known_registry_version": "0.12.32",
       "gates": [
         "full Kiwi verify",
         "protected kiwi-release environment",
