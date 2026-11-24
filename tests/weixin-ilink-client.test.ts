@@ -2,7 +2,7 @@
  * iLink 客户端测试——mock node:http server 逐字节断言请求形状与响应解析。
  * 覆盖：登录三端点、getupdates/sendmessage、错误码分类、重定向拒绝。
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { IlinkClient } from "../src/weixin/ilink-client.js";
@@ -326,13 +326,22 @@ describe("request 纪律", () => {
     await expect(client.getBotQrcode()).rejects.toMatchObject({ code: "network" });
   });
 
-  it("timeout → timeout (abort)", async () => {
-    const base = await startMock((_req, res) => {
-      // 永不响应
-      void res;
-    });
-    // 缩短超时不可注入——用挂起服务 + 默认超时太大；改为直接测 abort 语义：
-    // 用 server 挂起 + 2s 内不返回，但默认 15s 太久。跳过（超时注入在 Step 4 通道测）。
-    void base;
+  it("aborts a pending QR request and skips a request whose signal was already aborted", async () => {
+    const base = await startMock(() => {});
+    const client = new IlinkClient({ baseUrl: base });
+    const abort = new AbortController();
+    const pending = expect(client.getQrcodeStatus("qr-fixture", { signal: abort.signal })).rejects.toMatchObject({ code: "timeout" });
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    abort.abort();
+    await pending;
+    await expect(client.getBotQrcode(abort.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(requests).toHaveLength(1);
+  });
+
+  it.each([401, 403])("classifies authenticated endpoint HTTP %s as rejected credentials", async (status) => {
+    const base = await startMock((_req, res) => json(res, status, {}));
+    const client = new IlinkClient({ baseUrl: base });
+    await expect(client.getUpdates("", CREDS)).rejects.toMatchObject({ code: "auth" });
+    await expect(client.sendMessage({ to_user_id: "wxid_owner", text: "test" }, CREDS)).rejects.toMatchObject({ code: "auth" });
   });
 });

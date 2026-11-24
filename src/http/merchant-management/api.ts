@@ -43,6 +43,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { WriteApprovalCandidate } from "../../agent/merchant/action-candidate.js";
+import { MerchantWeixinError, type MerchantWeixinChannel } from "../../merchant/weixin-channel.js";
 import type { MerchantPolicy } from "../../config/profile.js";
 import { contentHash } from "../../agent/merchant/action-candidate.js";
 import type { AdminSession, MerchantAdminSessions } from "../../auth/merchant-sessions.js";
@@ -233,6 +234,7 @@ export interface CatalogAccessSummary {
 }
 
 export interface MerchantManagementApiOptions {
+  weixinChannel?: MerchantWeixinChannel;
   receiveCustomerIdentity?: ReturnType<typeof import("../../a2a/server/customer-identity-gateway.js").createCustomerIdentityReceiver>;
   /** 本实例商家（服务端绑定；不来自请求）。 */
   merchantId: string;
@@ -659,6 +661,10 @@ export function createMerchantManagementApiHandler(
       const rest =
         pathname === WORKBENCH_API_PREFIX ? "/" : pathname.slice(WORKBENCH_API_PREFIX.length);
       try {
+        if (rest === "/channels/weixin" || rest.startsWith("/channels/weixin/")) {
+          await routeWeixin(req, res, method, rest);
+          return;
+        }
         if (method === "GET") {
           await routeWorkbenchV1Get(req, res, url, rest, requestId);
           return;
@@ -707,6 +713,65 @@ export function createMerchantManagementApiHandler(
       return;
     }
     writeJson(res, 404, errorBody("not_found", "unknown management api path"));
+  }
+
+  async function routeWeixin(req: IncomingMessage, res: ServerResponse, method: string, rest: string): Promise<void> {
+    const channel = options.weixinChannel;
+    if (channel === undefined) throw new ManagementError("not_found", "微信通道未启用。");
+    const auth = requireActor(req);
+    const actor = assertVerifiedActor(auth.ctx, now());
+    if (actor.merchantId !== options.merchantId) throw new ManagementError("not_found", "微信通道不存在。");
+    if (actor.role !== "owner") throw new ManagementError("forbidden", "仅店主可管理微信通道。");
+    const base = "/channels/weixin";
+    if (method === "GET" && rest === base) {
+      writeJson(res, 200, channel.status());
+      return;
+    }
+    const action = rest.slice(base.length + 1);
+    if (method !== "POST" || !["begin", "poll", "cancel", "disconnect"].includes(action)) {
+      throw new ManagementError("not_found", "微信通道路由不存在。");
+    }
+    assertWriteGuards(req, auth.sessionId);
+    let fields: Record<string, unknown>;
+    try {
+      fields = objectFields(await readJsonBody(req, 2048),
+        action === "poll" ? ["attempt_id", "verify_code"] : action === "cancel" ? ["attempt_id"] : []);
+    } catch (error) {
+      if (error instanceof BodyTooLarge || error instanceof ManagementError) {
+        throw new ManagementError("invalid_input", "微信通道请求字段无效或请求过大。");
+      }
+      throw error;
+    }
+    const owner = {
+      sessionId: auth.sessionId,
+      generation: actor.generation,
+      current: () => {
+        if (actor.generation !== options.generation()) return false;
+        const session = options.sessions.getSession(auth.sessionId);
+        return session?.role === "owner" && session.merchant_id === options.merchantId &&
+          session.principal_id === actor.actorId;
+      },
+    };
+    try {
+      if (action === "begin") {
+        writeJson(res, 200, await channel.begin(owner));
+      } else if (action === "disconnect") {
+        await channel.disconnect(owner);
+        writeJson(res, 200, { status: "disconnected" });
+      } else {
+        const id = requireString(fields["attempt_id"], "attempt_id");
+        if (action === "cancel") {
+          channel.cancel(owner, id);
+          writeJson(res, 200, { status: "cancelled" });
+        } else {
+          const code = fields["verify_code"];
+          writeJson(res, 200, await channel.poll(owner, id, code === undefined ? undefined : requireString(code, "verify_code")));
+        }
+      }
+    } catch (error) {
+      if (error instanceof MerchantWeixinError) throw new ManagementError(error.code, error.message);
+      throw error;
+    }
   }
 
   // ── 只读路由（认证即鉴权入口；业务授权在服务层逐次复核）────────────────
@@ -5044,12 +5109,12 @@ export function createMerchantManagementApiHandler(
 
   // ── 输入与输出辅助 ─────────────────────────────────────────────────
 
-  async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  async function readJsonBody(req: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<unknown> {
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const chunk of req) {
       size += (chunk as Buffer).length;
-      if (size > MAX_BODY_BYTES) throw new BodyTooLarge();
+      if (size > maxBytes) throw new BodyTooLarge();
       chunks.push(chunk as Buffer);
     }
     if (chunks.length === 0) {

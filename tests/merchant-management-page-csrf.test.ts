@@ -32,10 +32,21 @@ type Element = {
   textContent: string;
   className: string;
   style: { display: string };
+  setAttribute: (name: string, value: string) => void;
+  getAttribute: (name: string) => string | null;
+  removeAttribute: (name: string) => void;
+  querySelectorAll: (selector: string) => unknown[];
 };
 
-function pageScript(): string {
-  const html = renderMerchantManagementPage({ productAuthority: "file" });
+function fakeElement(): Element {
+  return {
+    value: "", innerHTML: "", textContent: "", className: "", style: { display: "" },
+    setAttribute: () => {}, getAttribute: () => null, removeAttribute: () => {}, querySelectorAll: () => [],
+  };
+}
+
+function pageScript(weixinChannel: boolean): string {
+  const html = renderMerchantManagementPage({ productAuthority: "file", weixinChannel });
   return [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi)]
     .map((match) => match[1] ?? "")
     .join("\n");
@@ -70,14 +81,13 @@ function createPageContext(
     setTimeout,
     document: {
       querySelectorAll: () => [],
-      getElementById: (id: string) =>
-        (elements[id] ??= { value: "", innerHTML: "", textContent: "", className: "", style: { display: "" } }),
+      getElementById: (id: string) => (elements[id] ??= fakeElement()),
     },
   });
 }
 
-async function loadPage(context: ReturnType<typeof createContext>): Promise<void> {
-  await runInContext(pageScript(), context);
+async function loadPage(context: ReturnType<typeof createContext>, weixinChannel = false): Promise<void> {
+  await runInContext(pageScript(weixinChannel), context);
   // 等页面加载时的 /merchant/api/session 调用落定。
   await tick();
 }
@@ -94,6 +104,85 @@ async function eventually(predicate: () => boolean, timeoutMs = 2000): Promise<v
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
+
+describe("merchant workbench view lifecycle", () => {
+  it("renders and mounts Weixin and Alipay on the currently attached nodes", async () => {
+    const elements: Record<string, Element> = { view: fakeElement() };
+    let html = "";
+    // Replacing innerHTML creates a new panel even if the HTML is identical, as in the browser.
+    Object.defineProperty(elements.view, "innerHTML", {
+      get: () => html,
+      set: (value: string) => {
+        html = value;
+        delete elements["weixin-panel"];
+        delete elements["alipay-form"];
+        if (value.includes('id="weixin-panel"')) {
+          elements["weixin-panel"] = { ...fakeElement(), innerHTML: "正在读取连接状态…" };
+        }
+        if (value.includes('id="alipay-form"')) elements["alipay-form"] = fakeElement();
+      },
+    });
+    const context = createPageContext(elements, async (path) => {
+      switch (path) {
+        case "/merchant/api/session":
+          return Response.json({ role: "owner", can_manage_alipay_collection: true });
+        case "/merchant/api/v1/channels/weixin":
+          return Response.json({ configured: false, status: "disconnected" });
+        case "/merchant/api/v1/collection/alipay":
+          return Response.json({ enabled: false });
+        case "/merchant/api/v1/runtime/status":
+          return Response.json({ service_state: "OPERATING", capabilities: {} });
+        default:
+          throw new Error(`unexpected request ${path}`);
+      }
+    });
+    await loadPage(context, true);
+    expect(html).toContain("运行状态");
+
+    runInContext('current = "weixin"; refresh();', context);
+    await tick();
+    expect(elements["weixin-panel"]?.innerHTML).toContain("生成微信二维码");
+    expect(runInContext('typeof $("weixin-begin").onclick', context)).toBe("function");
+
+    runInContext('current = "collection"; refresh();', context);
+    expect(html).not.toContain('id="weixin-panel"');
+    await tick();
+    expect(html).toContain("支付宝收款");
+    expect(elements["alipay-form"]).toHaveProperty("onsubmit", expect.any(Function));
+  });
+
+  it("ignores a stale view after a 401 and can render again when requests succeed", async () => {
+    const elements: Record<string, Element> = {};
+    let finishOldStatus: (response: Response) => void = () => { throw new Error("no pending status request"); };
+    const oldStatus = new Promise<Response>((resolve) => { finishOldStatus = resolve; });
+    let statusCalls = 0;
+    const context = createPageContext(elements, async (path) => {
+      switch (path) {
+        case "/merchant/api/session":
+          return Response.json({ role: "owner" });
+        case "/merchant/api/v1/runtime/status":
+          return ++statusCalls === 1 ? oldStatus : Response.json({ merchant_name: "新的店铺状态", capabilities: {} });
+        case "/merchant/api/v1/channels/weixin":
+          return new Response(null, { status: 401 });
+        default:
+          throw new Error(`unexpected request ${path}`);
+      }
+    });
+    await loadPage(context, true);
+    expect(statusCalls).toBe(1);
+
+    runInContext('current = "weixin"; refresh();', context);
+    await tick();
+    expect(elements.view?.innerHTML).toContain("登录你的商家工作台");
+    finishOldStatus(Response.json({ merchant_name: "过期的店铺状态" }));
+    await tick();
+    expect(elements.view?.innerHTML).toContain("登录你的商家工作台");
+
+    runInContext('current = "status"; refresh();', context);
+    await tick();
+    expect(elements.view?.innerHTML).toContain("新的店铺状态");
+  });
+});
 
 describe("merchant workbench CSRF recovery", () => {
   it("refreshes the token and retries a write rejected by a stale CSRF token", async () => {

@@ -32,6 +32,7 @@ export function renderMerchantManagementPage(options: {
   productAuthority?: "file" | "exact";
   catalogConnection?: boolean;
   workbuddyAccess?: boolean;
+  weixinChannel?: boolean;
 } = {}): string {
   return `<!doctype html>
 <html lang="zh-CN">
@@ -166,6 +167,7 @@ export function renderMerchantManagementPage(options: {
   <button data-v="operating">商品经营</button>
   <button data-v="sales">销售工作台</button>
   <button data-v="outcomes">经营结果</button>
+  <button data-v="weixin" id="weixin-tab" hidden>微信通道</button>
   <p class="nav-foot">日常经营，井然有序。<br>Kiwi Merchant</p>
 </nav>
 <div class="workspace">
@@ -181,6 +183,8 @@ var API = "/merchant/api/v1";
 var FILE_PRODUCTS = ${options.productAuthority === "file"};
 var CATALOG_CONNECT = ${options.catalogConnection === true};
 var WORKBUDDY_ACCESS = ${options.workbuddyAccess === true};
+var WEIXIN_CHANNEL = ${options.weixinChannel === true};
+var viewSequence = 0;
 // 与 cloud/access/workbuddy-share-link 的 WORKBUDDY_CUSTODY_TERMS_VERSION 同值；
 // 浏览器产物必须自包含（verify:browser-artifact 禁止模块导入），所以这里是字面量，
 // 由 tests/merchant-management-api 断言两者一致。
@@ -299,6 +303,8 @@ function send(method, path, body, apiBase, again) {
   });
 }
 function showLogin() {
+  viewSequence++;
+  if (WEIXIN_CHANNEL) $("weixin-tab").hidden = true;
   $("view").innerHTML = '<div class="card login-card"><h2>登录你的商家工作台</h2>' +
     '<p class="muted">请使用商家管理员口令登录后回到本页。</p>' +
     '<p><a class="act primary" href="/admin/login?next=%2Fmerchant%2F">去登录</a></p></div>';
@@ -1017,6 +1023,11 @@ function bindAlipayApprovals() {
 }
 
 var views = {
+  weixin: function () {
+    return Promise.resolve('<div class="card"><h2>个人微信连接</h2>' +
+      '<p class="muted">用手机微信扫一扫并确认连接。仅配对的微信账号可以发送 /ping 测试连接，不会开启群发或微信审批。</p>' +
+      '<div id="weixin-panel"><p role="status">正在读取连接状态…</p></div></div>');
+  },
   collection: async function () {
     var config = await call("GET", ALIPAY_COLLECTION);
     var html = renderAlipayCollection(config);
@@ -1818,6 +1829,150 @@ function commitPolicy(draftId, digest) {
     refresh();
   }).catch(function (e) { bar("提交失败：" + e.message, true); });
 }
+function mountWeixin(sequence) {
+  var panel = $("weixin-panel");
+  var endpoint = "/channels/weixin";
+  var qr = null;
+  var expiryTimer;
+  var statusTimer;
+  var previousState = "";
+  var busy = false;
+  function active() { return current === "weixin" && sequence === viewSequence; }
+  function problem(e) { if (active()) bar(e.message, true); }
+  function reset() {
+    clearTimeout(expiryTimer);
+    clearTimeout(statusTimer);
+    qr = null;
+    previousState = "";
+    if (!active()) return;
+    panel.innerHTML = '<p role="status">正在读取连接状态…</p>';
+    updateStatus();
+  }
+  function updateStatus() {
+    if (!active() || qr || busy) return;
+    call("GET", endpoint).then(function (connection) {
+      if (!active() || qr || busy) return;
+      var state = connection.status;
+      if (state !== previousState) {
+        previousState = state;
+        var labels = {
+          disconnected: "未连接", checking: "扫码已确认，正在检查微信连接…",
+          connected: "已连接。可以在微信里向机器人发送 /ping 验证收发。",
+          retrying: "微信暂不可用，正在重试…", reconnect_required: "微信会话已失效，请断开后重新扫码。",
+          unavailable: "微信通道暂不可用，请稍后刷新。"
+        };
+        panel.innerHTML = '<p role="status">' + esc(labels[state] || "连接状态未知") + '</p>' +
+          (connection.configured
+            ? '<button type="button" class="act" id="weixin-disconnect">断开连接</button>'
+            : '<button type="button" class="act primary" id="weixin-begin">生成微信二维码</button>');
+        if (connection.configured) $("weixin-disconnect").onclick = disconnect;
+        else $("weixin-begin").onclick = begin;
+      }
+      if (state === "checking" || state === "retrying" || state === "connected") statusTimer = setTimeout(updateStatus, 4000);
+    }).catch(function (e) {
+      if (!active()) return;
+      panel.innerHTML = '<p role="status">无法读取连接状态。</p><button type="button" class="act" id="weixin-refresh">刷新</button>';
+      $("weixin-refresh").onclick = reset;
+      problem(e);
+    });
+  }
+  function disconnect() {
+    if (busy || !window.confirm("断开后，此工作台将停止接收微信测试消息。确定断开？")) return;
+    busy = true;
+    $("weixin-disconnect").disabled = true;
+    call("POST", endpoint + "/disconnect", {}).catch(problem).finally(function () { busy = false; reset(); });
+  }
+  function drawQr(rows) {
+    var canvas = $("weixin-qr");
+    var module = Math.floor(280 / (rows.length + 8));
+    canvas.width = canvas.height = module * (rows.length + 8);
+    var ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#000";
+    rows.forEach(function (row, y) {
+      for (var x = 0; x < row.length; x++) if (row[x] === "1") ctx.fillRect((x + 4) * module, (y + 4) * module, module, module);
+    });
+  }
+  function begin() {
+    if (busy) return;
+    busy = true;
+    clearTimeout(statusTimer);
+    $("weixin-begin").disabled = true;
+    call("POST", endpoint + "/begin", {}).then(function (attempt) {
+      if (!active()) return;
+      qr = attempt.attempt_id;
+      panel.innerHTML = '<p id="weixin-scan-state" role="status"></p>' +
+        '<canvas id="weixin-qr" role="img" aria-label="微信绑定二维码" style="max-width:100%;height:auto"></canvas>' +
+        '<form id="weixin-verify" hidden><label>手机微信配对码 <input id="weixin-code" type="text" inputmode="numeric" pattern="[0-9]{1,12}" maxlength="12" autocomplete="off" required></label> ' +
+        '<button class="act" id="weixin-submit-code">提交配对码</button></form>' +
+        '<p><button type="button" class="act" id="weixin-cancel">取消扫码</button></p>';
+      drawQr(attempt.qr_rows);
+      $("weixin-verify").onsubmit = function (e) {
+        e.preventDefault();
+        var code = $("weixin-code").value;
+        $("weixin-code").value = "";
+        poll(code);
+      };
+      $("weixin-cancel").onclick = function () {
+        this.disabled = true;
+        var id = qr;
+        qr = null;
+        clearTimeout(expiryTimer);
+        panel.innerHTML = '<p role="status">正在取消扫码…</p>';
+        call("POST", endpoint + "/cancel", { attempt_id: id }).catch(problem).finally(reset);
+      };
+      expiryTimer = setTimeout(function () {
+        if (active() && qr === attempt.attempt_id) { bar("微信二维码已过期，请重新生成。", true); reset(); }
+      }, Math.max(0, Date.parse(attempt.expires_at) - Date.now()));
+      showScanState(attempt.status);
+    }).catch(function (e) { problem(e); reset(); }).finally(function () {
+      busy = false;
+      if (!qr) updateStatus();
+    });
+  }
+  function showScanState(state) {
+    var needsCode = state === "verification_required";
+    $("weixin-scan-state").textContent = needsCode ? "请输入手机微信显示的数字配对码。" :
+      state === "scanned" ? "已扫码，请在手机微信上确认。" : "请使用手机微信扫一扫。";
+    $("weixin-verify").hidden = !needsCode;
+    var id = qr;
+    if (!needsCode) setTimeout(function () { if (qr === id) poll(); }, 1600);
+  }
+  function poll(code) {
+    if (!active() || !qr) return;
+    var id = qr;
+    var body = { attempt_id: id };
+    if (typeof code === "string") {
+      body.verify_code = code;
+      $("weixin-submit-code").disabled = true;
+    }
+    call("POST", endpoint + "/poll", body).then(function (result) {
+      if (!active() || qr !== id) return;
+      $("weixin-submit-code").disabled = false;
+      if (result.status === "confirmed") {
+        reset();
+      } else if (result.status === "expired" || result.status === "verify_code_blocked" || result.status === "binded_redirect") {
+        var messages = {
+          expired: "微信二维码已过期，请重新生成。",
+          verify_code_blocked: "配对码错误次数过多，请重新生成二维码。",
+          binded_redirect: "该微信已有绑定，请在手机微信上解除原绑定后重试。"
+        };
+        bar(messages[result.status], true);
+        reset();
+      } else {
+        if (body.verify_code && result.status === "verification_required") bar("配对码尚未通过，请核对手机上的数字后再试。", true);
+        showScanState(result.status);
+      }
+    }).catch(function (e) {
+      if (!active() || qr !== id) return;
+      problem(e);
+      if (body.verify_code) $("weixin-submit-code").disabled = false;
+      else reset();
+    });
+  }
+  updateStatus();
+}
 var current = "status";
 var VIEW_COPY = {
   status: ["服务状态", "掌握接待状态，管理店铺与目录连接。"],
@@ -1829,7 +1984,8 @@ var VIEW_COPY = {
   collection: ["收款方式", "管理只向符合条件的买家提供的收款指引。"],
   operating: ["商品经营", "选择商品、设定条件与授权，控制生效区间。"],
   sales: ["销售工作台", "处理待办、下一动作与持久跟进。"],
-  outcomes: ["经营结果", "分开查看订单证据、归因与贡献。"]
+  outcomes: ["经营结果", "分开查看订单证据、归因与贡献。"],
+  weixin: ["微信通道", "连接店主的个人微信，查看连接状态。"]
 };
 function decorateView() {
   var view = $("view");
@@ -1860,13 +2016,12 @@ function decorateView() {
 if (typeof MutationObserver !== "undefined") {
   new MutationObserver(decorateView).observe($("view"), { childList: true, subtree: true });
 }
-var renderSequence = 0;
 var previousView = "";
 function refresh() {
+  var sequence = ++viewSequence;
   var copy = VIEW_COPY[current];
-  var sequence = ++renderSequence;
   var view = $("view");
-  if (previousView === "collection" || current === "collection") {
+  if (previousView === "collection" || current === "collection" || previousView === "weixin" || current === "weixin") {
     view.innerHTML = '<div class="card">加载中…</div>';
   }
   previousView = current;
@@ -1874,8 +2029,9 @@ function refresh() {
   $("page-description").textContent = copy[1];
   view.setAttribute("data-view", current);
   views[current]().then(function (html) {
-    if (sequence !== renderSequence) return;
+    if (sequence !== viewSequence) return;
     view.innerHTML = html; decorateView();
+    if (current === "weixin") mountWeixin(sequence);
     if (current === "collection") { bindAlipayCollection(); bindAlipayApprovals(); }
     if (current === "status" && CATALOG_CONNECT && ROLE === "owner") {
       if (catalogConnectionState && catalogConnectionState.bindingId) {
@@ -1904,6 +2060,7 @@ fetch("/merchant/api/session", { credentials: "same-origin" }).then(function (re
   if (!session) return;
   CSRF = session.csrf_token || "";
   ROLE = session.role || "";
+  if (WEIXIN_CHANNEL && ROLE === "owner") $("weixin-tab").hidden = false;
   $("collection-tab").hidden = session.can_manage_alipay_collection !== true;
   $("who").textContent = "商家 " + session.merchant_id + " · " + ROLE;
   refresh();

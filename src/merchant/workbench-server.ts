@@ -19,6 +19,7 @@ import type { AgentProfile } from "../config/profile.js";
 import { resolveSecret } from "../config/profile.js";
 import { ShoppingCliCommerceDataSource } from "../commerce/shopping-cli-source.js";
 import { createMerchantManagementApiHandler } from "../http/merchant-management/api.js";
+import { MerchantWeixinChannel } from "./weixin-channel.js";
 import { MerchantImportDraftStore } from "../http/merchant-management/draft-store.js";
 import { MerchantManagementOperationStore } from "../http/merchant-management/operation-store.js";
 import { renderMerchantManagementPage } from "../http/merchant-management/page.js";
@@ -383,7 +384,9 @@ export async function startStandaloneMerchantWorkbench(
     port,
     options.publicOrigin ?? profile.merchant_mcp?.public_url,
   );
+  const weixinChannel = new MerchantWeixinChannel({ dataDir, merchantId: profile.owner_id });
   const api = createMerchantManagementApiHandler({
+    weixinChannel,
     receiveCustomerIdentity: createCustomerIdentityReceiver({
       db, now, merchantId: profile.owner_id, assertOwner: assembly.assertGovernanceOwner,
     }),
@@ -422,6 +425,7 @@ export async function startStandaloneMerchantWorkbench(
     productAuthority: productReader !== undefined ? "file" : "exact",
     catalogConnection: false,
     workbuddyAccess: false,
+    weixinChannel: true,
   });
   const server = createServer(
     routeRequest({
@@ -445,6 +449,12 @@ export async function startStandaloneMerchantWorkbench(
         close: (cb) => server.close(cb),
       });
     });
+  }).catch(async (error: unknown) => {
+    await weixinChannel.close();
+    await adminHandle.close().catch(() => undefined);
+    await assembly.close().catch(() => undefined);
+    db.close();
+    throw error;
   });
   let memoryServer: Awaited<ReturnType<typeof startMemoryProposalServer>> | undefined;
   try {
@@ -454,12 +464,14 @@ export async function startStandaloneMerchantWorkbench(
       memoryServer = await startMemoryProposalServer(socketPath, assembly.proposeReceptionMemory);
     }
   } catch (error) {
+    await weixinChannel.close();
     await new Promise<void>((resolve) => listening.close(resolve));
     await adminHandle.close().catch(() => undefined);
     await assembly.close().catch(() => undefined);
     db.close();
     throw error;
   }
+  weixinChannel.restore();
   let closed = false;
   const close = async (): Promise<void> => {
     if (closed) return;
@@ -469,6 +481,7 @@ export async function startStandaloneMerchantWorkbench(
     deliveryDispatcher?.stop();
     deliveryGate?.close();
     if (memoryServer) await new Promise<void>((resolve) => memoryServer!.close(() => resolve()));
+    await weixinChannel.close();
     await new Promise<void>((resolve) => listening.close(resolve));
     await adminHandle.close().catch(() => undefined);
     await assembly.close().catch(() => undefined);

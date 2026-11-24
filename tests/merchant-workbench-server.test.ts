@@ -118,7 +118,9 @@ describe("standalone merchant workbench", () => {
     workbenches.push(handle);
     const page = await fetch(handle.url);
     expect(page.status).toBe(200);
-    expect(await page.text()).toContain("商家工作台");
+    const pageHtml = await page.text();
+    expect(pageHtml).toContain("商家工作台");
+    expect(pageHtml).toContain("var WEIXIN_CHANNEL = true");
     const live = await fetch(new URL("/livez", handle.url));
     expect(live.status).toBe(200);
     expect((await live.json()) as { ok: boolean }).toMatchObject({ ok: true });
@@ -132,6 +134,9 @@ describe("standalone merchant workbench", () => {
     expect(login.status).toBe(303);
     const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
     expect(cookie).toContain("kiwi_admin=");
+    const weixin = await fetch(new URL("/merchant/api/v1/channels/weixin", handle.url), { headers: { cookie } });
+    expect(weixin.status).toBe(200);
+    expect(await weixin.json()).toEqual({ status: "disconnected", configured: false });
     const policy = await fetch(new URL("/merchant/api/v1/policy", handle.url), {
       headers: { cookie },
     });

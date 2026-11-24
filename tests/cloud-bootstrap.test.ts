@@ -640,6 +640,11 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
       expect(login.status).toBe(303);
       expect(login.headers.get("location")).toBe("/merchant/");
       const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+      const workbench = await fetch(`${base}/merchant/`, { headers: { cookie } });
+      expect(await workbench.text()).toContain("var WEIXIN_CHANNEL = true");
+      const weixin = await fetch(`${base}/merchant/api/v1/channels/weixin`, { headers: { cookie } });
+      expect(weixin.status).toBe(200);
+      expect(await weixin.json()).toEqual({ status: "disconnected", configured: false });
       // 待批准页提供返回商家工作台入口
       const pending = await fetch(`${base}/admin/pending`, { headers: { cookie } });
       expect(pending.status).toBe(200);

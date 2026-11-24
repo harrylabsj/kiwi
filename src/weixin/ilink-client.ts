@@ -124,10 +124,11 @@ export class IlinkClient {
    * "该微信号已绑定过本 bot"并返回 `binded_redirect`。kiwi 每次绑定都建立
    * 独立 bot 身份，不带已知 token（空列表），由调用方处理绑定冲突。
    */
-  async getBotQrcode(): Promise<BotQrcode> {
+  async getBotQrcode(signal?: AbortSignal): Promise<BotQrcode> {
     const body = (await this.request("POST", `${EP_GET_BOT_QR}?bot_type=3`, {
       timeoutMs: QR_TIMEOUT_MS,
       payload: { local_token_list: [] },
+      ...(signal !== undefined ? { signal } : {}),
     })) as Record<string, unknown>;
     const qrcode = body.qrcode;
     const qrcodeImgContent = body.qrcode_img_content;
@@ -143,13 +144,14 @@ export class IlinkClient {
    * `need_verifycode` 时手机微信会显示一串数字，必须带上 `verify_code` 重新
    * 轮询；配对码错误会再次返回 `need_verifycode`。
    */
-  async getQrcodeStatus(qrcode: string, options: { verifyCode?: string } = {}): Promise<QrcodeStatus> {
+  async getQrcodeStatus(qrcode: string, options: { verifyCode?: string; signal?: AbortSignal } = {}): Promise<QrcodeStatus> {
     const verify =
       options.verifyCode !== undefined && options.verifyCode !== ""
         ? `&verify_code=${encodeURIComponent(options.verifyCode)}`
         : "";
     const body = (await this.request("GET", `${EP_GET_QR_STATUS}?qrcode=${encodeURIComponent(qrcode)}${verify}`, {
       timeoutMs: QR_TIMEOUT_MS,
+      ...(options.signal !== undefined ? { signal: options.signal } : {}),
     })) as Record<string, unknown>;
     const status = String(body.status ?? "");
     if (status === "confirmed") {
@@ -279,7 +281,7 @@ export class IlinkClient {
   }
 
   /** POST ilink/bot/sendmessage → 回显 context_token（协议要求）。 */
-  async sendMessage(input: SendMessageInput, credentials: BotCredentials): Promise<void> {
+  async sendMessage(input: SendMessageInput, credentials: BotCredentials, signal?: AbortSignal): Promise<void> {
     const message: Record<string, unknown> = {
       from_user_id: "",
       to_user_id: input.to_user_id,
@@ -293,6 +295,7 @@ export class IlinkClient {
     }
     const body = (await this.request("POST", EP_SEND_MESSAGE, {
       timeoutMs: API_TIMEOUT_MS,
+      ...(signal !== undefined ? { signal } : {}),
       payload: { msg: message, base_info: baseInfoOf(credentials) },
     })) as Record<string, unknown>;
     assertOk(body, "sendmessage");
@@ -305,6 +308,7 @@ export class IlinkClient {
     path: string,
     options: { timeoutMs: number; payload?: Record<string, unknown>; signal?: AbortSignal },
   ): Promise<unknown> {
+    options.signal?.throwIfAborted();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), options.timeoutMs);
     // 审查 P2-M：外部 abort（通道 stop()）转发到内部 controller——长轮询
@@ -332,6 +336,9 @@ export class IlinkClient {
         throw new WeixinError("redirect", `iLink ${path} 重定向被拒绝 (${response.status})`);
       }
       if (!response.ok) {
+        if ((path === EP_GET_UPDATES || path === EP_SEND_MESSAGE) && (response.status === 401 || response.status === 403)) {
+          throw new WeixinError("auth", `iLink ${path} 拒绝凭证 (${response.status})`);
+        }
         throw new WeixinError("http", `iLink ${path} HTTP ${response.status}`);
       }
       try {
