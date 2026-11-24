@@ -9,7 +9,7 @@
  *
  * 用法：
  *   node scripts/export-workbuddy-config.mjs \
- *     --base platform/platform-export/2026-11-14/industry-config.json \
+ *     --base platform/platform-export/2026-11-24/industry-config.json \
  *     --local platform/out/industry-config.json \
  *     --out platform/out/industry-config.platform-import.json
  */
@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const DEFAULT_BASE = path.join(
   repoRoot,
-  "integrations/hosts/workbuddy/kiwi-merchant-buddy/platform/platform-export/2026-11-14/industry-config.json",
+  "integrations/hosts/workbuddy/kiwi-merchant-buddy/platform/platform-export/2026-11-24/industry-config.json",
 );
 export const DEFAULT_LOCAL = path.join(
   repoRoot,
