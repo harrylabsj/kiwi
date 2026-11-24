@@ -370,39 +370,68 @@ describe("runtime Catalog connection API", () => {
       expect(beginCalls - before).toBe(2);
     } finally { missingShareLink = false; }
   });
-  it("page loads only safe status until the owner requests pairing, and rejects credential-bearing links", async () => {
+  it("loads pairing automatically only for owners awaiting confirmation and rejects credential-bearing links", async () => {
     let pairingReads = 0;
+    let status = "awaiting_confirmation";
     let verificationUri = "https://user:example@catalog.example/portal/connect/test";
-    const elements: Record<string, { innerHTML: string; textContent: string; className: string; style: { display: string } }> = {};
+    const elements: Record<string, {
+      innerHTML: string; textContent: string; className: string; style: { display: string };
+      setAttribute: () => void; querySelectorAll: () => unknown[];
+    }> = {};
     const context = createContext({
       URL,
       document: {
         querySelectorAll: () => [],
-        getElementById: (id: string) => elements[id] ??= { innerHTML: "", textContent: "", className: "", style: { display: "" } },
+        getElementById: (id: string) => elements[id] ??= {
+          innerHTML: "", textContent: "", className: "", style: { display: "" },
+          setAttribute: () => {}, querySelectorAll: () => [],
+        },
       },
       fetch: async (requestPath: string) => {
         if (requestPath === "/merchant/api/session") return new Response("null");
+        if (requestPath.endsWith("/runtime/status")) {
+          return Response.json({ service_state: "OPERATING", capabilities: {} });
+        }
         if (requestPath.endsWith("/pairing")) {
           pairingReads += 1;
           return Response.json({ pairing: { user_code: "<SAMPLE-CODE>", verification_uri: verificationUri, expires_at: "2030-01-01" } });
         }
-        return Response.json({ status: "awaiting_confirmation", published: false });
+        return Response.json({ status, published: false });
       },
     });
-    const script = inlineScriptBodies(renderMerchantManagementPage({ catalogConnection: true }))[0];
-    await runInContext(script!, context);
-    runInContext('ROLE = "owner"', context);
-    const panel = await runInContext('appendCatalogConnection("")', context) as string;
-    expect(panel).toContain("本人查看配对信息");
-    expect(panel).not.toContain("SAMPLE-CODE");
+    for (const script of inlineScriptBodies(renderMerchantManagementPage({ catalogConnection: true }))) {
+      await runInContext(script, context);
+    }
+    const refreshPage = async () => {
+      runInContext("refresh()", context);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    };
+
+    runInContext('ROLE = "operator"', context);
+    await refreshPage();
+    expect(elements["view"]?.innerHTML).not.toContain('id="catalog-pairing"');
     expect(pairingReads).toBe(0);
-    await runInContext("showCatalogPairing()", context);
+
+    status = "idle";
+    runInContext('ROLE = "owner"', context);
+    await refreshPage();
+    expect(elements["view"]?.innerHTML).toContain(">发布名片</button>");
+    expect(elements["view"]?.innerHTML).not.toContain('id="catalog-pairing"');
+    expect(pairingReads).toBe(0);
+
+    status = "awaiting_confirmation";
+    await refreshPage();
+    expect(elements["view"]?.innerHTML).toContain('id="catalog-pairing"');
+    expect(elements["view"]?.innerHTML).not.toContain("SAMPLE-CODE");
     expect(elements["catalog-pairing"]?.innerHTML).toBe("");
-    expect(elements["bar"]?.className).toBe("err");
+    expect(elements["catalog-pairing"]?.textContent).toContain("无法读取配对信息");
+    expect(pairingReads).toBe(1);
+
     verificationUri = "https://catalog.example/portal/connect/test";
-    await runInContext("showCatalogPairing()", context);
+    await refreshPage();
     expect(elements["catalog-pairing"]?.innerHTML).toContain("&lt;SAMPLE-CODE&gt;");
     expect(elements["catalog-pairing"]?.innerHTML).toContain('rel="noopener noreferrer"');
+    expect(pairingReads).toBe(2);
   });
 
   it("连接卡透出稳定错误码与固定可重试文案（A15 诊断呈现面）", async () => {
@@ -421,10 +450,10 @@ describe("runtime Catalog connection API", () => {
       const script = inlineScriptBodies(renderMerchantManagementPage({ productAuthority: "file", catalogConnection: true }))[0];
       await runInContext(script!, context);
       runInContext('ROLE = "owner"', context);
-      const panel = await runInContext('appendCatalogConnection("")', context) as string;
+      const panel = await runInContext('appendCatalogSetup("")', context) as string;
       expect(panel).toContain("授权已过期，请重新发起");
       expect(panel).toContain("[PAIRING_WINDOW_EXPIRED]");
-      expect(panel).toContain("上次授权已过期：请重新发起，并在 10 分钟内到目录完成确认");
+      expect(panel).toContain("上次授权已过期：请重新发起，并在 10 分钟内到Kiwi网关完成确认");
       expect(panel).not.toContain("MUST_NOT_LEAK");
     } finally { summaryErrorCode = undefined; }
   });
@@ -436,7 +465,7 @@ describe("runtime Catalog connection API", () => {
     expect(inlineScriptBodies(html)).toEqual(['var marker = "<script>kept";', "second()"]);
     expect(inlineScriptBodies("<p>no script here</p>")).toEqual([]);
     const rendered = inlineScriptBodies(renderMerchantManagementPage({ productAuthority: "file", catalogConnection: true }));
-    expect(rendered.join("\n")).toContain("appendCatalogConnection");
+    expect(rendered.join("\n")).toContain("appendCatalogSetup");
   });
 });
 
