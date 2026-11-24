@@ -370,7 +370,10 @@ describe("WeixinChannel 集成", () => {
       timings: { schedulerTickMs: 0, negotiateTickMs: 0 },
     });
     const secondRun = secondChannel.run();
-    await waitFor(() => processed.includes("第二条"));
+    // Kernel 已接到第二条不代表续跑批次已提交；以带新游标的下一轮请求为完成屏障。
+    await waitFor(() => mock.requests.some(
+      (r) => r.url.includes("getupdates") && JSON.parse(r.body).get_updates_buf === "cursor-next",
+    ));
     await secondChannel.stop();
     await secondRun;
     const resumed = JSON.parse(readFileSync(files.sync, "utf-8")) as { get_updates_buf: string };
