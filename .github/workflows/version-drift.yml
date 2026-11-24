@@ -1,0 +1,26 @@
+name: Version drift check
+
+# 每天检查一次：组件 main / portfolio.lock pin / registry 三者不一致时自动开
+# issue，防止「修复已合并未发布」类事故（2026-11-24 海纳百川重绑 409）重演。
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903
+        with:
+          node-version: "22.22.3"
+      - name: Check version drift
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/check-version-drift.mjs
