@@ -142,10 +142,12 @@ jobs:
       - name: Check version drift on unselected channels
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRIFT_CHANNELS: ${{ inputs.channels }}
+          DRIFT_ACK: ${{ inputs.acknowledge_unpinned_skips }}
         run: >-
           node scripts/check-version-drift.mjs --gate
-          --channels="${{ inputs.channels }}"
-          ${{ inputs.acknowledge_unpinned_skips && '--acknowledge-skips' || '' }}
+          --channels="$DRIFT_CHANNELS"
+          $([ "$DRIFT_ACK" = "true" ] && echo "--acknowledge-skips" || true)
   build-once:
     name: Build, verify, and sign release bundle
     runs-on: ubuntu-latest
