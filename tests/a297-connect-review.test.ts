@@ -755,7 +755,7 @@ it("two real processes consume one challenge and publish once; callback RMW does
     await Promise.all(children.map(stopChild));
   }
 });
-it("lost effect reply and expired claim cannot rebind or start another enrollment automatically", async () => {
+it("lost effect reply is never retried automatically; after grant window death, reconcile marks expired and explicit begin may re-pair", async () => {
   const h = await makeHarness(),
     base = h.serviceOptions.fetchImpl;
   const lost = (async (input, init) => {
@@ -768,6 +768,7 @@ it("lost effect reply and expired claim cannot rebind or start another enrollmen
   await expect(a.reconcile()).rejects.toThrow();
   expect(h.catalog.counts.binds).toBe(1);
   expect((sessionRecord(h.dataDir).operation_claim as { state: string }).state).toBe("unknown");
+  // 自动路径绝不重试：副作用可能已到达，未对账前不得二次 bind。
   const b = createMerchantConnectionService(h.serviceOptions);
   await expect(b.reconcile()).rejects.toMatchObject({ code: "CONNECTION_OPERATION_UNKNOWN" });
   expect(h.catalog.counts.binds).toBe(1);
@@ -775,9 +776,21 @@ it("lost effect reply and expired claim cannot rebind or start another enrollmen
     ...h.serviceOptions,
     now: () => new Date(Date.now() + 3600000),
   });
+  // 窗口刚过、尚未判死时：显式 begin 同样被拒（no stale lease stealing）。
   await expect(expired.begin()).rejects.toMatchObject({ code: "CONNECTION_OPERATION_UNKNOWN" });
   expect(h.catalog.counts.deviceCreates).toBe(1);
   expect(readEnrollmentStore(h.dataDir).consumed).toEqual([]);
+  // reconcile 判死：窗口过期 → Catalog 必拒绝该 enrollment 的一切后续写，
+  // 副作用不再悬而未决，标 expired 并清除僵尸 claim。
+  const judged = await expired.reconcile();
+  expect(judged.status).toBe("expired");
+  expect(sessionRecord(h.dataDir).operation_claim).toBeUndefined();
+  expect(h.catalog.counts.binds).toBe(1);
+  // 判死后人工显式 begin 允许重新配对（2026-11-24 海纳百川死锁事故：
+  // 此前这条路径被永久挡住，商家无任何自助恢复手段）。
+  const restarted = await expired.begin();
+  expect(["preparing", "awaiting_confirmation"]).toContain(restarted.status);
+  expect(h.catalog.counts.deviceCreates).toBe(2);
 });
 it("concurrent begin claims creation before network, does not create a duplicate enrollment", async () => {
   const h = await makeHarness(),
