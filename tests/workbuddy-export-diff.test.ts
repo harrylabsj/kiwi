@@ -220,6 +220,25 @@ describe("WorkBuddy 平台导出差异工具", () => {
     ).toBe(true);
   });
 
+  it("比较共有场景的相对顺序，并单独报告新增场景", () => {
+    const live = normalizeExport(exportFixture("same prompt"));
+    const local = normalizeLocal(localFixture("same prompt"));
+    const [register] = live.modes[0]!.scenes;
+    const cloud = { ...register!, id: "cap-cloud-deploy", templates: [] };
+    const card = { ...register!, id: "cap-catalog-publish", templates: [] };
+    live.modes[0]!.scenes.push(cloud, card);
+    local.modes[0]!.scenes.push(card, { ...cloud, id: "cap-extra" }, cloud);
+
+    expect(diffPlatformConfigs(live, local)).toEqual(expect.arrayContaining([
+      {
+        path: "modes.onboarding.scenes.order",
+        live: [register!.id, cloud.id, card.id],
+        local: [register!.id, card.id, cloud.id],
+      },
+      { path: "modes.onboarding.scenes.cap-extra", live: "missing", local: "present" },
+    ]));
+  });
+
   it("CLI 可对比 2026-11-14 快照并输出稳定 JSON", () => {
     const stdout = execFileSync(
       process.execPath,
