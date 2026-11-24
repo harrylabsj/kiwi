@@ -364,7 +364,8 @@ function renderCatalogSetup(s, a) {
   var shareForm = a ? renderShareSettings(a, WORKBUDDY_ACCESS && canBegin) : "";
   return '<div class="card"><h2>Kiwi网关</h2><p id="catalog-status">' + esc(catalogStatusText(s)) + '</p>' +
     (s.bindingId ? '<p>Kiwi 账户 <span id="bound-account">正在核对…</span></p>' : '') +
-    (s.errorCode ? '<p class="muted">' + esc(PAIRING_CODE_HINTS[s.errorCode] || s.errorCode) + '</p>' : '') +
+    (s.errorCode ? '<p class="muted">' + (PAIRING_CODE_HINTS[s.errorCode] ? esc(PAIRING_CODE_HINTS[s.errorCode]) + ' ' : '') +
+      '[' + esc(s.errorCode) + ']</p>' : '') +
     (s.published ? '<p id="public-inquiry-status" class="muted" aria-live="polite">正在读取开放询价状态…</p>' :
       '<p class="muted">' + (WORKBUDDY_ACCESS
         ? '发布后默认开放询价，买家无需注册即可通过Kiwi网关询价。'
@@ -415,7 +416,9 @@ function accessStatusText(a) {
 function accessSyncText(a) {
   var state = a && a.catalogSync;
   if (state === "synced") return "Kiwi网关路由已同步。";
-  if (state === "pending" || state === "failed") return "接入方式已保存在本机。买家仍按Kiwi网关原有设置接入，可刷新重试。";
+  var retryHint = "接入方式已保存在本机。买家仍按Kiwi网关原有设置接入，可刷新重试。";
+  if (state === "failed") return "同步失败（" + (a.catalogSyncError || "SYNC_FAILED") + "）。" + retryHint;
+  if (state === "pending") return retryHint;
   if (state === "unsupported") return "当前Kiwi网关暂不支持同步接入方式。";
   if (state === "unbound") return "接入方式将在完成名片发布后同步。";
   return "";

@@ -832,7 +832,7 @@ describe("WP11 规则表单 → 草稿（候选）生成", () => {
     expect(autoBlock).toContain("关闭");
     expect(autoBlock).not.toContain("不修改");
     expect(html).toContain('id="pf-sku-rules"');
-    expect(html).toContain("上架/下架在目录商家后台设置");
+    expect(html).toContain("上架/下架在Kiwi网关商家后台设置");
     expect(html).toContain("商品上架后长期有效");
     // 新鲜期概念取消：不再出现旧的下架/新鲜期文案。
     expect(html).not.toContain("已下架（有效期已过）");

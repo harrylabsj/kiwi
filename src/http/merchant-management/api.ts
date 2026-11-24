@@ -3875,7 +3875,7 @@ export function createMerchantManagementApiHandler(
     assertWriteGuards(req, auth.sessionId);
     authorizeOrThrow(auth.ctx, "onboarding:manage");
     if (options.catalogConnection !== undefined) {
-      throw new ManagementError("conflict", "本实例通过Kiwi网关发布名片，请使用工作台的「发布名片」入口。");
+      throw new ManagementError("conflict", "本实例通过Kiwi网关发布名片。不能同时启动旧部署向导，请使用工作台的「发布名片」入口。");
     }
     const body = await readJsonBody(req);
     const fields = objectFields(body, [
