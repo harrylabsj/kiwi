@@ -690,7 +690,7 @@
     },
     {
       "path": "docs/platform-release-ledger.md",
-      "sha256": "sha256:dd154bd2680f9c3dd6a6765e4c7f30ca4155ce12eb3bc207f53927dcf13e09e4"
+      "sha256": "sha256:7aebc4e05d4bff6e904854316242b51fd78428db09e5505a6555e1b14667c2fb"
     },
     {
       "path": "docs/portfolio-release-management.md",
@@ -3654,11 +3654,11 @@
     },
     {
       "path": "portfolio-products.json",
-      "sha256": "sha256:4f4714cf9ea7e1a1b50b7365683581a3ea8a77d3733331edda2ba6ecc51e03b1"
+      "sha256": "sha256:e02af7106272226579851b3a9af82ac4e3147558ccc4fd420f51c8c427dc8838"
     },
     {
       "path": "portfolio.lock.json",
-      "sha256": "sha256:142b1e640b8b92e24bd876c105cadbb46c595efcfb924a984717a033fdad8466"
+      "sha256": "sha256:8953c7df113945cb7e60b51b5b637f4359b4337e50fee50e6eb36859f1555edb"
     },
     {
       "path": "scripts/a236-packed-merchant-assembly.mjs",
