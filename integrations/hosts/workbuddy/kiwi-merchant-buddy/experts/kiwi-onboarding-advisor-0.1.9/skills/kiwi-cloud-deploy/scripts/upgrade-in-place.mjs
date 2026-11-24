@@ -9,13 +9,14 @@
  * 不碰云端数据目录、不读任何口令或 token。发布动作仍由当前会话真实提供的工具完成。
  *
  * 用法：
- *   node upgrade-in-place.mjs --publish-dir <绝对路径> --staged <新版本包目录绝对路径> [--dry-run]
+ *   node upgrade-in-place.mjs --workspace <绝对路径> --app-id <已核验 ID> --origin <已核验 origin> --staged <新版本包目录绝对路径> [--dry-run]
  *
  * 退出码：0 成功（含 --dry-run），1 前置条件/校验失败。
  */
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
+import { resolveUpgradeTarget } from "./resolve-upgrade-target.mjs";
 
 // 允许替换的程序文件/目录；其余（cloud.config.json、pilot/、node_modules/ 等）一律不动。
 const REPLACED = ["app", "contracts", "scripts", "index.js", "package.json", "build-manifest.json"];
@@ -27,18 +28,19 @@ function fail(message) {
 }
 
 function parseArgs(argv) {
-  const options = { publishDir: undefined, staged: undefined, dryRun: false };
+  const options = { workspace: undefined, appId: undefined, origin: undefined, staged: undefined, dryRun: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === "--publish-dir") options.publishDir = argv[++i];
+    if (arg === "--workspace") options.workspace = argv[++i];
+    else if (arg === "--app-id") options.appId = argv[++i];
+    else if (arg === "--origin") options.origin = argv[++i];
     else if (arg === "--staged") options.staged = argv[++i];
     else if (arg === "--dry-run") options.dryRun = true;
-    else fail(`未知参数 ${arg}`);
+    else fail("UNEXPECTED_UPGRADE_ARGUMENT");
   }
-  if (options.publishDir === undefined || options.staged === undefined) {
-    fail("用法：node upgrade-in-place.mjs --publish-dir <绝对路径> --staged <新版本包目录绝对路径> [--dry-run]");
+  if (!options.staged || !path.isAbsolute(options.staged)) {
+    fail("STAGED_ABSOLUTE_PATH_REQUIRED");
   }
-  if (!path.isAbsolute(options.publishDir) || !path.isAbsolute(options.staged)) fail("两个路径都必须是绝对路径");
   return options;
 }
 
@@ -62,10 +64,15 @@ function singleLine(value, label) {
 }
 
 const options = parseArgs(process.argv.slice(2));
-const publishDir = path.resolve(options.publishDir);
+let target;
+try {
+  target = resolveUpgradeTarget(options);
+} catch (error) {
+  fail(error.message);
+}
+const publishDir = target.local_dir;
 const stagedDir = path.resolve(options.staged);
 
-if (!existsSync(publishDir) || !lstatSync(publishDir).isDirectory()) fail(`发布目录不存在或不是目录：${publishDir}`);
 if (!existsSync(stagedDir) || !lstatSync(stagedDir).isDirectory()) fail(`新版本目录不存在或不是目录：${stagedDir}`);
 if (publishDir === stagedDir || publishDir.startsWith(`${stagedDir}${path.sep}`) || stagedDir.startsWith(`${publishDir}${path.sep}`)) {
   fail("发布目录与新版本目录不能互相包含");
@@ -116,6 +123,7 @@ if (existsSync(backupDir)) fail(`备份目录已存在：${backupDir}`);
 
 const receipt = {
   schema: "kiwi.cloud.upgrade-in-place/1",
+  app_id: target.app_id,
   publish_dir: publishDir,
   staged_dir: stagedDir,
   version: { from: before.version, to: nextVersion },

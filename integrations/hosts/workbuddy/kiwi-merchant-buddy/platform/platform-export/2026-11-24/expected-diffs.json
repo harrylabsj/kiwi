@@ -1,7 +1,7 @@
 {
   "schema": "kiwi.workbuddy.platform-export-expected-diffs.v1",
   "export_date": "2026-11-24",
-  "diff_count": 29,
+  "diff_count": 30,
   "diffs": [
     {
       "path": "chat.placeholderEn",
@@ -209,11 +209,18 @@
       "local_length": 62
     },
     {
+      "path": "modes.onboarding.scenes.cap-upgrade.systemPrompt",
+      "live_sha256": "sha256:5de111ee6d0fd306ccc6fc92452bd17c7f4c173f1901258269eba31b897317b9",
+      "local_sha256": "sha256:82f24d5f0548c6a34615299d31cd62ee06763431a291bbcf26bc27b3fa2eef25",
+      "live_length": 175,
+      "local_length": 357
+    },
+    {
       "path": "modes.onboarding.systemPrompt",
       "live_sha256": "sha256:2d3886777b967739e57d50f7874f45039d8db378bc2d973af1cf68c084c3acac",
-      "local_sha256": "sha256:5a3f320e22814c89977c2ce02977ea17f087fd8c9adeeb97cc2e8797b9f2e19f",
+      "local_sha256": "sha256:63becf74f5ab56d7770f8d4be5dbec4b8b8968bf5d735dcc9767c4961a56a61f",
       "live_length": 1355,
-      "local_length": 1147
+      "local_length": 1339
     }
   ],
   "live_market": {

@@ -3,9 +3,9 @@
 当前会话确实没有提供 WorkBuddy 应用发布工具时，不要变通、不要借用其他平台的工具，也不要把本技能当作可以直接发布。
 
 1. 如实告诉商家：本会话无法执行真实发布，需要改在具备发布工具的普通 WorkBuddy 任务里完成。
-2. 给商家一段可粘贴的发布提示词，内容只包含非敏感信息：
+2. 升级时先从当前 WorkBuddy 账号和组织的官方应用管理界面核对目标，要求在原发布任务中核验唯一 appId、origin 和本地绑定。缺任一项就停止，不搜索其他任务、历史或缓存。给商家一段可粘贴的发布提示词，内容只包含非敏感信息：
    - 发布目录绝对路径（与 `.wbapp_<appId>.genie` 的 `localDir` 完全一致）；
-   - 目标 `appId` 与 `appName`；
+   - 已核验的目标 `appId`、`appName` 和无查询参数的公网 origin；
    - `userAskedToPublish: true`；
    - 安装/启动命令取自 `references/publish-params.json`，不得临场改写。
 3. 不伪造回执；只有商家带回真实回执（appId、shareLink、非敏感状态）后才继续核对。

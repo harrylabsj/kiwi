@@ -55,8 +55,9 @@ author: harrylabsj
 
 1. **确认账号已连接**：先确认商家已连接 Kiwi 商家账号（有 `kiwi_catalog_get_merchant_profile` 时调用确认；没有则询问商家是否已连接，未连接先走注册开通，再回来部署）。
 2. **检查会话工具**：检查当前会话真实工具清单与参数；缺少必要能力就停止该步骤并说明，不猜工具、不改用其他平台的发布工具。工具存在但参数/回执与下述步骤对不上时，以平台实际为准并如实记录差异。
-3. **检查本地能力与信任链**：确认 Node、npm、Python 和可信来源验证支持；不得读取用户 npm 凭据或执行安装脚本。缺失时停止。已有服务升级需查明此前已验证版本、应用身份和数据恢复能力；未知时停止，不能跳过防降级。
-4. **执行授权**：用户明确要求安装/升级即为本次执行授权；脚本在完整性校验通过后返回 `executionAuthorized:true`，不再要求额外环境变量或平台预授权。平台费用/授权弹窗仍由用户本人确认；未获用户请求时不得覆盖现网。
+3. **升级先核对目标归属**：按下文「核验当前账号的升级目标」确认 appId、公网 origin 与原发布任务的对应绑定。此步在读取旧版本、探测站点、备份或替换之前完成。
+4. **检查本地能力与信任链**：确认 Node、npm、Python 和可信来源验证支持；不得读取用户 npm 凭据或执行安装脚本。缺失时停止。已有服务升级需查明此前已验证版本、应用身份和数据恢复能力；未知时停止，不能跳过防降级。
+5. **执行授权**：用户明确要求安装/升级即为本次执行授权；脚本在完整性校验通过后返回 `executionAuthorized:true`，不再要求额外环境变量或平台预授权。平台费用/授权弹窗仍由用户本人确认；未获用户请求时不得覆盖现网。
 
 ## 首次开通流程（严格按序）
 
@@ -149,10 +150,10 @@ curl -sS <origin>/.well-known/agent-card.json
 
 以下步骤来自 2026-11-12 的一次真实原地升级（0.12.26 → 0.12.29，应用 ID／域名／状态目录全部保留）。它证明的只是"按这套做法、在这种应用上可行"，不证明平台在极端情况下一定保留沙箱；任何一步与回执不符就停。
 
-1. 第 0 步检查同上（工具、上次已核验版本、本次锁定 session）。
+1. 先完成「核验当前账号的升级目标」与第 0 步检查。旧版本必须来自这个已核验的目标。
 2. 取新版本包并按第 1 步校验（tarball SHA-512、签名、来源提交、包内 manifest）。
 3. **先备份，再动任何写操作**
-   - 发布目录整目录复制一份（如 `linkluck-publish-<日期>-backup`），保留逐字节原件；这是唯一可靠的本地回退点。
+   - 发布目录整目录复制一份（如 `kiwi-publish-<日期>-backup`），保留逐字节原件；这是唯一可靠的本地回退点。
    - 状态目录在云端沙箱内（如 `/workspace/.kiwi-runtime-<名称>`），本地通常不可见；**云模式没有周期性备份任务**（`runBackup` 只接在本地 CLI 运行时上，云端 bootstrap 不注册），不要假设平台已备份，也不要把"应用在线"当成有备份。
 4. **身份与数据保全（漏了这步就换身份/换数据目录）**
    - **升级已有应用不走 prepare**：直接用本次 session 的 `node_modules/@harrylabsj/kiwi-merchant-cloud` 作为 `--staged`。`prepare.mjs` 只用于首次开通；它每次都会生成**新** `pilot/merchant.yaml`（新 agent_id）和**新** `cloud.config.json`；`data_dir` 缺省是 `/workspace/.kiwi-runtime`，与现网常见的 `/workspace/.kiwi-runtime-<名称>` **不同**。
@@ -160,11 +161,11 @@ curl -sS <origin>/.well-known/agent-card.json
    - 用随包脚本做这一步，不要手工 `cp -r`：
 
      ```sh
-     node <技能目录>/scripts/upgrade-in-place.mjs --publish-dir <发布目录绝对路径> --staged <新版本包目录绝对路径> --dry-run
-     node <技能目录>/scripts/upgrade-in-place.mjs --publish-dir <发布目录绝对路径> --staged <新版本包目录绝对路径>
+     node <技能目录>/scripts/upgrade-in-place.mjs --workspace <原发布任务工作区绝对路径> --app-id <已核验appId> --origin <已核验公网origin> --staged <新版本包目录绝对路径> --dry-run
+     node <技能目录>/scripts/upgrade-in-place.mjs --workspace <原发布任务工作区绝对路径> --app-id <已核验appId> --origin <已核验公网origin> --staged <新版本包目录绝对路径>
      ```
 
-     脚本会先整目录备份（`<发布目录>-<时间戳>-backup`），只替换上面那批程序文件，**逐字节保留** `cloud.config.json` 与 `pilot/merchant.yaml`，并在回执里给出替换前后版本、保留文件哈希、备份路径；`--dry-run` 只报告不落地。新版本自带配置与现网配置不一致时它只记录到 `staged_config_differences_not_adopted`，不采用。
+     脚本每次都重新核对同一个 appId、公网 origin 和原任务绑定，随后整目录备份（`<发布目录>-<时间戳>-backup`），只替换上面那批程序文件，**逐字节保留** `cloud.config.json` 与 `pilot/merchant.yaml`，并在回执里给出替换前后版本、保留文件哈希、备份路径；`--dry-run` 只报告不落地。新版本自带配置与现网配置不一致时它只记录到 `staged_config_differences_not_adopted`，不采用。
    - 替换后自己再核对一遍：`cloud.config.json` 的 `public_origin`、`data_dir`、`profile`、`products_file` 与升级前一致，且 `pilot/merchant.yaml` 哈希不变。
    - 不要用 `--admin-bootstrap`：那会重置既有工作台凭据。
 5. **复用同一应用发布**：对**同一个目录绝对路径**、**同一个应用**调用发布工具。回执的 applicationId 与公网地址必须与升级前一致；不一致立即停止、如实上报，不新建第二个应用（换应用就换域名，配对与分享全部失效）。
@@ -185,17 +186,23 @@ curl -sS <origin>/.well-known/agent-card.json
 
 9. **来源如实标注**：只使用公共 npm registry 上真实存在的版本；若 tarball 或版本在 registry 不可验证，必须说明"这不是 registry 发行版"并停止。当前验证基线为 `@harrylabsj/kiwi-merchant-cloud@0.12.30`。
 
+## 核验当前账号的升级目标
+
+1. 使用当前会话官方只读应用管理能力，以当前登录的 WorkBuddy 账号及组织为范围，核对商家指定应用的 appId 和公网 origin。若会话没有该能力，只有商家本人在当前账号及组织的官方应用管理界面核对并提供的 appId 与无查询参数的公网 origin 可作为输入。Kiwi 商家连接状态、历史部署记录、名称、本地文件和探活回执均不能证明 WorkBuddy 账号归属。
+2. 只使用商家打开或明确指定的原发布任务工作区，以已核验的 appId 精确读取一个绑定文件。禁止扫描用户主目录、其他任务、缓存、全局部署历史或旧会话，以及展示、探测、推荐或重新发布范围外的应用。没有所需输入、工作区和绑定不匹配或身份被重新选择时，停止升级，提示在当前账号的官方应用界面核对并打开原发布任务。
+3. 运行 `node <技能目录>/scripts/discover-target.mjs <原发布任务工作区绝对路径> <已核验appId> <已核验公网origin>`。工具核对绑定文件、发布目录及本地配置中的 origin，只返回这一应用的 appId、发布目录、origin 和本地版本。失败时报告停止原因，不扩大扫描范围，不换用其他应用。未核验的 403 不用来判断其他应用是否是升级目标。
+
 ## 真实发布（workbuddy_sites_deploy）
 
-1. **发现目标**：在工作区根目录（`.wbapp_*.genie` 所在目录，不是发布目录本身）运行 `node <技能目录>/scripts/discover-target.mjs <workspace>`，读取 `.wbapp_*.genie` 与 `cloud.config.json`。只接受一个应用；出现多个、缺少 `local_dir` 或 `local_dir_exists=false` 时停止，让商家确认，不新建替代应用。
-2. **读取发布参数**：`references/publish-params.json` 提供 `language`、`port`、`installCmd`、`startCmd`；这些来自已验证的 linkluck 发布，不得临场改写。
+1. **发布前复核目标**：再次核对当前账号和组织与已确认目标一致。用「核验当前账号的升级目标」中的同一组参数重新运行目标核验，使用该回执的目录、appId 和 origin。发现变化时停止。
+2. **读取发布参数**：`references/publish-params.json` 提供 `language`、`port`、`installCmd`、`startCmd`；这些来自已验证的发布，不得临场改写。
 3. **调用当前会话真实提供的 `workbuddy_sites_deploy`**：
 
    ```
    action: "deploy"
    directory: <local_dir>            // 必须与 .wbapp_*.genie 的 localDir 完全一致
    appId: <app_id>
-   appName: <name>
+   appName: <当前账号官方应用管理界面核验的应用名称>
    domainPrefix: <origin 去掉 https:// 与 .app.workbuddy.host>
    language: "node"
    port: 3000
@@ -218,7 +225,7 @@ curl -sS <origin>/.well-known/agent-card.json
 第 0 步发现 当前会话明确提供的 WorkBuddy 发布工具 缺失时：
 
 1. 不尝试变通；向商家说明"本会话缺少平台发布工具，改用方案 B：我把一段提示词给你，你在**普通 WorkBuddy 任务**里粘贴运行"。
-2. 会话确实缺少发布工具时，如实说明无法执行真实发布；可给出普通 WorkBuddy 任务的发布提示词（目录、appId、`userAskedToPublish:true`），由商家在另一个具备发布工具的任务里执行，不伪造回执。
+2. 会话确实缺少发布工具时，如实说明无法执行真实发布；目标归属和绑定已核验后，可按方案 B 提供发布提示词，由商家在具备发布工具的原发布任务中重做同一核验后执行，不伪造回执。
 3. 商家执行完毕返回本技能会话后，只有当前会话真实列出并确认可用的 Catalog 状态查询工具时才调用核验；否则说明无法自动核验，请商家在 Catalog 界面自行检查，不得宣称已上线或采购方可发现。
 4. 两条路的规则完全相同：不伪造、不代点、不输出凭据字段、秘密只由商家本人处理，助手不读取、不展示。
 

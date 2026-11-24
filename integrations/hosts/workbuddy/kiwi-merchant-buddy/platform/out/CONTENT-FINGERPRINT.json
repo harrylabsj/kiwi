@@ -3,9 +3,9 @@
   "config_version": "1.8.2",
   "source": "buddy-app.config.json",
   "files": {
-    "industry-config.json": "sha256:70dbe97e1080f7586d94d80de03a38d88669e152acdd4bfd05d3b5c51858c0b9",
+    "industry-config.json": "sha256:0a1b57cd2d9ba67ce90ae7c3e516ade8fe5171d9318af0e9f4f2d3b69b05dc14",
     "market.json": "sha256:ff1e15775e1ec58642eb7906e3237f9ece820118dc120b5b8a68e098363a794f",
-    "platform-pack.zip": "sha256:40a8cd58bc177a9834e210ac3b95c220bf4034af0cb06a28a512421d3a908506",
+    "platform-pack.zip": "sha256:164d3e74d032ccc3cd776126898c6dbf412d75730024cb95ec700ab02c04e3d0",
     "market-draft/market-draft.json": "sha256:b6ab2d659217b625996b8e5bbf5822092ba0fdd375d58fbefab63f78ba7b0d5b"
   }
 }
