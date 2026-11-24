@@ -823,7 +823,7 @@ export function createMerchantManagementApiHandler(
       let fields: Record<string, unknown>;
       try {
         fields = objectFields(await readJsonBody(req, draftId === undefined ? 2048 : 8192),
-          draftId !== undefined ? ["version", "body"] : action === "followup-preference" ? ["version", "style"] : action === "poll" ? ["attempt_id", "verify_code"] : action === "cancel" ? ["attempt_id"] : []);
+          draftId !== undefined ? ["version", "body"] : action === "followup-preference" ? ["version", "style"] : action === "poll" ? ["attempt_id", "verify_code"] : action === "cancel" ? ["attempt_id"] : action === "confirm-conversation" ? ["model_consent"] : []);
       } catch (error) {
         if (error instanceof BodyTooLarge || error instanceof ManagementError) {
           throw new ManagementError("invalid_input", "微信通道请求字段无效或请求过大。");
@@ -845,8 +845,13 @@ export function createMerchantManagementApiHandler(
         }
         writeJson(res, 200, channel.followupPreference(owner, { version, style }));
       } else if (action === "confirm-conversation" || action === "clear-conversation" || action === "revoke-conversation") {
-        if (action === "confirm-conversation") channel.confirmConversation(owner);
-        else if (action === "clear-conversation") channel.clearConversation(owner);
+        if (action === "confirm-conversation") {
+          const consent = fields["model_consent"];
+          if (consent !== undefined && (typeof consent !== "string" || !/^[a-f0-9]{64}$/.test(consent))) {
+            throw new ManagementError("invalid_input", "模型授权标识无效。");
+          }
+          channel.confirmConversation(owner, consent);
+        } else if (action === "clear-conversation") channel.clearConversation(owner);
         else channel.revokeConversation(owner);
         writeJson(res, 200, { ok: true });
       } else if (action === "begin") {

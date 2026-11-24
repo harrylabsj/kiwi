@@ -12,6 +12,7 @@ import { LedgerStore } from "../src/negotiation/ledger/index.js";
 import { rankOwnerInquiries, WeixinOwnerConversation, type OwnerInquiry, type WeixinOwnerConversationOptions } from "../src/merchant/weixin-owner-conversation.js";
 import { createOwnerA2aInquirySource, createWorkbenchWeixinOwnerOptions } from "../src/merchant/weixin-owner-source.js";
 import type { InboundMessage } from "../src/weixin/types.js";
+import type { OwnerAgentDecision, WeixinOwnerAgent } from "../src/merchant/weixin-owner-agent.js";
 import { ownerInventorySku, type OwnerInventoryObservation } from "../src/merchant/weixin-owner-inventory.js";
 
 const scope = "fixture-key";
@@ -34,7 +35,7 @@ describe("persisted owner follow-up", () => {
   let now: number;
 
   function open(compose?: WeixinOwnerConversationOptions["compose"], inventory?: WeixinOwnerConversationOptions["inventory"],
-    delivery: Pick<WeixinOwnerConversationOptions, "replyToOwner"> = {}) {
+    delivery: Pick<WeixinOwnerConversationOptions, "replyToOwner" | "agent"> = {}) {
     const result = new WeixinOwnerConversation(dbPath, {
       enabled: true, workbenchOrigin: "https://merchant.example", ownerRevision: (p) => p === principal ? revision : undefined,
       source: { list: () => data, get: (id) => data.find((item) => item.id === id) },
@@ -270,6 +271,53 @@ describe("persisted owner follow-up", () => {
     await c.process(scope, signal, send);
     expect(send).toHaveBeenCalledTimes(2);
     expect(send.mock.calls[1]?.[0].text).toContain("没有可复述的近期回复");
+  });
+
+  it("aborts the current model call on clear, drops its late result and starts with empty history", async () => {
+    let release!: (value: OwnerAgentDecision) => void;
+    let modelSignal: AbortSignal | undefined;
+    const decide = vi.fn<Extract<WeixinOwnerAgent, { state: "configured" }>["decide"]>();
+    decide.mockImplementationOnce((_turn, current) => {
+      modelSignal = current;
+      return new Promise((resolve) => { release = resolve; });
+    }).mockResolvedValue({ kind: "reply", text: "新对话" });
+    const c = open(undefined, undefined, { replyToOwner: true,
+      agent: { state: "configured", provider: "fixture", model: "fixture", endpoint: "https://model.example", consent: "a".repeat(64), decide } });
+    c.bind(principal, scope);
+    const send = vi.fn(async () => {});
+    admit(c, message("old", "这是旧对话"));
+    const pending = c.process(scope, signal, send);
+    expect(modelSignal?.aborted).toBe(false);
+    c.clear(principal, scope);
+    expect(modelSignal?.aborted).toBe(true);
+    release({ kind: "reply", text: "不应该发送" });
+    await pending;
+    expect(send).not.toHaveBeenCalled();
+    admit(c, message("new", "这是新对话"));
+    await c.process(scope, signal, send);
+    expect(decide.mock.calls[1]?.[0].history).toEqual([]);
+    expect(send).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ text: "新对话" }));
+  });
+
+  it("does not repeat a reserved model attempt after a worker restart", async () => {
+    const decide = vi.fn<Extract<WeixinOwnerAgent, { state: "configured" }>["decide"]>();
+    const delivery = { replyToOwner: true, agent: { state: "configured" as const,
+      provider: "fixture", model: "fixture", endpoint: "https://model.example", consent: "a".repeat(64), decide } };
+    const c = open(undefined, undefined, delivery);
+    c.bind(principal, scope);
+    admit(c, message("interrupted", "你好"));
+    const restart = new AbortController();
+    decide.mockImplementationOnce(async () => {
+      restart.abort();
+      throw new Error("worker interrupted");
+    });
+    const send = vi.fn(async () => {});
+    await c.process(scope, restart.signal, send);
+    c.close();
+    const reopened = open(undefined, undefined, delivery);
+    await reopened.process(scope, signal, send);
+    expect(decide).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ text: expect.stringContaining("未自动重试") }));
   });
 
   it("fences a late composer after owner credential rotation and a concurrent clear", async () => {

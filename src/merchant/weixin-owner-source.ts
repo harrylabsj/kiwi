@@ -12,6 +12,7 @@ import { TERMINAL_PHASES } from "../negotiation/state/phase.js";
 import { OwnerConversationError, type OwnerInquiry, type OwnerInquirySource, type WeixinOwnerConversationOptions } from "./weixin-owner-conversation.js";
 import type { ExactMerchantProduct } from "../agent/merchant/types.js";
 import { createOwnerInventoryReader } from "./weixin-owner-inventory.js";
+import type { WeixinOwnerAgent } from "./weixin-owner-agent.js";
 
 const INBOUND_ACTIONS = new Set(["inquiry", "rfq", "offer", "counter_offer", "clarification"]);
 const MAX_LEDGER_CHAINS = 1000;
@@ -73,6 +74,7 @@ export function createWorkbenchWeixinOwnerOptions(input: {
   flag: string | undefined;
   /** 单独启用私聊回信；工作台预览开关绝不会打开微信回信。 */
   replyFlag?: string;
+  agent?: WeixinOwnerAgent;
   dataDir: string;
   adminDir: string;
   merchantId: string;
@@ -89,6 +91,7 @@ export function createWorkbenchWeixinOwnerOptions(input: {
   return {
     enabled: replyToOwner || input.flag === "1" && origin !== undefined,
     replyToOwner,
+    ...(replyToOwner && input.agent !== undefined ? { agent: input.agent } : {}),
     workbenchOrigin: origin ?? "https://invalid.invalid",
     source: createOwnerA2aInquirySource(input.dataDir, input.agentId),
     ...(input.readExactProduct !== undefined ? { inventory: createOwnerInventoryReader(input.merchantId, input.readExactProduct) } : {}),

@@ -96,9 +96,14 @@ export class MerchantWeixinChannel {
     return { principal, conversation };
   }
 
-  confirmConversation(owner: WeixinBindingOwner): void {
+  confirmConversation(owner: WeixinBindingOwner, modelConsent?: string): void {
     const { principal, conversation } = this.ownerConversation(owner);
     if (!this.configured || !existsSync(this.credentialsFile)) throw new OwnerConversationError("conflict", "请先连接微信。");
+    const agent = this.conversationOptions?.agent;
+    if (agent?.state === "unavailable") throw new OwnerConversationError("unavailable", "Kiwi 对话模型配置不可用。");
+    if (modelConsent !== (agent?.state === "configured" ? agent.consent : undefined)) {
+      throw new OwnerConversationError("conflict", "请重新查看并确认当前对话模式及模型服务。");
+    }
     const current = fingerprint(loadCredentials(this.credentialsFile));
     if (!conversation.status(principal, current).authorized) conversation.bind(principal, current);
   }
@@ -149,12 +154,18 @@ export class MerchantWeixinChannel {
     const base = { status: this.state, configured: this.configured };
     if (!ownerPrincipal || !this.conversationOptions?.enabled) return base;
     const delivery = this.conversationOptions.replyToOwner ? "paired_owner" as const : "workbench_only" as const;
+    const configuredAgent = this.conversationOptions.agent;
+    const agent = configuredAgent?.state === "configured" ? {
+      state: configuredAgent.state, consent: configuredAgent.consent, provider: configuredAgent.provider,
+      model: configuredAgent.model, endpoint: configuredAgent.endpoint,
+    } : configuredAgent;
+    const modelStatus = agent === undefined ? {} : { agent };
     try {
       const key = this.configured ? fingerprint(loadCredentials(this.credentialsFile)) : undefined;
       const conversation = key === undefined ? undefined : this.openConversation()?.status(ownerPrincipal, key);
-      return { ...base, conversation: conversation ?? { enabled: true, authorized: false, delivery } };
+      return { ...base, conversation: { ...(conversation ?? { enabled: true, authorized: false, delivery }), ...modelStatus } };
     } catch {
-      return { ...base, conversation: { enabled: true, authorized: false, unavailable: true, delivery } };
+      return { ...base, conversation: { enabled: true, authorized: false, unavailable: true, delivery, ...modelStatus } };
     }
   }
 
@@ -216,8 +227,9 @@ export class MerchantWeixinChannel {
           const credentials = { ...result.credentials, saved_at: new Date(this.now()).toISOString() };
           const conversation = this.openConversation();
           if (conversation !== undefined) {
-            if (this.conversationOptions?.enabled && owner.principalId) conversation.bind(owner.principalId, fingerprint(credentials));
-            else conversation.revoke();
+            if (this.conversationOptions?.enabled && this.conversationOptions.agent === undefined && owner.principalId) {
+              conversation.bind(owner.principalId, fingerprint(credentials));
+            } else conversation.revoke();
           }
           saveCredentials(this.credentialsFile, credentials);
           this.configured = true;

@@ -1924,9 +1924,9 @@ function mountWeixin(sequence) {
   var rulesLoaded = false;
   function active() { return current === "weixin" && sequence === viewSequence; }
   function problem(e) { if (active()) bar(e.message, true); }
-  function ownerAction(action, prompt) {
+  function ownerAction(action, prompt, fields) {
     if (prompt && !window.confirm(prompt)) return;
-    call("POST", endpoint + "/" + action, {}).then(function () {
+    call("POST", endpoint + "/" + action, fields || {}).then(function () {
       if (!active()) return;
       draftsLoaded = false;
       reset();
@@ -1936,12 +1936,20 @@ function mountWeixin(sequence) {
     var area = $("weixin-owner-preview");
     if (!area || !conversation || !conversation.enabled) return;
     var direct = conversation.delivery === "paired_owner";
+    var agent = conversation.agent;
+    var modelReady = agent && agent.state === "configured";
+    var modelUnavailable = agent && agent.state === "unavailable";
+    var modelService = modelReady ? agent.provider + " / " + agent.model + "（" + agent.endpoint + "）" : "";
     var title = $("weixin-conversation-title");
-    if (title) title.textContent = direct ? "店主微信对话" : "店主对话 · 工作台预览";
+    if (title) title.textContent = modelReady ? "店主微信对话 · Kiwi 智能体" : direct ? "店主微信对话" : "店主对话 · 工作台预览";
     var preview = $("weixin-preview-text");
     if (preview) preview.textContent = conversation.unavailable ? "店主对话暂不可用。" :
+      modelUnavailable ? "对话模型配置不可用，未启用模型回信。" :
+      modelReady ? (conversation.authorized
+        ? "打开微信与 Kiwi 自然对话。模型服务：" + modelService + (conversation.unknown_count > 0 ? " 有回信结果无法确认，系统不会自动重发。" : "")
+        : "微信扫码不等于模型授权。请确认是否允许把你的私聊和有限近期上下文交给 " + modelService + " 处理。不要在聊天中发送密码、密钥或客户隐私。") :
       direct ? (conversation.authorized
-        ? "打开微信直接跟 Kiwi 聊，例如「今天有什么要跟进的？」。" + (conversation.unknown_count > 0 ? " 有回信结果无法确认，系统不会自动重发。" : "")
+        ? "打开微信查询待跟进询价或预览草稿。此模式不调用大模型。" + (conversation.unknown_count > 0 ? " 有回信结果无法确认，系统不会自动重发。" : "")
         : "现有扫码绑定还未授权微信回信，请在下方确认。") :
       conversation.preview || (conversation.authorized
         ? "可发送：今天哪三笔询价最该跟？或查库存 SKU-001。结果仅在本工作台显示。"
@@ -1949,17 +1957,20 @@ function mountWeixin(sequence) {
     var controls = $("weixin-conversation-controls");
     if (controls) {
       controls.innerHTML = "";
-      function action(label, name, confirmation) {
+      function action(label, name, confirmation, fields) {
         var b = document.createElement("button");
         b.type = "button"; b.className = "act"; b.textContent = label;
-        b.onclick = function () { ownerAction(name, confirmation); };
+        b.onclick = function () { ownerAction(name, confirmation, fields); };
         controls.appendChild(b);
       }
       if (conversation.authorized) {
         action("清空对话", "clear-conversation", "清空对话和未出站结果？已落库草稿保留。");
         action(direct ? "停止微信对话" : "停止预览", "revoke-conversation", "停止店主对话？微信 /ping 继续可用。");
-      } else if (configured && !conversation.unavailable) {
-        action(direct ? "授权微信回信" : "确认店主归属", "confirm-conversation", direct
+      } else if (configured && !conversation.unavailable && !modelUnavailable) {
+        if (modelReady) action("授权 Kiwi 模型对话", "confirm-conversation",
+          "允许将你发送的微信私聊正文及最近最多 4 轮对话文本提交给 " + modelService + "？Kiwi 不会自动附上买家原文、身份或商家查询明细。请勿发送密码、密钥或客户隐私。",
+          { model_consent: agent.consent });
+        else action(direct ? "授权微信回信" : "确认店主归属", "confirm-conversation", direct
           ? "仅允许向当前扫码绑定的店主账号回复本人的私聊。确认开启？" : undefined);
       }
     }
