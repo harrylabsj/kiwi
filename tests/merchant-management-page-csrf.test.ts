@@ -74,11 +74,14 @@ function createPageContext(
 ) {
   return createContext({
     URL,
+    URLSearchParams,
+    window: { location: { search: "" } },
     Date,
     Math,
     Response,
     fetch: fetchImpl,
     setTimeout,
+    clearTimeout,
     document: {
       querySelectorAll: () => [],
       getElementById: (id: string) => (elements[id] ??= fakeElement()),

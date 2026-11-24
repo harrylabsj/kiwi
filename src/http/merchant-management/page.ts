@@ -33,6 +33,7 @@ export function renderMerchantManagementPage(options: {
   catalogConnection?: boolean;
   workbuddyAccess?: boolean;
   weixinChannel?: boolean;
+  manualSupport?: boolean;
 } = {}): string {
   return `<!doctype html>
 <html lang="zh-CN">
@@ -168,6 +169,7 @@ export function renderMerchantManagementPage(options: {
   <button data-v="sales">销售工作台</button>
   <button data-v="outcomes">经营结果</button>
   <button data-v="weixin" id="weixin-tab" hidden>微信通道</button>
+  <button data-v="support" id="support-tab" hidden>售后工单</button>
   <p class="nav-foot">日常经营，井然有序。<br>Kiwi Merchant</p>
 </nav>
 <div class="workspace">
@@ -184,6 +186,7 @@ var FILE_PRODUCTS = ${options.productAuthority === "file"};
 var CATALOG_CONNECT = ${options.catalogConnection === true};
 var WORKBUDDY_ACCESS = ${options.workbuddyAccess === true};
 var WEIXIN_CHANNEL = ${options.weixinChannel === true};
+var MANUAL_SUPPORT = ${options.manualSupport === true};
 var viewSequence = 0;
 // 与 cloud/access/workbuddy-share-link 的 WORKBUDDY_CUSTODY_TERMS_VERSION 同值；
 // 浏览器产物必须自包含（verify:browser-artifact 禁止模块导入），所以这里是字面量，
@@ -305,6 +308,7 @@ function send(method, path, body, apiBase, again) {
 function showLogin() {
   viewSequence++;
   if (WEIXIN_CHANNEL) $("weixin-tab").hidden = true;
+  if (MANUAL_SUPPORT) $("support-tab").hidden = true;
   $("view").innerHTML = '<div class="card login-card"><h2>登录你的商家工作台</h2>' +
     '<p class="muted">请使用商家管理员口令登录后回到本页。</p>' +
     '<p><a class="act primary" href="/admin/login?next=%2Fmerchant%2F">去登录</a></p></div>';
@@ -877,6 +881,7 @@ function renderProducts(items, publication) {
     '<div class="row"><input type="file" id="pfile" aria-label="选择商品导入文件" accept=".json,.csv,.xlsx">' +
     '<button class="act" onclick="previewImport()">校验预览</button></div><div id="presult"></div></div>';
 }
+
 var ALIPAY_COLLECTION = "/collection/alipay";
 function renderAlipayCollection(config) {
   return '<section class="card"><h2>支付宝收款</h2>' +
@@ -1022,10 +1027,85 @@ function bindAlipayApprovals() {
   });
 }
 
+function mountSupport(sequence) {
+  var root = $("support-content");
+  var idPattern = /^CS-[0-9a-f-]{36}$/;
+  var labels = { WAITING_MERCHANT: "等待领取", IN_PROGRESS: "人工处理中", RESOLVED: "本地工单已解决" };
+  var selection = 0;
+  function visible() { return current === "support" && sequence === viewSequence; }
+  function problem(error) { if (visible()) bar(error.message, true); }
+  function text(parent, tag, value) {
+    var node = document.createElement(tag); node.textContent = value; parent.appendChild(node); return node;
+  }
+  function button(parent, title, action) {
+    var node = text(parent, "button", title);
+    node.type = "button"; node.className = "act"; node.onclick = action; return node;
+  }
+  function detail(id) {
+    if (!idPattern.test(id)) return;
+    var selected = ++selection;
+    var panel = $("support-detail"); panel.textContent = "";
+    call("GET", "/support/cases/" + id).then(function (item) {
+      if (!visible() || selection !== selected) return;
+      text(panel, "h3", item.case_id + " · " + labels[item.state]);
+      if (item.sku) text(panel, "p", "SKU：" + item.sku);
+      text(panel, "p", item.description);
+      item.replies.forEach(function (entry) {
+        text(panel, "p", (entry.kind === "resolved" ? "解决说明：" : "已保存：") + entry.text);
+      });
+      if (!item.access_active) { text(panel, "p", "买家原会话不可继续，不代表工单已关闭。"); return; }
+      function change(action, payload) {
+        var controls = Array.from(panel.querySelectorAll("button"));
+        controls.forEach(function (control) { control.disabled = true; });
+        payload.expected_revision = item.revision;
+        call("POST", "/support/cases/" + id + "/" + action, payload).then(function () {
+          if (!visible() || selection !== selected) return;
+          bar(action === "reply" ? "已保存，可供原会话查看；未核实交付。" : "工单已更新。", false);
+          load(); detail(id);
+        }).catch(function (error) {
+          if (selection === selected) problem(error);
+        }).finally(function () { controls.forEach(function (control) { control.disabled = false; }); });
+      }
+      if (item.state === "WAITING_MERCHANT") {
+        button(panel, "领取工单", function () { change("claim", {}); });
+      } else if (item.state === "IN_PROGRESS" && item.held_by_me) {
+        var label = text(panel, "label", "人工说明 ");
+        var field = document.createElement("textarea"); field.maxLength = 2000; label.appendChild(field);
+        function save(action) {
+          if (!field.value.trim()) { bar("请先填写人工说明。", true); return; }
+          if (!window.confirm(action === "reply" ? "将说明保存为买家在原会话可见的人工回复？" : "标记本地工单已解决并保存处理说明？")) return;
+          change(action, { text: field.value });
+        }
+        button(panel, "保存给买家查看", function () { save("reply"); });
+        button(panel, "记录解决", function () { save("resolve"); });
+      }
+      button(panel, "撤销买家会话访问", function () {
+        if (window.confirm("使同一浏览器会话无法继续查看所有关联工单？此操作不会关闭工单。")) change("revoke", {});
+      });
+    }).catch(function (error) { if (selection === selected) problem(error); });
+  }
+  function load() {
+    call("GET", "/support/cases").then(function (data) {
+      if (!visible()) return;
+      root.textContent = "";
+      if (!data.cases.length) text(root, "p", "没有已登记的工单。");
+      data.cases.forEach(function (item) {
+        button(root, item.case_id + " · " + labels[item.state], function () { detail(item.case_id); });
+      });
+    }).catch(problem);
+  }
+  $("support-refresh").onclick = load;
+  load();
+}
+
 var views = {
+  support: function () {
+    return Promise.resolve('<section class="card"><h2>人工售后</h2><p>仅本地预览：不验证订单，不代表外部平台处理。</p>' +
+      '<button class="act" type="button" id="support-refresh">刷新待办</button><div id="support-content"></div><div id="support-detail"></div></section>');
+  },
   weixin: function () {
     return Promise.resolve('<div class="card"><h2>个人微信连接</h2>' +
-      '<p class="muted">用手机微信扫一扫并确认连接。仅配对的微信账号可以发送 /ping 测试连接，不会开启群发或微信审批。</p>' +
+      '<p class="muted">扫码确认后，只有配对的店主可以与 Kiwi 对话。微信不发送买家消息，也不批准正式操作。</p>' +
       '<div id="weixin-panel"><p role="status">正在读取连接状态…</p></div></div>');
   },
   collection: async function () {
@@ -1837,8 +1917,193 @@ function mountWeixin(sequence) {
   var statusTimer;
   var previousState = "";
   var busy = false;
+  var selectedDraft = new URLSearchParams(window.location.search).get("weixin_draft") || "";
+  var draftsLoaded = false;
+  var latestPreview;
+  var latestProposal;
+  var rulesLoaded = false;
   function active() { return current === "weixin" && sequence === viewSequence; }
   function problem(e) { if (active()) bar(e.message, true); }
+  function ownerAction(action, prompt) {
+    if (prompt && !window.confirm(prompt)) return;
+    call("POST", endpoint + "/" + action, {}).then(function () {
+      if (!active()) return;
+      draftsLoaded = false;
+      reset();
+    }).catch(problem);
+  }
+  function renderConversation(conversation, configured, operationsAvailable) {
+    var area = $("weixin-owner-preview");
+    if (!area || !conversation || !conversation.enabled) return;
+    var direct = conversation.delivery === "paired_owner";
+    var title = $("weixin-conversation-title");
+    if (title) title.textContent = direct ? "店主微信对话" : "店主对话 · 工作台预览";
+    var preview = $("weixin-preview-text");
+    if (preview) preview.textContent = conversation.unavailable ? "店主对话暂不可用。" :
+      direct ? (conversation.authorized
+        ? "打开微信直接跟 Kiwi 聊，例如「今天有什么要跟进的？」。" + (conversation.unknown_count > 0 ? " 有回信结果无法确认，系统不会自动重发。" : "")
+        : "现有扫码绑定还未授权微信回信，请在下方确认。") :
+      conversation.preview || (conversation.authorized
+        ? "可发送：今天哪三笔询价最该跟？或查库存 SKU-001。结果仅在本工作台显示。"
+        : "当前绑定未授权业务预览。");
+    var controls = $("weixin-conversation-controls");
+    if (controls) {
+      controls.innerHTML = "";
+      function action(label, name, confirmation) {
+        var b = document.createElement("button");
+        b.type = "button"; b.className = "act"; b.textContent = label;
+        b.onclick = function () { ownerAction(name, confirmation); };
+        controls.appendChild(b);
+      }
+      if (conversation.authorized) {
+        action("清空对话", "clear-conversation", "清空对话和未出站结果？已落库草稿保留。");
+        action(direct ? "停止微信对话" : "停止预览", "revoke-conversation", "停止店主对话？微信 /ping 继续可用。");
+      } else if (configured && !conversation.unavailable) {
+        action(direct ? "授权微信回信" : "确认店主归属", "confirm-conversation", direct
+          ? "仅允许向当前扫码绑定的店主账号回复本人的私聊。确认开启？" : undefined);
+      }
+    }
+    if ((!draftsLoaded || latestPreview !== conversation.preview) && (configured || selectedDraft)) {
+      var first = !draftsLoaded;
+      latestPreview = conversation.preview;
+      loadDrafts();
+      if (first && selectedDraft) loadDraft(selectedDraft);
+    }
+    renderDigest(conversation.rule_proposal, operationsAvailable);
+  }
+  function renderDigest(proposal, available) {
+    var target = $("weixin-digest-proposal");
+    if (!target) return;
+    var key = proposal ? JSON.stringify(proposal) : "";
+    if (latestProposal !== key) {
+      latestProposal = key;
+      target.textContent = "";
+      if (proposal) {
+        var stamp = proposal.prepare.trigger_spec;
+        var detail = document.createElement("p");
+        detail.textContent = "待回复询价日报 · 周一至周五 " + stamp.local_time + "（" + stamp.timezone +
+          "） · 经营投影 · 仅工作台 · 起草时预计下次 " + proposal.next_due_at;
+        target.appendChild(detail);
+        if (available) {
+          var button = document.createElement("button");
+          button.type = "button"; button.className = "act"; button.textContent = "确认启用日报";
+          button.onclick = function () {
+            if (!window.confirm("启用这个规则？日报只出现在工作台。")) return;
+            button.disabled = true;
+            call("POST", "/automation/rules/prepare", proposal.prepare).then(function (candidate) {
+              return call("POST", "/automation/rules/activate", { candidate_ref: candidate.candidate_ref });
+            }).then(function () { if (active()) { bar("日报规则已启用。", false); loadRules(); } }).catch(problem);
+          };
+          target.appendChild(button);
+        } else {
+          var hint = document.createElement("p"); hint.textContent = "此实例未装配经营调度，规则不能启用。";
+          target.appendChild(hint);
+        }
+      }
+    }
+    if (!rulesLoaded && available) loadRules();
+  }
+  function loadRules() {
+    rulesLoaded = true;
+    call("GET", "/automation/rules").then(function (data) {
+      var list = $("weixin-digest-rules");
+      if (!active() || !list) return;
+      list.textContent = "";
+      var rules = data.rules.filter(function (rule) {
+        return rule.template === "unfinished_inquiry_digest" && rule.action_type === "internal_summary" && rule.trigger_spec.day_filter === "weekdays";
+      });
+      rules.slice(0, 20).forEach(function (rule) {
+        var paused = rule.state === "PAUSED";
+        var row = document.createElement("p");
+        row.textContent = rule.trigger_spec.local_time + "（" + rule.timezone + "） · " +
+          (paused ? "已暂停" : "下次：" + (rule.next_due_at || "无")) + " ";
+        var action = document.createElement("button");
+        action.type = "button"; action.className = "act"; action.textContent = paused ? "恢复" : "暂停";
+        action.onclick = function () {
+          if (!window.confirm(paused ? "按新的有效时间恢复日报？" : "暂停日报规则？")) return;
+          action.disabled = true;
+          call("POST", "/automation/rules/" + encodeURIComponent(rule.rule_id) + "/" + (paused ? "resume" : "pause"), paused
+            ? { expected_version: rule.version, expected_enable_epoch: rule.enable_epoch }
+            : { expected_version: rule.version, reason: "owner_workbench" }).then(loadRules).catch(problem);
+        };
+        row.appendChild(action); list.appendChild(row);
+      });
+      var digestIds = new Set(rules.map(function (rule) { return rule.rule_id; }));
+      return call("GET", "/automation/artifacts").then(function (result) {
+        var results = $("weixin-digest-results");
+        if (!active() || !results) return;
+        results.textContent = "";
+        result.artifacts.filter(function (artifact) { return digestIds.has(artifact.rule_id); }).slice(0, 5)
+          .forEach(function (artifact) {
+            var advice = artifact.payload.advice || {};
+            var row = document.createElement("p");
+            row.textContent = artifact.created_at + " · " + (advice.summary || artifact.payload.summary || "已记录经营任务结果") + " · " + artifact.receipt_ref;
+            results.appendChild(row);
+          });
+      });
+    }).catch(problem);
+  }
+  function loadPreference() {
+    var target = $("weixin-followup-preference");
+    if (!target) return;
+    call("GET", endpoint + "/followup-preference").then(function (preference) {
+      if (!active() || target !== $("weixin-followup-preference")) return;
+      target.innerHTML = '<label>普通跟进语气 <select id="weixin-style"><option value="">默认（撤回偏好）</option>' +
+        '<option value="concise">简洁</option><option value="warm">友好</option></select></label> ' +
+        '<button type="button" class="act" id="weixin-style-save">确认偏好</button>';
+      var style = $("weixin-style");
+      var save = $("weixin-style-save");
+      style.value = preference.style || "";
+      save.onclick = function () {
+        save.disabled = true;
+        call("POST", endpoint + "/followup-preference", { version: preference.version, style: style.value || null })
+          .then(function () { if (active()) { bar("偏好已更新。正式报价规则未更改。", false); loadPreference(); } })
+          .catch(problem).finally(function () { save.disabled = false; });
+      };
+    }).catch(problem);
+  }
+  function loadDrafts() {
+    draftsLoaded = true;
+    return call("GET", endpoint + "/reply-drafts").then(function (data) {
+      if (!active() || !$("weixin-draft-list")) return;
+      var list = $("weixin-draft-list");
+      list.textContent = data.items.length ? "" : "没有已保存的回复草稿。";
+      data.items.forEach(function (draft) {
+        var b = document.createElement("button");
+        b.type = "button"; b.className = "act"; b.textContent = draft.inquiry + " · v" + draft.version;
+        b.onclick = function () { loadDraft(draft.id); };
+        list.appendChild(b);
+      });
+    }).catch(problem);
+  }
+  function loadDraft(id) {
+    if (!/^[a-f0-9-]{36}$/.test(id)) return;
+    selectedDraft = id;
+    call("GET", endpoint + "/reply-drafts/" + id).then(function (draft) {
+      var target = $("weixin-draft-editor");
+      if (!active() || !target || selectedDraft !== id) return;
+      target.innerHTML = '<p>询价：' + esc(draft.inquiry) + ' · 草稿 v' + esc(draft.version) + '</p>' +
+        '<p>仅保存到工作台。正式发布未接通，不会发送给买家。' +
+        (draft.current ? '' : ' 询价已变化或无法核实，此稿不可编辑。') + '</p>' +
+        '<form id="weixin-draft-form"><label>回复正文 <textarea id="weixin-draft-body" maxlength="600" required></textarea></label> ' +
+        '<button class="act" type="submit">保存草稿</button></form>';
+      var body = $("weixin-draft-body");
+      body.value = draft.body;
+      var form = $("weixin-draft-form");
+      var save = form.querySelector("button");
+      if (!draft.current) { body.readOnly = true; save.disabled = true; }
+      form.onsubmit = function (event) {
+        event.preventDefault();
+        if (save.disabled) return;
+        save.disabled = true;
+        call("POST", endpoint + "/reply-drafts/" + id, { version: draft.version, body: body.value }).then(function () {
+          if (!active()) return;
+          bar("草稿已保存，未发送。", false);
+          loadDrafts(); loadDraft(id);
+        }).catch(problem).finally(function () { if (draft.current) save.disabled = false; });
+      };
+    }).catch(problem);
+  }
   function reset() {
     clearTimeout(expiryTimer);
     clearTimeout(statusTimer);
@@ -1864,10 +2129,22 @@ function mountWeixin(sequence) {
         panel.innerHTML = '<p role="status">' + esc(labels[state] || "连接状态未知") + '</p>' +
           (connection.configured
             ? '<button type="button" class="act" id="weixin-disconnect">断开连接</button>'
-            : '<button type="button" class="act primary" id="weixin-begin">生成微信二维码</button>');
+            : '<button type="button" class="act primary" id="weixin-begin">生成微信二维码</button>') +
+          (connection.conversation && connection.conversation.enabled
+            ? '<section id="weixin-owner-preview"><h3 id="weixin-conversation-title">店主对话</h3>' +
+              '<pre id="weixin-preview-text" style="white-space:pre-wrap"></pre><div id="weixin-conversation-controls"></div>' +
+              '<h3>普通跟进草稿</h3><div id="weixin-draft-list"></div><div id="weixin-draft-editor"></div>' +
+              '<div id="weixin-followup-preference"></div>' +
+              '<div id="weixin-digest-proposal"></div><div id="weixin-digest-rules"></div><div id="weixin-digest-results"></div></section>'
+            : '');
         if (connection.configured) $("weixin-disconnect").onclick = disconnect;
         else $("weixin-begin").onclick = begin;
+        draftsLoaded = false;
+        rulesLoaded = false;
+        latestProposal = undefined;
+        if (connection.configured && connection.conversation && connection.conversation.enabled) loadPreference();
       }
+      renderConversation(connection.conversation, connection.configured, connection.operations_available);
       if (state === "checking" || state === "retrying" || state === "connected") statusTimer = setTimeout(updateStatus, 4000);
     }).catch(function (e) {
       if (!active()) return;
@@ -1985,7 +2262,8 @@ var VIEW_COPY = {
   operating: ["商品经营", "选择商品、设定条件与授权，控制生效区间。"],
   sales: ["销售工作台", "处理待办、下一动作与持久跟进。"],
   outcomes: ["经营结果", "分开查看订单证据、归因与贡献。"],
-  weixin: ["微信通道", "连接店主的个人微信，查看连接状态。"]
+  weixin: ["微信通道", "连接店主的个人微信，查看连接状态。"],
+  support: ["售后工单", "领取本地售后工单并保存人工回访。"]
 };
 function decorateView() {
   var view = $("view");
@@ -2021,7 +2299,8 @@ function refresh() {
   var sequence = ++viewSequence;
   var copy = VIEW_COPY[current];
   var view = $("view");
-  if (previousView === "collection" || current === "collection" || previousView === "weixin" || current === "weixin") {
+  if (previousView === "collection" || current === "collection" || previousView === "weixin" || current === "weixin" ||
+      previousView === "support" || current === "support") {
     view.innerHTML = '<div class="card">加载中…</div>';
   }
   previousView = current;
@@ -2033,6 +2312,7 @@ function refresh() {
     view.innerHTML = html; decorateView();
     if (current === "weixin") mountWeixin(sequence);
     if (current === "collection") { bindAlipayCollection(); bindAlipayApprovals(); }
+    if (current === "support") mountSupport(sequence);
     if (current === "status" && CATALOG_CONNECT && ROLE === "owner") {
       if (catalogConnectionState && catalogConnectionState.bindingId) {
         call("GET", "/catalog/bound-account").then(function (result) {
@@ -2060,9 +2340,16 @@ fetch("/merchant/api/session", { credentials: "same-origin" }).then(function (re
   if (!session) return;
   CSRF = session.csrf_token || "";
   ROLE = session.role || "";
-  if (WEIXIN_CHANNEL && ROLE === "owner") $("weixin-tab").hidden = false;
   $("collection-tab").hidden = session.can_manage_alipay_collection !== true;
   $("who").textContent = "商家 " + session.merchant_id + " · " + ROLE;
+  if (MANUAL_SUPPORT && ROLE === "owner") $("support-tab").hidden = false;
+  if (WEIXIN_CHANNEL && ROLE === "owner") {
+    $("weixin-tab").hidden = false;
+    if (new URLSearchParams(window.location.search).has("weixin_draft")) {
+      $("weixin-tab").click();
+      return;
+    }
+  }
   refresh();
 });
 </script>

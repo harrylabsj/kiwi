@@ -20,11 +20,12 @@
  * 协议学习自 Hermes Agent weixin adapter（gateway/platforms/weixin.py）：
  * - 登录：get_bot_qrcode → 轮询 get_qrcode_status → confirmed 得凭证；
  * - 消息：getupdates 长轮询（get_updates_buf 游标）；sendmessage 回显 context_token；
- * - 头：iLink-App-Id: "bot"、iLink-App-ClientVersion: "131584"（=(2<<16)|(2<<8)|0）；
+ * - 头：iLink-App-Id / iLink-App-ClientVersion；收发另带腾讯协议的 Bearer 认证和 X-WECHAT-UIN；
  * - 错误：ret/errcode 非 0 → protocol；-14 或 (-2+"unknown error") → session_stale。
  * 出站纪律全走 safe-http（manual redirect / 超时覆盖 body / 1 MiB 上限）。
  */
 
+import { randomBytes } from "node:crypto";
 import { isRedirectResponse, readJsonBody, SafeHttpError } from "../net/safe-http.js";
 import { WEIXIN_BOT_AGENT, WEIXIN_CHANNEL_VERSION } from "./brand.js";
 import { ILINK_DEFAULT_BASE_URL, WeixinError } from "./types.js";
@@ -55,6 +56,16 @@ const QR_TIMEOUT_MS = 35_000;
 const MAX_RESPONSE_BYTES = 1024 * 1024; // 1 MiB（iLink 响应远小于默认 8 MiB）
 const SESSION_EXPIRED_ERRCODE = -14;
 const RATE_LIMIT_ERRCODE = -2;
+const UINT64_LIMIT = "18446744073709551615";
+
+/** iLink 在 JSON 数字中传 uint64；从原字面量恢复消息 ID，不能对已舍入的 number 转字符串。 */
+function preserveUpdateMessageId(key: string, value: unknown, context?: { source?: string }): unknown {
+  if (key !== "message_id" || typeof value !== "number" || Number.isSafeInteger(value)) return value;
+  const source = context?.source;
+  if (source !== undefined && /^[1-9][0-9]{0,19}$/.test(source) &&
+      (source.length < UINT64_LIMIT.length || source <= UINT64_LIMIT)) return source;
+  return value;
+}
 
 /** redirect_host / confirmed baseurl 默认主机白名单（iLink 官方腾讯域）。 */
 const DEFAULT_ALLOWED_REDIRECT_HOSTS: readonly string[] = [".qq.com"];
@@ -162,8 +173,7 @@ export class IlinkClient {
       if (typeof accountId !== "string" || accountId === "" || typeof token !== "string" || token === "") {
         throw new WeixinError("validation", "get_qrcode_status confirmed 缺少凭证字段");
       }
-      // 审查 K-M6：confirmed 的 baseurl 是 bot_token 直送目标（getupdates/
-      // sendmessage 把 base_info 发到该 host）——与 redirect_host 同一白名单，
+      // 审查 K-M6：confirmed 的 baseurl 是消息认证目标——与 redirect_host 同一白名单，
       // 必须 https，防 iLink 被攻破时把凭证流量导到任意主机。
       if (typeof baseUrl === "string" && baseUrl !== "") {
         let parsedBase: URL;
@@ -196,7 +206,7 @@ export class IlinkClient {
       if (redirectHost === "") {
         throw new WeixinError("validation", "scaned_but_redirect 缺少 redirect_host");
       }
-      // 审查 P3：redirect_host 是后续 bot_token 直送目标（经 base_info）——
+      // 审查 P3：redirect_host 是后续消息认证的目标——
       // 此前零校验直接拼 https://${redirectHost}。至少校验是纯 hostname
       // （无 scheme/path/port/userinfo），防 iLink 被攻破时把凭证流量导到
       // 任意主机（协议内信任模型可接受，但语法边界必须 fail-closed）。
@@ -251,9 +261,10 @@ export class IlinkClient {
   ): Promise<GetUpdatesResult> {
     const body = (await this.request("POST", EP_GET_UPDATES, {
       timeoutMs: LONG_POLL_DEFAULT_MS + 20_000, // 长轮询需覆盖服务端 longpoll
+      botToken: credentials.bot_token,
       payload: {
         get_updates_buf: syncBuf,
-        base_info: baseInfoOf(credentials),
+        base_info: baseInfo(),
       },
       ...(signal !== undefined ? { signal } : {}),
     })) as Record<string, unknown>;
@@ -268,6 +279,12 @@ export class IlinkClient {
         message_id: String(raw.message_id ?? ""),
         text,
         context_token: String(raw.context_token ?? ""),
+        // 店主业务消息走保守判定：纯文本、来自用户、发给当前 bot。缺元数据时仍保留旧通道行为。
+        ...(raw.message_type === 1 && raw.to_user_id === credentials.ilink_bot_id &&
+          (raw.group_id === undefined || raw.group_id === "") && (raw.room_id === undefined || raw.room_id === "") &&
+          Array.isArray(raw.item_list) && raw.item_list.length === 1 && text.trim() !== "" &&
+          (typeof raw.message_id === "string" || Number.isSafeInteger(raw.message_id)) &&
+          typeof raw.context_token === "string" ? { direct_text: true as const } : {}),
       };
       messages.push(message);
     }
@@ -295,8 +312,9 @@ export class IlinkClient {
     }
     const body = (await this.request("POST", EP_SEND_MESSAGE, {
       timeoutMs: API_TIMEOUT_MS,
+      botToken: credentials.bot_token,
       ...(signal !== undefined ? { signal } : {}),
-      payload: { msg: message, base_info: baseInfoOf(credentials) },
+      payload: { msg: message, base_info: baseInfo() },
     })) as Record<string, unknown>;
     assertOk(body, "sendmessage");
   }
@@ -306,9 +324,25 @@ export class IlinkClient {
   private async request(
     method: "GET" | "POST",
     path: string,
-    options: { timeoutMs: number; payload?: Record<string, unknown>; signal?: AbortSignal },
+    options: { timeoutMs: number; payload?: Record<string, unknown>; signal?: AbortSignal; botToken?: string },
   ): Promise<unknown> {
     options.signal?.throwIfAborted();
+    const headers: Record<string, string> = {
+      "iLink-App-Id": ILINK_APP_ID,
+      "iLink-App-ClientVersion": ILINK_APP_CLIENT_VERSION,
+    };
+    const requiresAuth = path === EP_GET_UPDATES || path === EP_SEND_MESSAGE;
+    if (requiresAuth) {
+      const token = options.botToken ?? "";
+      // 扫码令牌不透明，只校验它是非空、可安全传输的 HTTP 头值。
+      if (token === "" || /[^\x21-\x7e]/.test(token)) {
+        throw new WeixinError("auth", `iLink ${path} 缺少有效的 bot 凭证`);
+      }
+      headers.AuthorizationType = "ilink_bot_token";
+      headers.Authorization = `Bearer ${token}`;
+      // iLink 约定：随机 uint32 的十进制字符串做 Base64，而不是编码原始字节。
+      headers["X-WECHAT-UIN"] = Buffer.from(String(randomBytes(4).readUInt32BE()), "ascii").toString("base64");
+    }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), options.timeoutMs);
     // 审查 P2-M：外部 abort（通道 stop()）转发到内部 controller——长轮询
@@ -317,10 +351,6 @@ export class IlinkClient {
     const onExternalAbort = (): void => controller.abort();
     options.signal?.addEventListener("abort", onExternalAbort, { once: true });
     try {
-      const headers: Record<string, string> = {
-        "iLink-App-Id": ILINK_APP_ID,
-        "iLink-App-ClientVersion": ILINK_APP_CLIENT_VERSION,
-      };
       const init: Parameters<typeof fetch>[1] = {
         method,
         headers,
@@ -336,13 +366,17 @@ export class IlinkClient {
         throw new WeixinError("redirect", `iLink ${path} 重定向被拒绝 (${response.status})`);
       }
       if (!response.ok) {
-        if ((path === EP_GET_UPDATES || path === EP_SEND_MESSAGE) && (response.status === 401 || response.status === 403)) {
+        if (requiresAuth && (response.status === 401 || response.status === 403)) {
           throw new WeixinError("auth", `iLink ${path} 拒绝凭证 (${response.status})`);
         }
         throw new WeixinError("http", `iLink ${path} HTTP ${response.status}`);
       }
       try {
-        return await readJsonBody(response, { maxBytes: MAX_RESPONSE_BYTES, signal: controller.signal });
+        return await readJsonBody(response, {
+          maxBytes: MAX_RESPONSE_BYTES,
+          signal: controller.signal,
+          ...(path === EP_GET_UPDATES ? { reviver: preserveUpdateMessageId } : {}),
+        });
       } catch (err) {
         if (err instanceof SafeHttpError) {
           if (err.code === "response_too_large") throw new WeixinError("response_too_large", err.message);
@@ -366,15 +400,11 @@ export class IlinkClient {
 /**
  * base_info（getupdates/sendmessage 通用）。
  *
- * 身份三件套之外显式带 `channel_version` + `bot_agent`：iLink 用
- * `bot_agent` 标识驱动 bot 的应用；不声明时协议缺省值是 `OpenClaw`
- * （绑定/会话里显示的应用名就是它）。这里声明 `Kiwi/<version>`。
+ * 只包含客户端标识，凭据只送认证头。`bot_agent` 缺省为 `OpenClaw`；
+ * 这里声明 `Kiwi/<version>`，与实际驱动应用一致。
  */
-function baseInfoOf(credentials: BotCredentials): Record<string, unknown> {
+function baseInfo(): Record<string, unknown> {
   return {
-    ilink_bot_id: credentials.ilink_bot_id,
-    bot_token: credentials.bot_token,
-    ilink_user_id: credentials.ilink_user_id,
     channel_version: WEIXIN_CHANNEL_VERSION,
     bot_agent: WEIXIN_BOT_AGENT,
   };

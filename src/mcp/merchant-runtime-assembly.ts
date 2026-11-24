@@ -102,6 +102,7 @@ import { MerchantImportDraftStore } from "../http/merchant-management/draft-stor
 import { MerchantManagementOperationStore } from "../http/merchant-management/operation-store.js";
 import { MutableServiceState } from "../http/merchant-management/service-state.js";
 import { openMerchantOperationsFacade } from "../merchant-core/ops/facade.js";
+import { ManualSupportError, ManualSupportService } from "../merchant-core/support/manual-service.js";
 import { MerchantOperationsSurface } from "../merchant-core/ops/surface.js";
 import { ManagementError } from "../merchant/application/service.js";
 import { isFakeProvider } from "../config/provider-kind.js";
@@ -179,6 +180,8 @@ export interface MerchantRuntimeAssembly {
   dataMaintenance?: CustomerDataMaintenance;
   /** 逐次核验治理所有权（未初始化/未持有时 undefined）。 */
   assertGovernanceOwner: (() => void) | undefined;
+  /** 仅本地工作台显式调用；客服事务使用治理租约所在的同一个连接。 */
+  openManualSupportPreview(): ManualSupportService;
   proposeReceptionMemory: ReceptionMemoryWriter | undefined;
   /** 关闭装配持有的数据库连接（不涉及 http server）。 */
   close: () => Promise<void>;
@@ -845,6 +848,11 @@ export async function assembleMerchantRuntime(
       : {}),
     assertGovernanceOwner:
       governance === undefined ? undefined : () => governance.write(() => undefined),
+    openManualSupportPreview() {
+      if (host !== "127.0.0.1") throw new ManualSupportError("forbidden");
+      if (runtime?.active !== true) throw new ManualSupportError("unavailable");
+      return new ManualSupportService(db, { merchantId: profile.owner_id, assertOwner: () => runtime.assertOwner() });
+    },
     proposeReceptionMemory,
     close: createCleanup([
       { id: "merchant_conversations", run: () => conversation?.close() ?? Promise.resolve() },

@@ -103,6 +103,25 @@ export interface RuleTriggerSpec {
   readonly kind: "daily_local";
   readonly local_time: string;
   readonly timezone: string;
+  /** 固定周一至周五，不推断节假日或调休。 */
+  readonly day_filter?: "weekdays";
+}
+
+/** 工作日规则补最新已到点的一次；周末不计入错过窗口。 */
+function dueWindow(rule: AutomationRule, now: string): { due: string | null; missed: number } {
+  if (rule.next_due_at === null || rule.trigger_spec.day_filter !== "weekdays") {
+    return { due: rule.next_due_at, missed: dailyMissedWindows(rule.next_due_at, now) };
+  }
+  let due = rule.next_due_at;
+  let missed = 0;
+  // 规则最长 365 天。过期规则不创建新 occurrence。
+  while (missed < 366) {
+    const next = nextDailyDueAt({ ...rule.trigger_spec, now: due });
+    if (next > now || next >= rule.expires_at) break;
+    due = next;
+    missed++;
+  }
+  return { due, missed };
 }
 
 export interface RuleScopeSpec {
@@ -278,7 +297,11 @@ export function nextDailyDueAt(input: {
   now: string;
   local_time: string;
   timezone: string;
+  day_filter?: RuleTriggerSpec["day_filter"];
 }): string {
+  if (input.day_filter !== undefined && input.day_filter !== "weekdays") {
+    throw new OperationsJobsError("validation", "day_filter_invalid", "只支持周一至周五过滤");
+  }
   const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(input.local_time);
   if (match === null) {
     throw new OperationsJobsError("validation", "local_time_invalid", "local_time 必须是 HH:MM");
@@ -294,13 +317,16 @@ export function nextDailyDueAt(input: {
   }
   const hour = Number(match[1]);
   const minute = Number(match[2]);
-  for (let dayOffset = 0; dayOffset <= 2; dayOffset++) {
-    const local = localParts(nowMs + dayOffset * 24 * 60 * 60 * 1000, input.timezone);
-    let guess = Date.UTC(local.year, local.month - 1, local.day, hour, minute, 0);
+  const local = localParts(nowMs, input.timezone);
+  for (let dayOffset = 0; dayOffset <= (input.day_filter === "weekdays" ? 7 : 2); dayOffset++) {
+    const calendar = Date.UTC(local.year, local.month - 1, local.day + dayOffset, hour, minute, 0);
+    const weekday = new Date(calendar).getUTCDay();
+    if (input.day_filter === "weekdays" && (weekday === 0 || weekday === 6)) continue;
+    let guess = calendar;
     // 两次校正覆盖 offset 在目标时刻与 guess 时刻不同的边界。
     for (let attempt = 0; attempt < 2; attempt++) {
       const offset = zoneOffsetMs(guess, input.timezone);
-      guess = Date.UTC(local.year, local.month - 1, local.day, hour, minute, 0) - offset;
+      guess = calendar - offset;
     }
     if (guess > nowMs) return new Date(guess).toISOString();
   }
@@ -443,11 +469,7 @@ export class OperationsJobsService {
     if (input.trigger_spec.kind !== "daily_local") {
       throw new OperationsJobsError("validation", "trigger_invalid", "P0 只支持 daily_local");
     }
-    nextDailyDueAt({
-      now: nowUtc(this.now),
-      local_time: input.trigger_spec.local_time,
-      timezone: input.trigger_spec.timezone,
-    });
+    nextDailyDueAt({ ...input.trigger_spec, now: nowUtc(this.now) });
     if (input.scope.window !== "previous_local_day" && input.scope.window !== "last_7_days") {
       throw new OperationsJobsError("validation", "scope_invalid", "未知窗口");
     }
@@ -550,11 +572,7 @@ export class OperationsJobsService {
       }
       const stamp = nowUtc(this.now);
       const trigger = JSON.parse(candidate.trigger_spec_json) as RuleTriggerSpec;
-      const nextDue = nextDailyDueAt({
-        now: stamp,
-        local_time: trigger.local_time,
-        timezone: trigger.timezone,
-      });
+      const nextDue = nextDailyDueAt({ ...trigger, now: stamp });
       const rule: AutomationRule = {
         rule_id: `rule_${randomUUID()}`,
         merchant_id: merchantId,
@@ -653,6 +671,25 @@ export class OperationsJobsService {
     });
   }
 
+  /** 恢复从新的有效时点排程，版本前进使旧任务永远不能借恢复提交。 */
+  resumeRule(input: { merchant_id: string; rule_id: string; expected_version: number; expected_enable_epoch: number }): AutomationRule {
+    const merchantId = text(input.merchant_id, "merchant_id");
+    const ruleId = text(input.rule_id, "rule_id");
+    return inImmediateTransaction(this.db, () => {
+      const stamp = nowUtc(this.now);
+      const rule = this.requireRule(merchantId, ruleId);
+      if (rule.version !== input.expected_version || rule.enable_epoch !== input.expected_enable_epoch || rule.state !== "PAUSED") {
+        throw new OperationsJobsError("version_conflict", "rule_version_mismatch", "暂停状态或规则版本已变化");
+      }
+      if (rule.expires_at <= stamp) throw new OperationsJobsError("validation", "rule_expired", "过期规则需重新确认");
+      const next = nextDailyDueAt({ ...rule.trigger_spec, now: stamp });
+      this.db.prepare(`UPDATE automation_rules SET state='ACTIVE', version=version+1, enable_epoch=enable_epoch+1,
+        effective_at=?, next_due_at=?, updated_at=? WHERE merchant_id=? AND rule_id=?`)
+        .run(stamp, next < rule.expires_at ? next : null, stamp, merchantId, ruleId);
+      return this.requireRule(merchantId, ruleId);
+    });
+  }
+
   listRules(merchantId: string): AutomationRule[] {
     return (
       this.db
@@ -687,9 +724,9 @@ export class OperationsJobsService {
       .prepare(
         `SELECT * FROM automation_rules
           WHERE merchant_id = ? AND state = 'ACTIVE' AND next_due_at IS NOT NULL
-            AND next_due_at <= ?`,
+            AND next_due_at <= ? AND expires_at > ?`,
       )
-      .all(merchantId, stamp) as unknown as RuleRow[];
+      .all(merchantId, stamp, stamp) as unknown as RuleRow[];
     // C16：额度有限时先处理优先级高的动作（日报摘要 > 草稿 > 待办）。
     due.sort((left, right) => {
       const byAction =
@@ -700,8 +737,8 @@ export class OperationsJobsService {
     const evaluations: RuleEvaluation[] = [];
     for (const row of due) {
       const rule = toRule(row);
-      const missedWindows = dailyMissedWindows(rule.next_due_at, stamp);
-      const triggerKey = `${rule.rule_id}:${rule.version}:${rule.next_due_at}`;
+      const { due: occurrence, missed: missedWindows } = dueWindow(rule, stamp);
+      const triggerKey = `${rule.rule_id}:${rule.version}:${occurrence}`;
       const existing = this.db
         .prepare(
           `SELECT * FROM rule_evaluations
@@ -711,7 +748,7 @@ export class OperationsJobsService {
         | EvaluationRow
         | undefined;
       if (existing !== undefined) {
-        this.advanceRule(rule, stamp);
+        this.advanceRule(rule, stamp, missedWindows);
         evaluations.push(toEvaluation(existing));
         continue;
       }
@@ -722,13 +759,13 @@ export class OperationsJobsService {
               reason_code: "prefilter_unavailable",
               detail: { missing: "projection" },
             }
-          : input.prefilter(rule);
+          : input.prefilter({ ...rule, next_due_at: occurrence });
       const evaluation = inImmediateTransaction(this.db, () => {
         const evaluationId = `reval_${randomUUID()}`;
         const detail = {
           ...(evaluated.detail ?? {}),
           content_hash: rule.content_hash,
-          next_due_at: rule.next_due_at,
+          next_due_at: occurrence,
           ...(missedWindows > 0 ? { missed_windows: missedWindows } : {}),
         };
         let finalResult = evaluated.result;
@@ -768,7 +805,7 @@ export class OperationsJobsService {
             JSON.stringify(detail),
             stamp,
           );
-        this.advanceRule(rule, stamp);
+        this.advanceRule(rule, stamp, missedWindows);
         return toEvaluation({
           evaluation_id: evaluationId,
           merchant_id: merchantId,
@@ -1103,27 +1140,25 @@ export class OperationsJobsService {
   listArtifacts(merchantId: string, taskId?: string): Array<{
     artifact_id: string;
     task_id: string;
+    rule_id: string | null;
     result_kind: string;
     content_digest: string;
     receipt_ref: string;
     created_at: string;
     payload: Record<string, unknown>;
   }> {
+    const select = `SELECT a.*, t.rule_id FROM operation_artifacts a
+      LEFT JOIN followup_tasks t ON t.merchant_id = a.merchant_id AND t.task_id = a.task_id
+      WHERE a.merchant_id = ?`;
     const rows = (
       taskId === undefined
-        ? this.db
-            .prepare(
-              "SELECT * FROM operation_artifacts WHERE merchant_id = ? ORDER BY created_at DESC LIMIT 200",
-            )
-            .all(text(merchantId, "merchant_id"))
-        : this.db
-            .prepare(
-              "SELECT * FROM operation_artifacts WHERE merchant_id = ? AND task_id = ? ORDER BY created_at DESC",
-            )
+        ? this.db.prepare(`${select} ORDER BY a.created_at DESC LIMIT 200`).all(text(merchantId, "merchant_id"))
+        : this.db.prepare(`${select} AND a.task_id = ? ORDER BY a.created_at DESC`)
             .all(text(merchantId, "merchant_id"), text(taskId, "task_id"))
     ) as unknown as Array<{
       artifact_id: string;
       task_id: string;
+      rule_id: string | null;
       result_kind: string;
       content_digest: string;
       receipt_ref: string;
@@ -1133,6 +1168,7 @@ export class OperationsJobsService {
     return rows.map((row) => ({
       artifact_id: row.artifact_id,
       task_id: row.task_id,
+      rule_id: row.rule_id,
       result_kind: row.result_kind,
       content_digest: row.content_digest,
       receipt_ref: row.receipt_ref,
@@ -1341,13 +1377,8 @@ export class OperationsJobsService {
       );
   }
 
-  private advanceRule(rule: AutomationRule, stamp: string): void {
-    const next = nextDailyDueAt({
-      now: stamp,
-      local_time: rule.trigger_spec.local_time,
-      timezone: rule.trigger_spec.timezone,
-    });
-    const missedWindows = dailyMissedWindows(rule.next_due_at, stamp);
+  private advanceRule(rule: AutomationRule, stamp: string, missedWindows: number): void {
+    const next = nextDailyDueAt({ ...rule.trigger_spec, now: stamp });
     const missed = rule.missed_count + (missedWindows > 0 ? missedWindows : 0);
     this.db
       .prepare(

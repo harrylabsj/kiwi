@@ -57,7 +57,7 @@ export class WeixinError extends Error {
 export interface BotCredentials {
   /** iLink bot 身份 ID。 */
   ilink_bot_id: string;
-  /** bot 访问令牌（仅 base_info 中发送，绝不落日志）。 */
+  /** bot 访问令牌（仅消息收发的 Authorization 头使用，绝不落日志）。 */
   bot_token: string;
   /** confirmed 携带的 baseurl；后续请求全走它（redirect 后可能变更）。 */
   base_url: string;
@@ -104,6 +104,8 @@ export interface InboundMessage {
   text: string;
   /** 回执令牌：回复必须回显（(account,user) 缓存）。 */
   context_token: string;
+  /** iLink 入站元数据证明是发给当前机器人的单条文本；旧调用方可忽略。 */
+  direct_text?: true;
 }
 
 export interface GetUpdatesResult {

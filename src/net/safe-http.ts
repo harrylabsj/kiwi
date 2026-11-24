@@ -61,6 +61,8 @@ export interface ReadJsonBodyOptions {
   maxBytes?: number;
   /** 请求的 AbortController signal：abort 时中断挂起的 body 读（超时兜底）。 */
   signal?: AbortSignal;
+  /** 端点专用的 JSON 字段转换；仍由本函数负责流式大小与超时限制。 */
+  reviver?: Parameters<typeof JSON.parse>[1];
 }
 
 /**
@@ -131,7 +133,7 @@ export async function readJsonBody(response: Response, options: ReadJsonBodyOpti
 
   const text = new TextDecoder().decode(concatChunks(chunks));
   try {
-    return JSON.parse(text);
+    return JSON.parse(text, options.reviver);
   } catch {
     throw new SafeHttpError("invalid_json", "response body is not valid JSON");
   }
