@@ -11,7 +11,7 @@
  * limitations under the License.
  */
 /**
- * 一次点击「连接Kiwi网关」（connectCatalog）的行为契约。
+ * 一次点击「发布名片」（connectCatalog）的行为契约。
  *
  * 页面脚本在 node:vm 里以假 DOM + 可脚本化 fetch 真实执行，断言落在编排顺序
  * 与安全边界：
@@ -177,8 +177,10 @@ describe("merchant workbench one-click connect flow (stageAccessAndBegin)", () =
       access: { status: "active", consentGranted: true } });
     const html = page.elements["view"]!.innerHTML;
     expect(html).toContain('id="bound-account"');
+    expect(html).toContain('>名片已发布</p>');
+    expect(html).not.toContain('目录名片已发布');
     expect(html).toContain('高级设置');
-    expect(html).toContain('目录转发询价与报价，可读取报文，不保存磋商内容');
+    expect(html).toContain('Kiwi网关转发询价与报价，可读取报文，不保存磋商内容');
     expect(html).not.toContain('id="public-inquiry-consent"');
     expect(html).not.toContain('onclick="connectCatalog()"');
     expect(html).toContain('id="access-submit"');
@@ -275,7 +277,7 @@ describe("merchant workbench one-click connect flow (stageAccessAndBegin)", () =
       connect: { status: "idle", bindingId: null, published: false },
       access: { status: "pending", statusReason: "local_staged", consentGranted: true },
       beginResponses: [
-        () => problem(422, "请先提交并授权本实例的 WorkBuddy 分享链接，再发起目录连接。"),
+        () => problem(422, "请先提交并授权本实例的 WorkBuddy 分享链接，再点击「发布名片」。"),
         () => Response.json({ status: "succeeded" }),
       ],
     });
@@ -311,7 +313,7 @@ describe("merchant workbench one-click connect flow (stageAccessAndBegin)", () =
       connect: { status: "preparing", bindingId: "bnd_1", published: false },
       access: { status: "invalid", statusReason: "catalog_access_exists" },
     });
-    await page.eventually(() => (page.elements["view"]?.innerHTML ?? "").includes("目录保留了原分享码"));
+    await page.eventually(() => (page.elements["view"]?.innerHTML ?? "").includes("Kiwi网关保留了原分享码"));
     const html = page.elements["view"]!.innerHTML;
     expect(html).toContain("保存分享链接");
     expect(html).not.toContain("已加密暂存");
@@ -325,8 +327,9 @@ describe("merchant workbench one-click connect flow (stageAccessAndBegin)", () =
     expect(html.match(/onclick="connectCatalog\(\)"/g)).toHaveLength(1);
     expect(html.match(/id="access-link"/g)).toHaveLength(1);
     expect(html).not.toContain('id="access-submit"');
-    expect(html).toContain(">连接Kiwi网关</button>");
-    expect(html).toContain("填写后，点击下方「连接Kiwi网关」。");
+    expect(html).toContain("<h2>Kiwi网关</h2>");
+    expect(html).toContain(">发布名片</button>");
+    expect(html).toContain("填写后，点击下方「发布名片」。");
     expect(html).toContain("发布后默认开放询价");
     await page.run("connectCatalog()");
     expect(page.posts.map((post) => post.path)).toEqual(["/merchant/api/v1/catalog/connect/begin"]);
@@ -338,7 +341,7 @@ describe("merchant workbench one-click connect flow (stageAccessAndBegin)", () =
       access: { status: "pending", statusReason: "local_staged", consentGranted: true },
     });
     await page.eventually(() => (page.elements["catalog-pairing"]?.innerHTML ?? "").includes("PAIR-123"));
-    expect(page.elements["catalog-pairing"]?.innerHTML).toContain("前往 Kiwi 目录确认发布");
+    expect(page.elements["catalog-pairing"]?.innerHTML).toContain("前往Kiwi网关确认发布");
     expect(page.elements["view"]?.innerHTML).not.toContain('onclick="connectCatalog()"');
   });
 
