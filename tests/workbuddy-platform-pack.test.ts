@@ -161,6 +161,17 @@ describe("WP19 首页标题", () => {
   });
 });
 
+it("开通场景先上云后发布名片，模板 ID 和总数不变", () => {
+  const scenes = modes.find((mode) => mode.modeId === "onboarding")!.scenes;
+  expect(scenes.map((scene) => scene.id)).toEqual([
+    "cap-register", "cap-email", "cap-cloud", "cap-connect", "cap-golive", "cap-upgrade",
+  ]);
+  expect(scenes[2]!.templates.map(({ id }) => id)).toEqual(["t13", "t14", "t15", "t16"]);
+  expect(scenes[3]!.templates.map(({ id }) => id)).toEqual(["t9", "t10", "t11", "t12"]);
+  expect(allScenes).toHaveLength(26);
+  expect(allScenes.flatMap((scene) => scene.templates)).toHaveLength(105);
+});
+
 describe("WP19 sites_deploy 新口径（WP17 后）", () => {
   const deprecatedPatterns = [/\binspect\b/i, /\bactivate\b/i, /(?<![\w-])deploy(?![\w-])/i] as const;
 

@@ -16,7 +16,7 @@
   "tools": [
     {
       "name": "kiwi_catalog_get_service_status",
-      "description": "读取当前商家的开通进度、名片发布、心跳新鲜度和商品名额（只读）。只有 card.published=true 且 presence.state=fresh 时，才可说「名片已发布、连接正常」；不要据此宣称买家可搜索到商家或能发起询价。待商家确认时只返回 Catalog 授权页 URL 与过期时间，不返回配对码、device_code、grant 或 owner token。",
+      "description": "读取当前商家的开通进度、名片发布、心跳新鲜度和商品名额（只读）。分别报告 card.published 与 presence.state；不要据此宣称买家可搜索到商家或能发起询价。有有效待确认会话才返回名片授权页 URL 与过期时间；无链接请回原实例工作台。不返回配对码、device_code、grant 或 owner token。",
       "inputSchema": {
         "type": "object",
         "properties": {},
@@ -25,7 +25,7 @@
     },
     {
       "name": "kiwi_catalog_get_merchant_profile",
-      "description": "读取当前已连接商家的目录身份与连接状态（只读）。返回 merchant_id、目录凭据是否可用，以及公开资料管理入口地址。",
+      "description": "读取当前商家账号及连接器授权状态（只读）；返回 merchant_id、授权是否可用与 Kiwi 商家后台入口，不代表名片已发布。",
       "inputSchema": {
         "type": "object",
         "properties": {},
@@ -43,7 +43,7 @@
     },
     {
       "name": "kiwi_catalog_save_publication_draft",
-      "description": "保存商家公开资料草稿（私有，不公开）。必填 merchant_display_name 与 title；类目/简介/店铺链接/FAQ/有效期选填。草稿不会出现在采购专家搜索结果中；公开前置请用 kiwi_catalog_request_publish。不得填写电话、邮箱等联系方式（会被目录拒绝）。",
+      "description": "保存商家公开资料草稿（私有，不公开）。必填 merchant_display_name 与 title；类目/简介/店铺链接/FAQ/有效期选填。草稿不会出现在采购专家搜索结果中，不发起名片授权、不发布商品。不得填写电话、邮箱等联系方式（会被目录拒绝）。",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -105,7 +105,7 @@
     },
     {
       "name": "kiwi_catalog_request_publish",
-      "description": "准备发布公开资料：保存草稿并返回目录门户的确认入口。**本工具不会把资料变成已发布**——必须由商家本人在门户核对公开预览并确认发布后才生效。",
+      "description": "兼容旧调用的私有草稿保存工具；不返回发布入口、不发起名片授权、不发布商品。商品发布由店主到原实例工作台操作。",
       "inputSchema": {
         "type": "object",
         "properties": {

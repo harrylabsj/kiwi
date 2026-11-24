@@ -334,7 +334,7 @@ export async function startGatewayEntryServer(
         res,
         502,
         `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>连接暂不可用</title></head><body>
-<h1>暂时无法开始 Kiwi 目录连接</h1>
+<h1>暂时无法开始 Kiwi 商家账号授权</h1>
 <p>请稍后重试；如果你还没有商家账号，可以在重试时于 Kiwi 页面注册并验证邮箱。</p>
 </body></html>`,
       );

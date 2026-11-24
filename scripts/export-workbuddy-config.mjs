@@ -100,6 +100,13 @@ export function convertToPlatformImport(base, local, { onSkip } = {}) {
     setI18n(output, baseMode.title, localMode.title, localMode.titleEn);
 
     const localScenes = new Map((localMode.scenes ?? []).map((scene) => [scene.id, scene]));
+    if (baseMode.modeId === "onboarding" && Array.isArray(baseMode.scenes)) {
+      const order = [...localScenes.keys()];
+      const byId = new Map(baseMode.scenes.map((scene) => [scene.id, scene]));
+      // 只重排现有开通场景；平台独有条目及其元数据仍保留。
+      baseMode.scenes = [...order.filter((id) => byId.has(id)).map((id) => byId.get(id)),
+        ...baseMode.scenes.filter((scene) => !localScenes.has(scene.id))];
+    }
     for (const baseScene of baseMode.scenes ?? []) {
       const localScene = localScenes.get(baseScene.id);
       if (!localScene) {

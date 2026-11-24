@@ -328,16 +328,19 @@ var PAIRING_CODE_HINTS = {
   BIND_CLAIM_INVALID: "Kiwi网关签名材料未通过本机校验：请重新发起",
   CARD_PUBLISH_REJECTED: "名片发布被Kiwi网关拒绝：请稍后重试或联系管理员",
   CARD_PUBLISH_INVALID: "名片发布回执不完整：请刷新后重试",
+  PRODUCT_TABLE_INVALID: "商品表无法校验或与当前商家不匹配，请先修复原实例的商品表",
+  MERCHANT_DISPLAY_NAME_REQUIRED: "请先在原实例配置商家显示名，无需在聊天里重填",
+  CATALOG_RUNTIME_NOT_READY: "名片发布前的运行时检查未通过，请核对实例状态",
   PAIRING_COMMUNICATION_FAILED: "与Kiwi网关通信暂时失败：请稍后刷新重试"
 };
 
 function catalogStatusText(s) {
   if (s.published) return "名片已发布";
-  var labels = { idle: "尚未连接", preparing: "等待你确认授权", pending: "等待你确认授权",
-    awaiting_confirmation: "等待你确认授权", authorized: "授权已收到，正在连接",
-    bound: "已连接，正在检查接待能力", expired: "授权已过期，请重新发起",
-    blocked: "连接未完成，请核对状态", paused: "Kiwi网关服务已暂停", revoked: "授权已撤销" };
-  return labels[s.status] || "连接尚未完成";
+  var labels = { idle: "待发布名片", preparing: "待确认", pending: "待确认", awaiting_confirmation: "待确认",
+    authorized: "发布中", bound: "发布中", expired: "发布失败：授权已过期，请重新发起",
+    blocked: "发布失败", paused: "Kiwi网关服务已暂停", revoked: "授权已撤销" };
+  if (s.errorCode && (s.status === "authorized" || s.status === "bound")) return "发布失败，可刷新续办";
+  return labels[s.status] || "名片尚未发布";
 }
 function waitingForCatalogConfirmation(s) {
   return !s.bindingId && ["preparing", "pending", "awaiting_confirmation"].indexOf(s.status) >= 0;
@@ -368,7 +371,7 @@ function renderCatalogSetup(s, a) {
       '[' + esc(s.errorCode) + ']</p>' : '') +
     (s.published ? '<p id="public-inquiry-status" class="muted" aria-live="polite">正在读取开放询价状态…</p>' :
       '<p class="muted">' + (WORKBUDDY_ACCESS
-        ? '发布后默认开放询价，买家无需注册即可通过Kiwi网关询价。'
+        ? '首次发布后将尝试开启开放询价；商品发布后，请在买家端实测。可在高级设置暂停。'
         : '发布后，采购方可在Kiwi网关发现本店。') + '</p>') +
     (waiting ? '<div id="catalog-pairing" aria-live="polite">正在读取配对信息…</div>' : '') +
     (WORKBUDDY_ACCESS && canBegin ? shareForm : '') +
@@ -460,7 +463,8 @@ function showPublicInquiryStatus(consent) {
   publicInquiryConsent = consent || null;
   var target = $("public-inquiry-status"), button = $("inquiry-toggle");
   var text = !consent ? "开放询价状态暂不可用" :
-    consent.pending ? "开放询价正在开通，请稍后刷新" :
+    consent.pending && consent.granted && !consent.policyActive ? "开放询价暂未生效，请检查接入方式和分享链接" :
+    consent.pending ? "开放询价正在开通或待同步，请稍后刷新" :
     !consent.granted ? "开放询价已暂停" :
     consent.policyActive && consent.localEnabled ? "开放询价已开启" : "开放询价暂不可用，请检查接入方式和分享链接";
   if (target) target.textContent = text;
@@ -633,11 +637,11 @@ function productStatusLabel(it) {
 }
 /** 目录发布状态文案：known=false 时不把“读不到”说成“未发布”。 */
 function publicationStateLabel(state, known) {
-  if (!known) return "状态未知";
+  if (!known) return "待核验";
   var normalized = String(state || "").toLowerCase();
-  if (normalized === "active") return "已发布";
-  if (normalized === "paused") return "已暂停";
-  return "未发布";
+  if (normalized === "active") return "商品已发布";
+  if (normalized === "paused" || normalized === "suspended") return "已暂停";
+  return "已导入，待发布";
 }
 function togglePublicationPicks(box) {
   if (publicationDraft !== null) {
@@ -1104,7 +1108,7 @@ var views = {
         html += '<p class="muted">请设置商家显示名；该名称会用于 Catalog 公开资料。</p>';
       }
       if (failed.indexOf("PRODUCTS_NOT_CONFIGURED") >= 0) {
-        html += '<p class="muted">请先导入商品。商品导入后会自动继续服务检查；当前不会报价或发布名片。</p>';
+        html += '<p class="muted">名片可先发布。请在「商品与导入」准备首个可报价 SKU；导入与商品发布是两次确认。</p>';
       }
       if (s.service_state === "OPERATING") {
         html += '<div class="row"><button class="act danger" onclick="pauseService()">暂停接待</button>' +
@@ -1688,7 +1692,7 @@ function refreshPublicationStatus() {
     for (var j = 0; j < trs.length; j++) {
       var rowSku = String(trs[j].getAttribute("data-sku") || "");
       var current = published[rowSku];
-      if (current) publishedCount += 1;
+      if (String(current || "").toLowerCase() === "active") publishedCount += 1;
       var cell = trs[j].querySelector(".pub-state");
       if (cell) cell.textContent = publicationStateLabel(current, true);
     }
@@ -1696,7 +1700,12 @@ function refreshPublicationStatus() {
     if (summary) {
       summary.textContent = "已发布到Kiwi网关 " + publishedCount + " 件，未发布 " + Math.max(0, trs.length - publishedCount) + " 件。";
     }
-  }).catch(function () { bar("Kiwi网关发布状态暂不可读取，请稍后刷新。", true); });
+  }).catch(function () {
+    document.querySelectorAll("#pub-rows .pub-state").forEach(function (cell) { cell.textContent = "待核验"; });
+    var summary = $("pub-summary");
+    if (summary) summary.textContent = "Kiwi网关商品发布状态待核验。";
+    bar("Kiwi网关发布状态暂不可读取，请稍后刷新。", true);
+  });
 }
 function commitPublication() {
   if (publicationBusy || !publicationDraft) return;

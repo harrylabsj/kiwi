@@ -134,7 +134,7 @@ export type BindingReconcileOutcome =
   | { kind: "awaiting_portal_confirmation"; record: OnboardingRecord; hint: string };
 
 export const PORTAL_CONFIRMATION_HINT =
-  "请打开 Catalog 提供的安全授权页，核对店铺公开信息与配对码，并点击「连接此服务并发布」。这一次确认同时授权 Runtime 绑定和名片发布。";
+  "请打开 Catalog 提供的安全授权页，核对店铺公开信息与配对码，并点击「确认发布商家名片」。这一次确认同时授权 Runtime 绑定和名片发布。";
 
 function requirePlatformIdentity(record: OnboardingRecord): string {
   if (record.applicationId === null || record.applicationId.trim() === "") {

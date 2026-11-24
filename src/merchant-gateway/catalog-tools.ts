@@ -20,8 +20,7 @@
  * merchant-buddy 第 1 版设计 §3.3 / §4 执行控制与商家连接器发布计划 §3.2：
  * - 商家身份来自**已验证的 OAuth 主体**（`merchantId` 由入口从访问令牌解析，
  *   绝不来自工具参数）；目录凭据按该 merchant_id 从保管库取；
- * - 草稿是私有状态；`request_publish` **不写入 published**，只保存草稿并给出
- *   目录门户的确认入口——发布必须由商家本人在门户确认页批准；
+ * - 草稿接口仅保存私有资料，不发起名片授权，不发布商品；
  * - 无凭据/凭据失效时工具明确报「需要重新连接」，不返回过期数据。
  */
 
@@ -95,7 +94,7 @@ const PUBLICATION_ID_SCHEMA = {
 export interface CatalogToolDeps {
   client: MerchantPublicationClient;
   credentials: MerchantCredentialStore;
-  /** 目录门户地址（发布确认入口）。 */
+  /** Kiwi 商家后台基址。 */
   portalBaseUrl: string;
   toolOptions?: { maxChars?: number };
 }
@@ -144,7 +143,7 @@ function readFaq(args: Record<string, unknown>): Array<{ question: string; answe
  */
 export function buildCatalogTools(merchantId: string, deps: CatalogToolDeps): ScopedMcpTools {
   const maxChars = deps.toolOptions?.maxChars ?? DEFAULT_MAX_CHARS;
-  const portalUrl = `${trimTrailingSlashes(deps.portalBaseUrl)}/portal/publications`;
+  const portalUrl = `${trimTrailingSlashes(deps.portalBaseUrl)}/portal/account`;
 
   const credential = (): string => {
     const stored = deps.credentials.get(merchantId);
@@ -189,16 +188,20 @@ export function buildCatalogTools(merchantId: string, deps: CatalogToolDeps): Sc
   > = {
     kiwi_catalog_get_service_status: async () => {
       const status = await deps.client.fetchServiceStatus(credential());
+      const awaitingConfirmation = status.onboarding.status === "awaiting_merchant_confirmation" &&
+        status.onboarding.authorization_url !== "" && Date.parse(status.onboarding.expires_at) > Date.now();
       return ok(
         {
           account: status.account,
-          onboarding: status.onboarding,
+          onboarding: awaitingConfirmation ? status.onboarding : {
+            ...status.onboarding, authorization_url: "", expires_at: "",
+          },
           card: status.card,
           presence: status.presence,
           listings: status.listings,
           note:
-            "只有 card.published=true 且 presence.state=fresh 时，才可说「名片已发布、连接正常」；" +
-            "这只证明连接与心跳，不代表买家可搜索到该商家或能发起询价（该能力未实测时一律标未验证）。" +
+            "分别报告名片激活、心跳、指定 SKU 发布回执和买家实测。名片已发布不等于能询价。" +
+            (awaitingConfirmation ? "请由店主本人核对并确认发布商家名片。" : "没有可用确认链接时，请回到原实例工作台查看或发起名片发布。") +
             "授权中的配对码、设备码和 grant 不会由此工具返回。",
         },
         maxChars,
@@ -215,7 +218,7 @@ export function buildCatalogTools(merchantId: string, deps: CatalogToolDeps): Sc
           note:
             stored === undefined
               ? "尚未连接或凭据已过期：请重新连接「Kiwi 商家运营」后再管理公开资料。"
-              : "公开资料为商家声明快照（买家看到「资料可查」，不可实时询价）；发布须在目录门户确认页批准。",
+              : "已连接 Kiwi 商家账号（连接器授权），不代表实例名片已发布；商家后台可用已有账号登录。",
         },
         maxChars,
       );
@@ -256,8 +259,7 @@ export function buildCatalogTools(merchantId: string, deps: CatalogToolDeps): Sc
           version: result.publication.version,
           created: result.created,
           updated: result.idempotent,
-          confirm_url: portalUrl,
-          note: "已保存为私有草稿（未公开，采购专家搜索不到）。发布需你在目录门户的公开资料页确认。",
+          note: "已保存为私有草稿（未公开）。本工具不发起名片授权、不发布商品，无确认链接。",
         },
         maxChars,
       );
@@ -273,10 +275,7 @@ export function buildCatalogTools(merchantId: string, deps: CatalogToolDeps): Sc
           publication_id: result.publication.publication_id,
           status: result.publication.status,
           version: result.publication.version,
-          confirm_url: portalUrl,
-          note:
-            "草稿已保存，但**尚未发布**：请在目录门户的公开资料页核对公开预览并点击确认发布。" +
-            "确认前采购专家搜索不到该商品。",
+          note: "草稿已保存，尚未发布，也未发起名片授权。商品发布请到原实例工作台另行预览并由本人确认。",
         },
         maxChars,
       );
@@ -331,15 +330,15 @@ export function buildCatalogTools(merchantId: string, deps: CatalogToolDeps): Sc
       name: "kiwi_catalog_get_service_status",
       description:
         "读取当前商家的开通进度、名片发布、心跳新鲜度和商品名额（只读）。" +
-        "只有 card.published=true 且 presence.state=fresh 时，才可说「名片已发布、连接正常」；" +
+        "分别报告 card.published 与 presence.state；" +
         "不要据此宣称买家可搜索到商家或能发起询价。" +
-        "待商家确认时只返回 Catalog 授权页 URL 与过期时间，不返回配对码、device_code、grant 或 owner token。",
+        "有有效待确认会话才返回名片授权页 URL 与过期时间；无链接请回原实例工作台。不返回配对码、device_code、grant 或 owner token。",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
     },
     {
       name: "kiwi_catalog_get_merchant_profile",
       description:
-        "读取当前已连接商家的目录身份与连接状态（只读）。返回 merchant_id、目录凭据是否可用，以及公开资料管理入口地址。",
+        "读取当前商家账号及连接器授权状态（只读）；返回 merchant_id、授权是否可用与 Kiwi 商家后台入口，不代表名片已发布。",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
     },
     {
@@ -355,13 +354,13 @@ export function buildCatalogTools(merchantId: string, deps: CatalogToolDeps): Sc
       name: "kiwi_catalog_save_publication_draft",
       description:
         "保存商家公开资料草稿（私有，不公开）。必填 merchant_display_name 与 title；类目/简介/店铺链接/FAQ/有效期选填。" +
-        "草稿不会出现在采购专家搜索结果中；公开前置请用 kiwi_catalog_request_publish。不得填写电话、邮箱等联系方式（会被目录拒绝）。",
+        "草稿不会出现在采购专家搜索结果中，不发起名片授权、不发布商品。不得填写电话、邮箱等联系方式（会被目录拒绝）。",
       inputSchema: PUBLICATION_INPUT_SCHEMA,
     },
     {
       name: "kiwi_catalog_request_publish",
       description:
-        "准备发布公开资料：保存草稿并返回目录门户的确认入口。**本工具不会把资料变成已发布**——必须由商家本人在门户核对公开预览并确认发布后才生效。",
+        "兼容旧调用的私有草稿保存工具；不返回发布入口、不发起名片授权、不发布商品。商品发布由店主到原实例工作台操作。",
       inputSchema: PUBLICATION_INPUT_SCHEMA,
     },
     {

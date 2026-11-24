@@ -187,6 +187,7 @@ export const CONNECTION_PAIRING_SAFE_CODES = new Set([
   "PAIRING_DENIED",
   "PUBLICATION_CHECK_FAILED",
   "PRODUCT_TABLE_INVALID",
+  "MERCHANT_DISPLAY_NAME_REQUIRED",
   "PAIRING_WINDOW_EXPIRED", // 授权窗口（=Catalog grant 窗口）已过：需重新配对
   "BIND_REJECTED", // Catalog 拒绝 bind 请求（grant 过期/不匹配/版本冲突）
   "BIND_CLAIM_INVALID", // bind 已到达但签名声明未通过本地验真
@@ -253,6 +254,13 @@ export function isPublicHostAllowed(hostname: string): boolean {
     !privateIpv4 &&
     !privateIpv6
   );
+}
+
+/** 部署占位名不是可公开的商家身份。只拦截新发起/继续发布，不改变存量已发布状态。 */
+function assertPublishableMerchantName(card: AgentCard): void {
+  if (card.name.trim() === "待设置商家名称" || card.provider.organization.trim() === "待设置商家名称") {
+    throw new MerchantConnectError("MERCHANT_DISPLAY_NAME_REQUIRED", "请先在原实例配置商家显示名，再从工作台发布名片；无需在聊天里重填。");
+  }
 }
 
 /** 连接会话（merchant-enrollments.json 中单条 session 的完整形状）。 */
@@ -1051,8 +1059,10 @@ class ConnectionServiceImpl implements MerchantConnectionService {
           const fresh = this.selectSession(readEnrollmentStore(this.dataDir));
           return this.toSummary(fresh ?? session);
         }
+        assertPublishableMerchantName(card);
         return this.toSummary(session);
       }
+      assertPublishableMerchantName(card);
 
       // 无可用会话：只有这里允许创建 enrollment。但若同 origin+key 还存在
       // **其他 Catalog** 的活会话，说明配置指向变了——明确拒绝而不是 silently
@@ -2201,6 +2211,7 @@ class ConnectionServiceImpl implements MerchantConnectionService {
         "公网服务的公开 Agent Card 已不同于商家批准的预览；未发布名片。请重新检查并授权新的公开信息。",
       );
     }
+    assertPublishableMerchantName(currentCard);
     const catalogAgentId = session.catalog_agent_id;
     const bindingId = session.binding_id;
     const verified: VerifiedBinding = {
@@ -2270,15 +2281,18 @@ class ConnectionServiceImpl implements MerchantConnectionService {
         "Catalog 未确认名片激活；绑定已保留，重试可续办",
       );
     }
-    const published = {
+    const published: ConnectionSession = {
       ...session,
-      status: "published" as const,
+      status: "published",
       card_revision: activated.revision,
-      ...(this.defaultPublicInquiry ? { public_inquiry_default_pending: true } : {}),
     };
-    // 同 catalog agent 的旧 published 会话由新绑定取代（标 replaced）；其余一律保留。
-    this.persist((fresh) =>
-      fresh.sessions.map((item) => {
+    // 只有实例首次激活可以默认开通。重绑不能把之前按旧 binding 保存的暂停当成无偏好。
+    // 在同一次状态写入中检查历史，防止重启、轮换或重试重新打开询价。
+    this.persist((fresh) => {
+      const firstPublication = !fresh.sessions.some((item) => item.enrollment_id !== session.enrollment_id &&
+        (item.status === "published" || item.status === "replaced"));
+      if (firstPublication && this.defaultPublicInquiry) published.public_inquiry_default_pending = true;
+      return fresh.sessions.map((item) => {
         if (item.enrollment_id === session.enrollment_id) return published;
         const old = item as ConnectionSession;
         return old.status === "published" &&
@@ -2286,8 +2300,8 @@ class ConnectionServiceImpl implements MerchantConnectionService {
           old.binding_id !== published.binding_id
           ? { ...old, status: "replaced" as const }
           : item;
-      }),
-    );
+      });
+    });
     this.markPublishedVerified();
     return published;
   }

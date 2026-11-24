@@ -77,17 +77,25 @@ async function withTimeout(
   }
 }
 
-/** 逐项执行就绪检查；任一项失败即 not ready（不短路，便于一次看清全部缺口）。 */
+type CardReadinessInputs = Omit<ReadinessInputs, "products">;
+
+async function runChecks(inputs: CardReadinessInputs & Partial<Pick<ReadinessInputs, "products">>): Promise<ReadinessReport> {
+  const { identity, storage, policy, products, timeoutMs = DEFAULT_TIMEOUT_MS, now = () => new Date() } = inputs;
+  const entries = { identity, storage, ...(products === undefined ? {} : { products }), policy };
+  const checks = Object.fromEntries(await Promise.all(Object.entries(entries).map(async ([name, check]) =>
+    [name, await withTimeout(name, check, timeoutMs)] as const,
+  )));
+  return { ready: Object.values(checks).every((check) => check.ok), checked_at: now().toISOString(), checks };
+}
+
+/** /readyz、报价接待与心跳都继续要求真实商品可读。 */
 export async function runReadiness(inputs: ReadinessInputs): Promise<ReadinessReport> {
-  const timeoutMs = inputs.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const now = inputs.now ?? (() => new Date());
-  const [identity, storage, products, policy] = await Promise.all([
-    withTimeout("identity", inputs.identity, timeoutMs),
-    withTimeout("storage", inputs.storage, timeoutMs),
-    withTimeout("products", inputs.products, timeoutMs),
-    withTimeout("policy", inputs.policy, timeoutMs),
-  ]);
-  const checks = { identity, storage, products, policy };
-  const ready = Object.values(checks).every((c) => c.ok);
-  return { ready, checked_at: now().toISOString(), checks };
+  return runChecks(inputs);
+}
+
+/** 名片发布不要求可报价 SKU；调用方仍须独立校验商品表归属及名片签名。 */
+export async function runCardPublicationReadiness(inputs: CardReadinessInputs): Promise<ReadinessReport> {
+  const { identity, storage, policy, now, timeoutMs } = inputs;
+  return runChecks({ identity, storage, policy,
+    ...(now === undefined ? {} : { now }), ...(timeoutMs === undefined ? {} : { timeoutMs }) });
 }

@@ -127,7 +127,7 @@ export async function connectMerchant(options: MerchantConnectOptions): Promise<
     output(`即将授权连接 ${options.profile.name ?? options.profile.agent_id}（配对码 ${pairing.userCode}）。请在 Catalog 页面确认店铺公开信息；不要把配对码发给他人。`);
     options.openBrowser?.(pairing.verificationUri);
     output(`授权页面：${pairing.verificationUri}`);
-    output("Runtime 已开始等待登录与一次「连接此服务并发布」确认；可 Ctrl+C 后重新运行命令继续。");
+    output("Runtime 已开始等待登录与一次「确认发布商家名片」确认；可 Ctrl+C 后重新运行命令继续。");
     const deadline = Math.min(Date.parse(pairing.expiresAt), now().getTime() + (options.timeoutMs ?? 10 * 60_000));
     let summary = first;
     while (summary.status === "awaiting_confirmation") {

@@ -203,7 +203,7 @@ const CONNECT_BEGIN_PRE_EFFECT_CODES = new Set([
   "CATALOG_MISMATCH", "STATE_INVALID", "PREVIEW_CHANGED", "RUNTIME_CARD_CHANGED",
   // 接入方式/公开名片读取发生在本机，且在任何 create enrollment 之前：
   // 失败没有不确定的远端副作用，商家修正后可用同一幂等键重试。
-  "ACCESS_SHARE_LINK_REQUIRED", "ACCESS_MODE_UNCERTAIN",
+  "ACCESS_SHARE_LINK_REQUIRED", "ACCESS_MODE_UNCERTAIN", "MERCHANT_DISPLAY_NAME_REQUIRED",
 ]);
 const MAX_BODY_BYTES = 1_048_576;
 /** 非候选写命令确认引用的有效期（BD §7.3：短时、单次）。 */

@@ -318,7 +318,7 @@ export function createFileListingPublicationService(options: FileListingPublicat
     if (context === null) {
       throw new FileListingPublicationError(
         "LISTING_PUBLISH_NOT_CONNECTED",
-        "尚未完成 Runtime 连接与名片发布；请先完成接入再发布商品",
+        "请先在原实例工作台发布名片，再发布商品",
       );
     }
     return context;
