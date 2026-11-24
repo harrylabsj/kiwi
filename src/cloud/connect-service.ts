@@ -1077,12 +1077,20 @@ class ConnectionServiceImpl implements MerchantConnectionService {
       if (
         store.sessions.some((item) => {
           const s = item as ConnectionSession;
-          return (
-            s.runtime_origin === this.origin &&
-            s.key_thumbprint === this.keyThumbprint &&
-            s.operation_claim &&
-            s.operation_claim.stage !== "poll"
-          );
+          if (s.runtime_origin !== this.origin || s.key_thumbprint !== this.keyThumbprint)
+            return false;
+          if (!s.operation_claim || s.operation_claim.stage === "poll") return false;
+          // 僵尸 claim 不阻止重新配对：expired 会话，或副作用窗口（grant /
+          // binding 有效期）已过的会话，其后续写操作必被 Catalog 拒绝，不存在
+          // 未决副作用。published 不按本地有效期判死（同 selectSession），残留
+          // claim 仍需对账。
+          if (s.status === "expired") return false;
+          if (s.status !== "published") {
+            const effectExpiry = s.status === "bound" ? s.binding_expires_at : s.expires_at;
+            const expiryMs = Date.parse(effectExpiry ?? "");
+            if (Number.isFinite(expiryMs) && expiryMs <= this.now().getTime()) return false;
+          }
+          return true;
         })
       )
         throw new MerchantConnectError(
@@ -1173,7 +1181,11 @@ class ConnectionServiceImpl implements MerchantConnectionService {
         // 过期授权显式标记：不再轮询，下一次 begin() 为同 origin+key 新建。
         const stale = this.findStaleSession(store);
         if (stale !== undefined) {
+          // 标 expired 的同时清掉残留 operation_claim：授权窗口过后 bind/publish
+          // 写操作必被 Catalog 拒绝，副作用已不可能悬而未决，claim 属僵尸；
+          // 不清会让 begin() 的未决副作用检查永久挡住建连（死锁）。
           const expired = { ...stale, status: "expired" as const };
+          delete expired.operation_claim;
           this.persist((fresh) =>
             fresh.sessions.map((item) =>
               item.enrollment_id === stale.enrollment_id ? expired : item,
@@ -1185,6 +1197,19 @@ class ConnectionServiceImpl implements MerchantConnectionService {
         }
         const expiredSession = this.latestExpiredSession(store);
         if (expiredSession !== undefined) {
+          // 存量自愈：历史版本标记 expired 时未清 operation_claim（见上），
+          // 这里持久化清除一次，之后 begin() 即可重新配对。
+          if (expiredSession.operation_claim) {
+            const cleared = { ...expiredSession };
+            delete cleared.operation_claim;
+            this.persist((fresh) =>
+              fresh.sessions.map((item) =>
+                item.enrollment_id === cleared.enrollment_id ? cleared : item,
+              ),
+            );
+            this.availability = { code: "PAIRING_WINDOW_EXPIRED", detail: "" };
+            return this.toSummary(cleared);
+          }
           this.availability = { code: "PAIRING_WINDOW_EXPIRED", detail: "" };
           return this.toSummary(expiredSession);
         }
