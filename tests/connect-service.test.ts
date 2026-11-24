@@ -1834,4 +1834,83 @@ describe("CLI 适配层（connectMerchant 行为兼容）", () => {
     expect(stale.status).toBe("awaiting_confirmation");
     expect(stale.code).toBeNull();
   });
+
+  it("僵尸 claim：authorized 带 unknown bind claim 且授权窗口过期，reconcile 清 claim 后 begin 可重新配对", async () => {
+    const harness = await makeHarness();
+    const service = createMerchantConnectionService(harness.serviceOptions);
+    await service.begin();
+    await service.reconcile(); // published
+    harness.catalog.counts.binds = 0;
+    // 复现「bind 副作用悬而未决（如 Catalog 409）后 grant 窗口过期」的现场：
+    // session 停在 authorized，挂着 stage=bind 的 unknown operation_claim。
+    rewriteSessions(harness.dataDir, (session) => ({
+      ...session,
+      status: "authorized",
+      binding_id: undefined,
+      binding_version: undefined,
+      binding_expires_at: undefined,
+      expires_at: new Date(Date.now() - 1_000).toISOString(),
+      operation_claim: {
+        token: "zombie-claim",
+        stage: "bind",
+        state: "unknown",
+        expires_at: new Date(Date.now() - 1_000).toISOString(),
+      },
+    }));
+    const expired = await service.reconcile();
+    expect(expired.status).toBe("expired");
+    expect(expired.code).toBe("PAIRING_WINDOW_EXPIRED");
+    // 标 expired 的同时 claim 被持久化清除，不再留僵尸。
+    const store = JSON.parse(
+      readFileSync(path.join(harness.dataDir, "merchant-enrollments.json"), "utf8"),
+    ) as { sessions: Array<Record<string, unknown>> };
+    expect(store.sessions.every((s) => s["operation_claim"] === undefined)).toBe(true);
+    // begin 不再被未决副作用检查挡住：直接进入新配对会话。
+    const restarted = await service.begin();
+    expect(["preparing", "awaiting_confirmation"]).toContain(restarted.status);
+    expect((await service.getSummary()).code).toBeNull();
+  });
+
+  it("僵尸 claim 存量自愈：expired 会话残留 claim 时 reconcile 清除，begin 直接可重新配对", async () => {
+    const harness = await makeHarness();
+    const service = createMerchantConnectionService(harness.serviceOptions);
+    await service.begin();
+    await service.reconcile(); // published
+    harness.catalog.counts.binds = 0;
+    // 历史版本标记 expired 时未清 claim 的存量数据形态。
+    rewriteSessions(harness.dataDir, (session) => ({
+      ...session,
+      status: "expired",
+      binding_id: undefined,
+      binding_version: undefined,
+      binding_expires_at: undefined,
+      expires_at: new Date(Date.now() - 1_000).toISOString(),
+      operation_claim: {
+        token: "zombie-claim",
+        stage: "bind",
+        state: "unknown",
+        expires_at: new Date(Date.now() - 1_000).toISOString(),
+      },
+    }));
+    // 路径一：reconcile 走 latestExpiredSession 分支，持久化清掉存量僵尸。
+    const summary = await service.reconcile();
+    expect(summary.status).toBe("expired");
+    expect(summary.code).toBe("PAIRING_WINDOW_EXPIRED");
+    const store = JSON.parse(
+      readFileSync(path.join(harness.dataDir, "merchant-enrollments.json"), "utf8"),
+    ) as { sessions: Array<Record<string, unknown>> };
+    expect(store.sessions.every((s) => s["operation_claim"] === undefined)).toBe(true);
+    // 路径二（不经 reconcile）：begin 的未决副作用检查跳过 expired 会话。
+    rewriteSessions(harness.dataDir, (session) => ({
+      ...session,
+      operation_claim: {
+        token: "zombie-claim",
+        stage: "bind",
+        state: "unknown",
+        expires_at: new Date(Date.now() - 1_000).toISOString(),
+      },
+    }));
+    const restarted = await service.begin();
+    expect(["preparing", "awaiting_confirmation"]).toContain(restarted.status);
+  });
 });
