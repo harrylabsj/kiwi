@@ -39,7 +39,6 @@ const products = JSON.parse(readFileSync("portfolio-products.json", "utf8")).pro
 
 const CATALOG_REPO = "harrylabsj/kiwi-catalog";
 const SHOPPING_REPO = "harrylabsj/shopping-cli";
-const KIWI_REPO = "harrylabsj/kiwi";
 
 const gh = (args) => execFileSync("gh", args, { encoding: "utf8" }).trim();
 
