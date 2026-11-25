@@ -194,7 +194,9 @@ async function networkFixture(dir: string, time: () => Date = () => new Date()) 
       if (path === "/v1/enrollments/device") {
         counts.creates += 1;
         return json(res, 200, {
-          enrollment_id: "enr_independent",
+          // 真实 Catalog 每次创建都发新随机 id；判死后重新配对的场景会持有
+          // 新旧两条会话，固定 id 会让 persist 的 CAS 误判同 id 冲突。
+          enrollment_id: counts.creates === 1 ? "enr_independent" : `enr_independent_${counts.creates}`,
           device_code: "d".repeat(40),
           user_code: "I-1234",
           verification_uri: `${CATALOG}/confirm`,
@@ -502,7 +504,7 @@ describe("A301 independent Connect critical acceptance", () => {
     expect(current.store_revision).toBeGreaterThan(0);
   });
 
-  it("a lost bind reply remains unknown after claim expiry and restart and cannot cause rebind or a new enrollment", async () => {
+  it("a lost bind reply is never retried automatically; after grant window death, explicit begin may re-pair", async () => {
     const dir = directory();
     let ms = Date.now();
     const h = await networkFixture(dir, () => new Date(ms));
@@ -518,27 +520,47 @@ describe("A301 independent Connect critical acceptance", () => {
     expect(retained).toMatchObject({ status: "authorized", operation_claim: { state: "unknown" } });
     ms += 601000;
     const restarted = createMerchantConnectionService(h.options);
-    await expect(restarted.begin()).rejects.toMatchObject({ code: "CONNECTION_OPERATION_UNKNOWN" });
-    await restarted.reconcile();
+    // 判死前（窗口刚过、reconcile 尚未标记）：显式 begin 同样拒绝，绝不自动
+    // 重试（no stale lease stealing；副作用可能已到达，未对账不得二次 bind）。
     await expect(restarted.begin()).rejects.toMatchObject({ code: "CONNECTION_OPERATION_UNKNOWN" });
     expect(h.counts).toMatchObject({ creates: 1, binds: 1, publish: 0, activate: 0 });
+    // reconcile 判死：授权窗口过期 → Catalog 必拒绝该 enrollment 的后续写，
+    // 副作用不再悬而未决 → 标 expired 并持久化清除僵尸 claim。
+    const judged = await restarted.reconcile();
+    expect(judged.status).toBe("expired");
     expect(
-      (readEnrollmentStore(dir).sessions[0] as unknown as typeof retained).operation_claim.state,
-    ).toBe("unknown");
+      (readEnrollmentStore(dir).sessions[0] as unknown as { operation_claim?: unknown })
+        .operation_claim,
+    ).toBeUndefined();
+    expect(h.counts).toMatchObject({ creates: 1, binds: 1, publish: 0, activate: 0 });
+    // 判死后人工显式 begin 放行重新配对（2026-11-24 海纳百川死锁事故：
+    // 此前这条路径被永久挡住）。若旧 bind 实际已到达，Catalog 侧按
+    // binding_version 收敛到新版，旧版 revoke，不产生双活。
+    const repaired = await restarted.begin();
+    expect(["preparing", "awaiting_confirmation"]).toContain(repaired.status);
+    expect(h.counts).toMatchObject({ creates: 2, binds: 1, publish: 0, activate: 0 });
+    // 崩溃残留 active claim（进程未及标记 unknown）在窗口过期后同样：判死前
+    // 拒绝、判死后解锁。
     const file = join(dir, "merchant-enrollments.json"),
       crash = JSON.parse(fs.readFileSync(file, "utf8"));
-    crash.sessions[0].status = "authorized";
-    crash.sessions[0].operation_claim.state = "active"; // Process died before it could mark unknown.
+    const last = crash.sessions.length - 1;
+    crash.sessions[last].status = "authorized";
+    crash.sessions[last].expires_at = new Date(ms - 1000).toISOString();
+    crash.sessions[last].operation_claim = {
+      token: "crash-leftover",
+      stage: "bind",
+      state: "active", // Process died before it could mark unknown.
+      expires_at: new Date(ms - 1000).toISOString(),
+    };
     fs.writeFileSync(file, JSON.stringify(crash));
     const afterCrash = createMerchantConnectionService(h.options);
     await expect(afterCrash.begin()).rejects.toMatchObject({
       code: "CONNECTION_OPERATION_UNKNOWN",
     });
     await afterCrash.reconcile();
-    await expect(afterCrash.begin()).rejects.toMatchObject({
-      code: "CONNECTION_OPERATION_UNKNOWN",
-    });
-    expect(h.counts).toMatchObject({ creates: 1, binds: 1, publish: 0, activate: 0 });
+    const reparedAfterCrash = await afterCrash.begin();
+    expect(["preparing", "awaiting_confirmation"]).toContain(reparedAfterCrash.status);
+    expect(h.counts).toMatchObject({ creates: 3, binds: 1, publish: 0, activate: 0 });
   });
 
   it("atomic replacement closes metadata faults, honors explicit private mode and distinguishes pre-rename from committed directory-sync failure", () => {
