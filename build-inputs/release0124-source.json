@@ -1,7 +1,7 @@
 {
   "format": "kiwi-npm-shipping-source/1",
   "source_base": "e703bc0d67e24a98c417274e46f37d210eff86ac",
-  "reviewed_release": "0.12.36",
+  "reviewed_release": "0.12.37",
   "owner_runtime_default": "dual-off/private",
   "tool": {
     "node": "v22.22.3",
@@ -98,8 +98,8 @@
     "arch": "arm64"
   },
   "stage": {
-    "package_sha256": "sha256:e57997f28a7f1dc368e42f38980ecb5fbdcf3541de5a5db88607860e33820176",
-    "lock_sha256": "sha256:faeb9386573b8d72fd5b72755b7b8de5af24572fe11f33ab0aea32f5b8d77f0a"
+    "package_sha256": "sha256:a48735cd41ab814c614b4bc379ba6507dd1ae46ff8c41be2e7f912adf44a2b2c",
+    "lock_sha256": "sha256:1931be72e6831bf70fc93d9e4ba4729210f9dedc34a18d986fb48ffe3311f92b"
   },
   "budgets": {
     "plain_bytes": 268435456,
@@ -254,11 +254,11 @@
     },
     {
       "path": "build-inputs/release0124-stage/package-lock.json",
-      "sha256": "sha256:faeb9386573b8d72fd5b72755b7b8de5af24572fe11f33ab0aea32f5b8d77f0a"
+      "sha256": "sha256:1931be72e6831bf70fc93d9e4ba4729210f9dedc34a18d986fb48ffe3311f92b"
     },
     {
       "path": "build-inputs/release0124-stage/package.json",
-      "sha256": "sha256:e57997f28a7f1dc368e42f38980ecb5fbdcf3541de5a5db88607860e33820176"
+      "sha256": "sha256:a48735cd41ab814c614b4bc379ba6507dd1ae46ff8c41be2e7f912adf44a2b2c"
     },
     {
       "path": "build-inputs/shipping-audit-allow.json",
@@ -694,7 +694,7 @@
     },
     {
       "path": "docs/platform-release-ledger.md",
-      "sha256": "sha256:29a1ed5bcdc4bc7001cf0a4fc38acf9c6f4a22a88e9114a93a33f14cb9fb4f40"
+      "sha256": "sha256:0c15fe5f7f8bac2dba1964d3235f10cfafb1c1eab5f80e216349192bef4bb348"
     },
     {
       "path": "docs/portfolio-release-management.md",
@@ -3638,19 +3638,19 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "sha256:53cffd1a8863346665f116dd3c7aa79e97e7582b1c3eea84f91aea0045e66642"
+      "sha256": "sha256:fe308fafb986762709bf5548e4a46370d0dfaa98253ef4b501f810207e89b412"
     },
     {
       "path": "package.json",
-      "sha256": "sha256:c40b2a51fb6f5ef16af132ac4f03b9cd9c3ab714cada1678557e3a9779706d30"
+      "sha256": "sha256:496a2821976f3eac2befe956a8c44b0108dec611c5f89dcf1f28e0f678bcee11"
     },
     {
       "path": "packages/merchant-cloud/package-lock.json",
-      "sha256": "sha256:4231e85cc5ad2dd792e99e5889e74d712c852a80eb4a4d32d69b926a0642c15c"
+      "sha256": "sha256:19199f56398a246d01c1a12495409dee2383057dcb7d21ddd5ee64e91ea2bcaf"
     },
     {
       "path": "packages/merchant-cloud/package.json",
-      "sha256": "sha256:73f6c3915e1e08c05ce83700ffa5d57d24773f3a6509b6569daec6dc84e17cb1"
+      "sha256": "sha256:95bd895eb574e8655a59adb6d1d18e26d454184d6adeb5bfb936a417af8a7bde"
     },
     {
       "path": "packages/merchant-cloud/prepare.mjs",
@@ -3658,7 +3658,7 @@
     },
     {
       "path": "portfolio-products.json",
-      "sha256": "sha256:cc3ca34dd2127c6c32774ddd15518367e8b26e89a0e1039a644b3536fadf9cf0"
+      "sha256": "sha256:a9686d44b570c7433c211e00e2295107196fc2d78024285562fb7ed0b45d40aa"
     },
     {
       "path": "portfolio.lock.json",
@@ -3826,7 +3826,7 @@
     },
     {
       "path": "scripts/lib/npm-shipping.mjs",
-      "sha256": "sha256:dc208ec31ef47236a53145cecdbe072571edf8feabfd2fb7aca3d5a87a61c859"
+      "sha256": "sha256:21a69eeafcda467c1d6951367c9c47591c9faaf053f083641e89ac0ea3394db7"
     },
     {
       "path": "scripts/lib/portfolio-lock-verify.d.mts",
@@ -3998,7 +3998,7 @@
     },
     {
       "path": "scripts/verify-cloud-package-candidate.mjs",
-      "sha256": "sha256:3be53b16e93f3cb67ee063588856f521053fbf993d1aa44aa4bd7a2d6a107c70"
+      "sha256": "sha256:c56a4e09b00ddcd0b1bf1de1c42f56707e103b4a9e38c4f7023c50e9cbebe087"
     },
     {
       "path": "scripts/verify-contract-vectors.mjs",
@@ -4022,7 +4022,7 @@
     },
     {
       "path": "scripts/verify-npm-shipping-installed.mjs",
-      "sha256": "sha256:643ff84c8194f8e8ec13a3c4a4120460d5b4101a214e811428edc9cf53ba30f8"
+      "sha256": "sha256:9ef6a7c56e9cbe0d0f55a35f744fd345b6d328816616add2ceb39c536425ad8d"
     },
     {
       "path": "scripts/verify-npm-shipping-runtime.mjs",
@@ -6790,9 +6790,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:8ff4dcaffba59cc220a5faac2b0cd9c5b5384de091102ef4b78444c2c8a5468e",
+      "sha256": "sha256:6cd41873dc13c5345a2dc90cd4d73cbb6bbdd7cb55b73bb6aa33b650041de950",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:8a8fa1b5344229417c6b108d8c3b97dcdab92dd1a7fd1b8b47249ffb9f1af13d"
+      "raw_sha256": "sha256:beead53bb5dfbba75e3fea62b29e6bd1cfcd9d0b5125da709a7e3dfbabba0d0a"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
@@ -8672,7 +8672,7 @@
     },
     {
       "path": "tests/npm-shipping-contract.test.ts",
-      "sha256": "sha256:f800e1f29d8cb710af037e9c04f345d4099d38cd9ad0f57bdd2f2562afd63292"
+      "sha256": "sha256:e1966e60af2ad54038498b70695750e8d2f384b9477faff545f937d18803e739"
     },
     {
       "path": "tests/onboarding-local-fallback.test.ts",
