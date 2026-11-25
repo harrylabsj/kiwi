@@ -6,13 +6,30 @@
 
 | 平台 | 产品 | 已确认版本 | 证据与限制 |
 |---|---|---:|---|
-| npm | `@harrylabsj/kiwi` | 0.12.35 | 2026-11-24 portfolio run [45389500990](https://github.com/harrylabsj/kiwi/actions/runs/45389500990) 发布；发布后手工回读 npm latest=0.12.35，并下载 tarball 核验 SHA-1 与发布日志一致（部分渠道发布时 `verify-registry` job 不运行）。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi/v/0.12.35)。 |
-| npm | `@harrylabsj/kiwi-merchant-cloud` | 0.12.35 | 2026-11-24 同一 portfolio run 发布；手工回读 npm latest=0.12.35，并下载 tarball 核验 SHA-1 与发布日志一致。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-merchant-cloud/v/0.12.35)。 |
+| npm | `@harrylabsj/kiwi` | 0.12.36 | 2026-11-25 portfolio run [45523214785](https://github.com/harrylabsj/kiwi/actions/runs/45523214785) 发布；发布后下载 tarball 核验 SHA-1（`d864b393…`）与发布日志一致（`verify-registry` job 因 needs 含 skipped job 未运行）。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi/v/0.12.36)。 |
+| npm | `@harrylabsj/kiwi-merchant-cloud` | 0.12.36 | 2026-11-25 同一 portfolio run 发布；下载 tarball 核验 SHA-1 与发布日志一致。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-merchant-cloud/v/0.12.36)。 |
 | npm | `@harrylabsj/kiwi-dsh-plugin` | 0.1.4 | 2026-11-11 portfolio run 发布并回读核验；npm 可查 0.1.4。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-dsh-plugin/v/0.1.4)。 |
-| PyPI | `kiwi-catalog` | 0.5.29 | 2026-11-25 portfolio run [45504945623](https://github.com/harrylabsj/kiwi/actions/runs/45504945623) 发布，发布后手工回读 PyPI latest=0.5.29 并干净安装核验；**生产 kiwi-hk 已于同日部署 0.5.29 + admin 0.2.28，schema user_version 59→60 迁移成功**。[PyPI 版本页](https://pypi.org/project/kiwi-catalog/0.5.29/)。 |
-| PyPI | `shopping-cli` | 3.2.11 | 2026-11-11 portfolio run 发布并回读核验；PyPI 可查 3.2.11。[PyPI 版本页](https://pypi.org/project/shopping-cli/3.2.11/)。 |
+| PyPI | `kiwi-catalog` | 0.5.30 | 2026-11-25 portfolio run [45617840510](https://github.com/harrylabsj/kiwi/actions/runs/45617840510) 发布，手工回读 PyPI latest=0.5.30 并干净安装核验；**生产 kiwi-hk 已于同日部署 0.5.30 + admin 0.2.28（whl sha256 与 PyPI 逐字节一致），schema user_version=60 无变更**。[PyPI 版本页](https://pypi.org/project/kiwi-catalog/0.5.30/)。 |
+| PyPI | `shopping-cli` | 3.2.12 | 2026-11-25 回读 PyPI latest=3.2.12（发布链路见当日晚间其他会话记录，本台账只确认 registry 状态）。[PyPI 版本页](https://pypi.org/project/shopping-cli/3.2.12/)。 |
 
-上表确认指定版本可查，不声称它们必然仍是 registry 当前 latest（2026-11-24 已确认 `@harrylabsj/kiwi` latest=0.12.35、`@harrylabsj/kiwi-merchant-cloud` latest=0.12.35；2026-11-25 已确认 `kiwi-catalog` latest=0.5.29）。`kiwi-catalog-admin` 0.2.18 已推送私有 tag `v0.2.18`，并作为生产 catalog 的扩展安装；它不是公开 registry 制品。
+上表确认指定版本可查，不声称它们必然仍是 registry 当前 latest（2026-11-25 已确认 `@harrylabsj/kiwi` latest=0.12.36、`@harrylabsj/kiwi-merchant-cloud` latest=0.12.36、`kiwi-catalog` latest=0.5.30、`shopping-cli` latest=3.2.12）。`kiwi-catalog-admin` 0.2.18 已推送私有 tag `v0.2.18`，并作为生产 catalog 的扩展安装；它不是公开 registry 制品。
+
+## 2026-11-25 kiwi 0.12.36 / kiwi-catalog 0.5.30 发布与生产部署（海纳百川恢复）
+
+- 动因与全貌：商家海纳百川（catalog agent `cagt_7ASdi11188Fl`）卸载重连「发布名片」连环三层故障，本日发布三个修复后恢复上线：
+  1. catalog 0.5.28 绑定版本按 active 数 +1 分配，撞历史 revoked 行 → **409**（修复 `fcc7253`，随 0.5.29 于当日早间发布部署，见上条）；
+  2. 实例侧 bind 副作用悬而未决留下僵尸 `operation_claim`，授权窗口过期后 reconcile 标 expired 不清 claim、begin 的未决副作用检查扫全量 sessions → **死锁**（「连接结果尚未确认」循环，清 sessionStorage/无痕无效）；
+  3. catalog 生成绑定回执时对 WITHDRAWN（卸载撤回）名片一律拒签 **403**，提交事务整体回滚（修复 `6a10df1`，回执路径允许 allow_withdrawn，随 0.5.30 发布）。
+- 发布源：kiwi `8e97e189`（含 #223 实例死锁修复收窄版、#224 M6-3 测试时间炸弹修复、#225 0.12.36 候选、#226/#228 catalog 0.5.30 pin 与冻源、#230 微信回信与模型配置分离、#231 冻源刷新）；catalog `11c12bd`（0.5.30 prepare）；shopping-cli 3.2.12 同日由其他会话发布（pin `4f1a7581`），registry latest=3.2.12。
+- 真实端到端验收：2026-11-25 对生产目录 + Veyquo（候选 0.12.36 部署于 kiwi-hk `releases/kiwi-0.12.36-candidate-cb014afa`）跑通 search → quote → negotiation → preaccept → agreement → handoff，非约束 agreement `agreement-01a21021-bcd6-709f-9b0d-85e4d6126be0`；不下单/不付款/不锁库存。
+- GitHub run：kiwi 0.12.36 dry-run [45520684887](https://github.com/harrylabsj/kiwi/actions/runs/45520684887)、发布 [45523214785](https://github.com/harrylabsj/kiwi/actions/runs/45523214785)（channels=`npm,merchant-cloud`）；catalog 0.5.30 dry-run [45615788110](https://github.com/harrylabsj/kiwi/actions/runs/45615788110)、发布 [45617840510](https://github.com/harrylabsj/kiwi/actions/runs/45617840510)（channels=`kiwi-catalog`）；均经 `kiwi-release` 保护环境人工审批。期间门禁两次按设计拦截冻源未同步（`SHIPPING_FOREIGN_AUTHORITY_CHANGED` / `SHIPPING_SOURCE_CHANGED`），经 #228/#231 刷新后通过——暴露「合入后刷冻源依赖人工」痛点，待办：把冻源校验前置进 PR CI。
+- registry 回读（2026-11-25，手工）：npm kiwi/merchant-cloud latest=0.12.36，下载 tarball SHA-1 与发布日志一致（kiwi `d864b393…`）；PyPI kiwi-catalog latest=0.5.30，干净 venv 安装核验通过。`verify-registry` job 因 needs 含 skipped job 继续 skipped（缺陷未修）。
+- 生产部署（kiwi-hk，2026-11-25）：
+  - Veyquo runtime：候选验收后转正 `releases/kiwi-0.12.36-20261125-092345`，部署前快照 `backups/pre-0.12.36-candidate-20261125-083531.tgz`；服务 active、零错误日志、agent-card 公网 200。
+  - catalog：`/opt/kiwi-catalog-0.5.30-admin-0.2.28`，whl sha256 `b92010ea…` 与 PyPI 逐字节一致；部署前 DB 快照 `/opt/kiwi-catalog-backups/catalog-pre-0.5.30-20261125-210639.sqlite`；schema user_version=60 无变更；新 drop-in（24×9 前缀）生效，0.5.29 drop-in 保留可回滚；本地+公网 /health 200，启动日志干净。
+  - 海纳百川 WorkBuddy 实例：发布目录原地升级 0.12.36（upgrade-in-place，config/profile 逐字节保留），WorkBuddy 桌面端重新发布同一应用 `wbapp_r7YnP5XG9F3iFhh4TM7cpm`（域名不变）。
+- 恢复证据链（2026-11-25 21:20 北京时间核验）：实例后台 reconcile 自动清僵尸 claim → 重新配对 → 网关授权 → catalog 侧新绑定 **`bind_i11188Fl_3`（version 3，active）**，enrollment `enr_T0Pq4ZowguZCyIvLD_OetnUB` status=published；工作台 `published: true`（errorCode: null）；公网 agent-card 200。
+- 未做：`verify-registry` job needs/`always()` 缺陷未修；冻源 PR 前置校验未做；WorkBuddy/商城平台资产未随本次更新。
 
 ## 2026-11-25 kiwi-catalog 0.5.29 registry 发布与生产部署
 
