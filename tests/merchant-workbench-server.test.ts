@@ -346,7 +346,7 @@ describe("standalone merchant workbench", () => {
       binding_id: binding.binding_id,
       purpose: "arrival_notification",
       max_per_day: 2,
-      expires_at: "2026-11-25T00:00:00.000Z",
+      expires_at: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
       consent_evidence_ref: "phrase:confirm-1",
     });
     expect(subscription.status).toBe(201);
