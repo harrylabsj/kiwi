@@ -793,7 +793,9 @@ export function createMerchantManagementApiHandler(
       },
     };
     const action = rest.slice(base.length + 1);
-    const draftId = /^reply-drafts\/([0-9a-f-]{36})$/.exec(action)?.[1];
+    const draftRoute = /^reply-drafts\/([0-9a-f-]{36})(\/discard)?$/.exec(action);
+    const draftId = draftRoute?.[1];
+    const discarding = draftRoute?.[2] !== undefined;
     try {
       if (method === "GET" && rest === base) {
         const status = channel.status(owner.principalId);
@@ -811,19 +813,19 @@ export function createMerchantManagementApiHandler(
         writeJson(res, 200, { items: channel.replyDrafts(owner) });
         return;
       }
-      if (method === "GET" && draftId !== undefined) {
+      if (method === "GET" && draftId !== undefined && !discarding) {
         writeJson(res, 200, channel.replyDraft(owner, draftId));
         return;
       }
       if (method !== "POST" || (draftId === undefined &&
-          !["begin", "poll", "cancel", "disconnect", "confirm-conversation", "clear-conversation", "revoke-conversation", "followup-preference"].includes(action))) {
+          !["begin", "poll", "cancel", "disconnect", "confirm-replies", "confirm-conversation", "stop-model", "clear-conversation", "revoke-conversation", "followup-preference"].includes(action))) {
         throw new ManagementError("not_found", "微信通道路由不存在。");
       }
       assertWriteGuards(req, auth.sessionId);
       let fields: Record<string, unknown>;
       try {
         fields = objectFields(await readJsonBody(req, draftId === undefined ? 2048 : 8192),
-          draftId !== undefined ? ["version", "body"] : action === "followup-preference" ? ["version", "style"] : action === "poll" ? ["attempt_id", "verify_code"] : action === "cancel" ? ["attempt_id"] : action === "confirm-conversation" ? ["model_consent"] : []);
+          draftId !== undefined ? (discarding ? ["version"] : ["version", "body"]) : action === "followup-preference" ? ["version", "style"] : action === "poll" ? ["attempt_id", "verify_code"] : action === "cancel" ? ["attempt_id"] : action === "confirm-conversation" ? ["model_consent"] : []);
       } catch (error) {
         if (error instanceof BodyTooLarge || error instanceof ManagementError) {
           throw new ManagementError("invalid_input", "微信通道请求字段无效或请求过大。");
@@ -835,7 +837,12 @@ export function createMerchantManagementApiHandler(
         if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 1) {
           throw new ManagementError("invalid_input", "草稿版本无效。");
         }
-        writeJson(res, 200, channel.replyDraft(owner, draftId, { version, body: requireString(fields["body"], "body") }));
+        if (discarding) {
+          channel.discardReplyDraft(owner, draftId, version);
+          writeJson(res, 200, { ok: true });
+        } else {
+          writeJson(res, 200, channel.replyDraft(owner, draftId, { version, body: requireString(fields["body"], "body") }));
+        }
       } else if (action === "followup-preference") {
         const version = fields["version"];
         const style = fields["style"];
@@ -844,6 +851,12 @@ export function createMerchantManagementApiHandler(
           throw new ManagementError("invalid_input", "偏好的版本或语气无效。");
         }
         writeJson(res, 200, channel.followupPreference(owner, { version, style }));
+      } else if (action === "confirm-replies") {
+        channel.confirmReplies(owner);
+        writeJson(res, 200, { ok: true });
+      } else if (action === "stop-model") {
+        channel.stopModel(owner);
+        writeJson(res, 200, { ok: true });
       } else if (action === "confirm-conversation" || action === "clear-conversation" || action === "revoke-conversation") {
         if (action === "confirm-conversation") {
           const consent = fields["model_consent"];

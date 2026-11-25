@@ -126,6 +126,8 @@ Usage:
                                           独立部署商家工作台（/merchant/ + /merchant/api/*；
                                           缺省 127.0.0.1:9102；先运行
                                           kiwi merchant admin-passwd 设置登录口令）
+  kiwi merchant model [configure|status|test] [--profile <merchant.yaml>] [--data-dir <dir>]
+                                          独立配置微信店主模型；不会修改买家询报价模型
   kiwi merchant admin-passwd [--profile <merchant.yaml>] [--data-dir <dir>] [--force]
                                           设置/重置商家工作台管理员口令；交互终端
                                           静默输入两次，脚本用

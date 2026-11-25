@@ -135,6 +135,7 @@ function buildProductReader(
 
 function routeRequest(input: {
   page: string;
+  weixinPage?: string;
   api: (req: IncomingMessage, res: ServerResponse) => void;
   admin: (req: IncomingMessage, res: ServerResponse) => void;
   trusted?: (req: IncomingMessage, res: ServerResponse) => void;
@@ -155,6 +156,20 @@ function routeRequest(input: {
         "cache-control": "no-store",
       });
       res.end(input.page);
+      return;
+    }
+    if (input.weixinPage !== undefined && (pathname === "/merchant/weixin" || pathname === "/merchant/weixin/")) {
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        res.writeHead(405, { allow: "GET, HEAD", "cache-control": "no-store" });
+        res.end();
+        return;
+      }
+      res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+        "referrer-policy": "no-referrer",
+      });
+      res.end(input.weixinPage);
       return;
     }
     if (pathname.startsWith("/merchant/api/")) {
@@ -404,7 +419,7 @@ export async function startStandaloneMerchantWorkbench(
     port,
     options.publicOrigin ?? profile.merchant_mcp?.public_url,
   );
-  const weixinOwnerAgent = configuredWeixinOwnerAgent(profile, process.env);
+  const weixinOwnerAgent = configuredWeixinOwnerAgent(profile, process.env, dataDir);
   const weixinChannel = new MerchantWeixinChannel({
     dataDir,
     merchantId: profile.owner_id,
@@ -465,7 +480,8 @@ export async function startStandaloneMerchantWorkbench(
     weixinChannel: true,
     manualSupport: manualSupport !== undefined,
   });
-  const route = routeRequest({ page, api, admin: adminHandle.handler, trusted: trustedPage, version: PRODUCT_VERSION });
+  const weixinPage = renderMerchantManagementPage({ productAuthority: "exact", weixinOnly: true });
+  const route = routeRequest({ page, weixinPage, api, admin: adminHandle.handler, trusted: trustedPage, version: PRODUCT_VERSION });
   let previewHost: string | undefined;
   const server = createServer((req, res) => {
     if (manualSupport !== undefined && (previewHost === undefined || req.headersDistinct.host?.length !== 1 || req.headers.host !== previewHost)) {

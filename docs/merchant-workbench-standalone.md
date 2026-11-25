@@ -42,16 +42,26 @@ kiwi merchant workbench serve \
 
 ## 连接个人微信
 
-云端和独立工作台均可使用。以店主身份登录 `/merchant/`，打开「微信通道」，
-点击「生成微信二维码」。用手机微信扫一扫并在手机上确认；如果微信显示数字配对码，
-在工作台输入后继续。工作台成功收到微信同步响应才显示「已连接」。此时可在微信中
-向机器人发送 `/ping`，收到回复即可确认收发都正常。
+云端和独立工作台均可使用。直接打开本实例的 `/merchant/weixin`，用店主身份登录后会回到该页；也可从 `/merchant/` 的「微信通道」进入。点击「生成微信二维码」，用手机微信扫一扫并确认；如果微信显示数字配对码，在配对页输入。页面成功收到微信同步响应才显示「已连接」。向机器人发送 `/ping` 并收到回复，才能确认收发都正常。
 
-- 只响应配对账号的 `/ping`，不接管普通聊天，不通过微信做审批、主动通知或群发。
+- 默认只响应配对账号的 `/ping`。若实例启用了 `KIWI_WEIXIN_OWNER_REPLIES=1`，新绑定在手机微信确认后就同时授权对该店主账号的规则回信，不需要再点一次。旧绑定、已停止的回信不会自动启用，可在微信通道页手动开启。扫码不授权调用大模型，也不接管普通聊天，不通过微信做审批、主动通知或群发。
+- 微信里起草后，可在本实例的 `/merchant/weixin` 登录查看、修改或放弃草稿，无需进入完整工作台。草稿正文不会因打开此页而发到微信；保存或放弃都不会发送给买家。
 - 凭证保存在实例数据目录 `weixin-workbench/` 下，按商家隔离，不与 `kiwi weixin` 或
   `kiwi merchant watch` 共用。后台重启后会尝试恢复连接；同一数据目录的同一商家仅一个后台进程可接收消息。
 - 「断开连接」会停止同步并删除工作台本地凭证，不会在手机微信中解除原绑定。
   如果微信提示已有绑定，请先在手机上解除原绑定再重试。
+
+## 配置店主对话模型
+
+```bash
+kiwi merchant model --profile ./merchant.yaml --data-dir /path/to/merchant-state
+kiwi merchant model status --profile ./merchant.yaml --data-dir /path/to/merchant-state
+kiwi merchant model test --profile ./merchant.yaml --data-dir /path/to/merchant-state
+```
+
+`--data-dir` 须与商家运行时一致。交互向导提供 OpenAI、DeepSeek 的官方端点；只输入模型 ID 与服务环境中的密钥变量名，不在向导输入密钥。向导在确认后发送两条合成测试请求，通过后才保存；`status` 不联网，`test` 会显式发起合成请求，可能计费。配置仅用于店主私聊，不改变询报价模型或规则。
+
+重启时加载持久配置。微信回信和模型调用仍分别由 `KIWI_WEIXIN_OWNER_REPLIES=1` 与 `KIWI_WEIXIN_OWNER_AGENT=1` 开启；启用后还须由店主授权把私聊与有限上下文交给所选模型服务。模型配置有效不代表真实请求一定可用。
 
 ## 安全
 

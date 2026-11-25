@@ -273,6 +273,34 @@ describe("persisted owner follow-up", () => {
     expect(send.mock.calls[1]?.[0].text).toContain("没有可复述的近期回复");
   });
 
+  it("keeps rule replies separate from model consent and does not restore a stale consent after restart", async () => {
+    const decide = vi.fn<Extract<WeixinOwnerAgent, { state: "configured" }>["decide"]>().mockResolvedValue({ kind: "reply", text: "模型回复" });
+    const agent = { state: "configured" as const, provider: "fixture", model: "fixture", endpoint: "https://model.example", consent: "a".repeat(64), decide };
+    const opts = { replyToOwner: true, agent };
+    const channel = open(undefined, undefined, opts);
+    const send = vi.fn(async () => {});
+    channel.bind(principal, scope);
+    admit(channel, message("rules", "你好"));
+    await channel.process(scope, signal, send);
+    expect(channel.status(principal, scope)).toMatchObject({ authorized: true, model_authorized: false });
+    expect(decide).not.toHaveBeenCalled();
+    const rulesEpoch = channel.consent(scope);
+    channel.bind(principal, scope, agent.consent);
+    channel.admit(scope, account, [message("late-rules", "不应送给模型")], rulesEpoch);
+    admit(channel, message("model", "你好"));
+    await channel.process(scope, signal, send);
+    expect(decide).toHaveBeenCalledExactlyOnceWith({ text: "你好", history: [] }, expect.any(AbortSignal));
+    channel.stopModel(principal, scope);
+    expect(channel.status(principal, scope)).toMatchObject({ authorized: true, model_authorized: false });
+    channel.bind(principal, scope, agent.consent);
+    channel.close();
+    const unavailable = open(undefined, undefined, { replyToOwner: true, agent: { state: "unavailable" } });
+    expect(unavailable.status(principal, scope)).toMatchObject({ authorized: true, model_authorized: false });
+    unavailable.close();
+    const restored = open(undefined, undefined, opts);
+    expect(restored.status(principal, scope)).toMatchObject({ authorized: true, model_authorized: false });
+  });
+
   it("aborts the current model call on clear, drops its late result and starts with empty history", async () => {
     let release!: (value: OwnerAgentDecision) => void;
     let modelSignal: AbortSignal | undefined;
@@ -283,7 +311,7 @@ describe("persisted owner follow-up", () => {
     }).mockResolvedValue({ kind: "reply", text: "新对话" });
     const c = open(undefined, undefined, { replyToOwner: true,
       agent: { state: "configured", provider: "fixture", model: "fixture", endpoint: "https://model.example", consent: "a".repeat(64), decide } });
-    c.bind(principal, scope);
+    c.bind(principal, scope, "a".repeat(64));
     const send = vi.fn(async () => {});
     admit(c, message("old", "这是旧对话"));
     const pending = c.process(scope, signal, send);
@@ -304,7 +332,7 @@ describe("persisted owner follow-up", () => {
     const delivery = { replyToOwner: true, agent: { state: "configured" as const,
       provider: "fixture", model: "fixture", endpoint: "https://model.example", consent: "a".repeat(64), decide } };
     const c = open(undefined, undefined, delivery);
-    c.bind(principal, scope);
+    c.bind(principal, scope, delivery.agent.consent);
     admit(c, message("interrupted", "你好"));
     const restart = new AbortController();
     decide.mockImplementationOnce(async () => {

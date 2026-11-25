@@ -255,6 +255,16 @@ describe("merchant Workbench Weixin channel", () => {
     expect((await request("/clear-conversation", owner)).status).toBe(200);
     expect(await (await request("", owner)).json()).toMatchObject({ conversation: { preview: null } });
     expect((await get(draftPath, owner)).status).toBe(200);
+    const discardPath = draftPath + "/discard";
+    expect((await get(discardPath, owner)).status).toBe(404);
+    expect((await request(discardPath, await login("operator"), { version: 2 })).status).toBe(403);
+    expect((await request(discardPath, { ...owner, csrf: "" }, { version: 2 })).status).toBe(403);
+    expect((await request(discardPath, owner, { version: 1 })).status).toBe(409);
+    expect((await request(discardPath, owner, { version: 2, body: "not accepted" })).status).toBe(422);
+    expect((await request(discardPath, owner, { version: 2 })).status).toBe(200);
+    expect((await request(discardPath, owner, { version: 2 })).status).toBe(200);
+    expect((await get(draftPath, owner)).status).toBe(404);
+    expect(await (await get("/reply-drafts", owner)).json()).toEqual({ items: [] });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -420,13 +430,13 @@ describe("merchant Workbench Weixin channel", () => {
     const owner = await login();
     const attempt = await begin(owner);
     getQrcodeStatus.mockResolvedValueOnce(confirmed);
-    updates("before-consent", "你好，先介绍一下你自己");
+    updates("before-consent", "今天有什么要跟进的？");
     expect((await request("/poll", owner, attempt)).status).toBe(200);
     await cursorAdvanced("before-consent");
     expect(stream).not.toHaveBeenCalled();
-    expect(sendMessage).not.toHaveBeenCalled();
+    expect(sendMessage.mock.calls.map(([out]) => out.text)).toEqual([expect.stringContaining("有 1 笔待跟进询价")]);
     expect(await (await request("", owner)).json()).toMatchObject({ conversation: {
-      authorized: false, agent: { state: "configured", consent, endpoint: "https://model.example/v1" },
+      authorized: true, model_authorized: false, agent: { state: "configured", consent, endpoint: "https://model.example/v1" },
     } });
     expect((await request("/confirm-conversation", owner)).status).toBe(409);
     expect((await request("/confirm-conversation", owner, { model_consent: "b".repeat(64) })).status).toBe(409);
@@ -434,7 +444,7 @@ describe("merchant Workbench Weixin channel", () => {
     expect((await request("/confirm-conversation", owner, { model_consent: consent })).status).toBe(200);
     updates("model-turns", "新店开张，我该先从什么聊起？", "现在有什么要跟？", "今天有买家来吗？");
     await cursorAdvanced("model-turns");
-    expect(sendMessage.mock.calls.map(([out]) => out.text)).toEqual([
+    expect(sendMessage.mock.calls.slice(1).map(([out]) => out.text)).toEqual([
       "可以，先从店铺定位和常见客户问题聊起。",
       expect.stringContaining("有 1 笔待跟进询价"),
       expect.stringContaining("不能判断今天有没有新买家来咨询"),
@@ -448,7 +458,7 @@ describe("merchant Workbench Weixin channel", () => {
     updates("continued", "我们刚聊到哪？继续说说。");
     channel.restore();
     await cursorAdvanced("continued");
-    expect(sendMessage.mock.calls[3]?.[0].text).toContain("明确核心客群");
+    expect(sendMessage.mock.calls[4]?.[0].text).toContain("明确核心客群");
     const modelTranscript = JSON.stringify(stream.mock.calls[3]?.[1]);
     expect(modelTranscript).toContain("新店开张");
     expect(modelTranscript).toContain("先从店铺定位");
@@ -459,7 +469,7 @@ describe("merchant Workbench Weixin channel", () => {
     updates("revoked", "还能接着聊吗？");
     await cursorAdvanced("revoked");
     expect(stream).toHaveBeenCalledTimes(4);
-    expect(sendMessage).toHaveBeenCalledTimes(4);
+    expect(sendMessage).toHaveBeenCalledTimes(5);
   }, 15_000);
 
   it("shows exact inventory only to the owner and never uses a failed or cross-merchant read", async () => {
