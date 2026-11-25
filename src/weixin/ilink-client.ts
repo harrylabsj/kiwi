@@ -100,14 +100,11 @@ export class IlinkClient {
   private baseUrl: string;
   private readonly log?: (line: string) => void;
   private readonly allowedRedirectHosts: readonly string[];
-  /** sendmessage 的 client_id（每进程一个，幂等标识）。 */
-  private readonly clientId: string;
 
   constructor(options: IlinkClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? ILINK_DEFAULT_BASE_URL).replace(/\/+$/, "");
     this.log = options.log;
     this.allowedRedirectHosts = options.allowedRedirectHosts ?? [...DEFAULT_ALLOWED_REDIRECT_HOSTS];
-    this.clientId = crypto.randomUUID();
   }
 
   /** 当前 baseUrl 的主机（bot_token 直送白名单里的"自身"主机）。 */
@@ -297,12 +294,12 @@ export class IlinkClient {
     };
   }
 
-  /** POST ilink/bot/sendmessage → 回显 context_token（协议要求）。 */
+  /** POST ilink/bot/sendmessage → 回显 context_token（协议要求）。client_id 每条消息新 uuid：服务端按 client_id 幂等判重，进程级复用会让第 2..N 条被判重丢弃；本层每条逻辑消息只调用一次（上层不落自动重发），按调用生成不会重复计费或重复送达。 */
   async sendMessage(input: SendMessageInput, credentials: BotCredentials, signal?: AbortSignal): Promise<void> {
     const message: Record<string, unknown> = {
       from_user_id: "",
       to_user_id: input.to_user_id,
-      client_id: this.clientId,
+      client_id: crypto.randomUUID(),
       message_type: MSG_TYPE_BOT,
       message_state: MSG_STATE_FINISH,
       item_list: [{ type: ITEM_TEXT, text_item: { text: input.text } }],

@@ -312,6 +312,17 @@ describe("sendMessage", () => {
     const body = JSON.parse(requests[0]!.body) as { msg: Record<string, unknown> };
     expect(body.msg.context_token).toBeUndefined();
   });
+
+  it("issues a fresh client_id per message (server dedupes on client_id)", async () => {
+    const base = await startMock((_req, res) => json(res, 200, { ret: 0 }));
+    const client = new IlinkClient({ baseUrl: base });
+    await client.sendMessage({ to_user_id: "u", text: "第一条" }, CREDS);
+    await client.sendMessage({ to_user_id: "u", text: "第二条" }, CREDS);
+    const ids = requests.map((r) => (JSON.parse(r.body) as { msg: Record<string, unknown> }).msg.client_id);
+    expect(ids).toHaveLength(2);
+    for (const id of ids) expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(ids[0]).not.toBe(ids[1]);
+  });
 });
 
 describe("request 纪律", () => {
