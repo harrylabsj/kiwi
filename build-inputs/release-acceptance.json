@@ -1,6 +1,6 @@
 {
   "schema": "kiwi.release-acceptance/1",
-  "recorded_at": "2026-11-24T11:20:21.685Z",
+  "recorded_at": "2026-11-25T00:36:16.222Z",
   "catalog_url": "https://catalog.kiwi.harrylabsj.com",
   "merchant_id": "mkt_veyquo_A0UPvj7XuYk",
   "sku": "VQ-001",
@@ -22,7 +22,7 @@
     "accept_action": "accept_nonbinding",
     "merchant_preaccept_nonbinding_flag": null
   },
-  "kiwi_version": "0.12.35",
+  "kiwi_version": "0.12.36",
   "shopping_cli_commit": "5ee21630ebdf6ebb9454c7231c8e1256f92f4af0",
   "signed_buyer": true,
   "chain": {
@@ -46,7 +46,7 @@
     "quote": {
       "ok": true,
       "detail": "报价 14907 CNY × 2 个（小计 29814；商家未声明总价）",
-      "offer_id": "off_01a20d49-0df4-7000-80fe-9c0b8b63f6aa",
+      "offer_id": "off_01a21021-bb28-7000-9a65-d638ec35efbd",
       "sku": "VQ-001",
       "quantity_value": "2",
       "quantity_unit": "个",
@@ -86,8 +86,8 @@
     },
     "agreement": {
       "ok": true,
-      "detail": "非约束性协议 agreement-01a20d49-0faf-736a-865e-11aeca39de26（不下单/不锁库/不付款）",
-      "agreement_id": "agreement-01a20d49-0faf-736a-865e-11aeca39de26",
+      "detail": "非约束性协议 agreement-01a21021-bcd6-709f-9b0d-85e4d6126be0（不下单/不锁库/不付款）",
+      "agreement_id": "agreement-01a21021-bcd6-709f-9b0d-85e4d6126be0",
       "binding_effect": "nonbinding"
     },
     "handoff": {
