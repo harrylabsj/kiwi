@@ -71,7 +71,7 @@
     {
       "id": "shopping-cli",
       "name": "Shopping CLI",
-      "version": "3.2.11",
+      "version": "3.2.12",
       "version_source": {
         "type": "toml",
         "scope": "consumer",
