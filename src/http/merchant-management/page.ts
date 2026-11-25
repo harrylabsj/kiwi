@@ -33,6 +33,7 @@ export function renderMerchantManagementPage(options: {
   catalogConnection?: boolean;
   workbuddyAccess?: boolean;
   weixinChannel?: boolean;
+  weixinOnly?: boolean;
   manualSupport?: boolean;
 } = {}): string {
   return `<!doctype html>
@@ -40,7 +41,7 @@ export function renderMerchantManagementPage(options: {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>商家工作台 — Kiwi</title>
+<title>${options.weixinOnly ? "连接店主微信" : "商家工作台"} — Kiwi</title>
 <style>
   :root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color: #23342d; background: #f5f7f4; font-size: 14px; line-height: 1.6; --kiwi: #205c43; --border: #dce4de; --muted: #5e7066; }
   * { box-sizing: border-box; }
@@ -153,12 +154,14 @@ export function renderMerchantManagementPage(options: {
   .collection-form img { display: block; max-width: min(100%, 280px); height: auto; }
   .collection-form [hidden] { display: none; }
   @media (prefers-reduced-motion: no-preference) { .act, nav button { transition: background-color .15s, border-color .15s; } }
+  body.weixin-only { grid-template-columns: minmax(0, 1fr); }
+  body.weixin-only .workspace { grid-column: 1; width: 100%; max-width: 760px; margin: 0 auto; }
 </style>
 </head>
-<body>
+<body${options.weixinOnly ? ' class="weixin-only"' : ""}>
 <a href="#view" class="skip-link">跳至工作区</a>
-<header><div class="brand"><span class="brand-name" aria-label="Kiwi">kiwi</span><span class="brand-title">商家工作台</span></div><span class="who" id="who"></span></header>
-<nav id="tabs" aria-label="工作台导航">
+<header><div class="brand"><span class="brand-name" aria-label="Kiwi">kiwi</span><span class="brand-title">${options.weixinOnly ? "连接店主微信" : "商家工作台"}</span></div><span class="who" id="who"></span></header>
+${options.weixinOnly ? "" : `<nav id="tabs" aria-label="工作台导航">
   <p class="nav-label">工作空间</p>
   <button data-v="status" class="on" aria-current="page">服务状态</button>
   <button data-v="products">商品与导入</button>
@@ -173,9 +176,9 @@ export function renderMerchantManagementPage(options: {
   <button data-v="weixin" id="weixin-tab" hidden>微信通道</button>
   <button data-v="support" id="support-tab" hidden>售后工单</button>
   <p class="nav-foot">日常经营，井然有序。<br>Kiwi Merchant</p>
-</nav>
+</nav>`}
 <div class="workspace">
-  <section class="page-head" aria-labelledby="page-title"><p class="eyebrow">MERCHANT WORKSPACE</p><h1 id="page-title">服务状态</h1><p id="page-description">掌握接待状态，管理店铺与名片发布。</p></section>
+  <section class="page-head" aria-labelledby="page-title"><p class="eyebrow">${options.weixinOnly ? "KIWI WEIXIN" : "MERCHANT WORKSPACE"}</p><h1 id="page-title">${options.weixinOnly ? "连接店主微信" : "服务状态"}</h1><p id="page-description">${options.weixinOnly ? "扫码连接、授权对话或恢复连接。" : "掌握接待状态，管理店铺与名片发布。"}</p></section>
   <main id="view" tabindex="-1" aria-label="商家工作区"><div class="card">加载中…</div></main>
 </div>
 <div id="bar" role="status" aria-live="polite" aria-atomic="true"></div>
@@ -187,7 +190,8 @@ var API = "/merchant/api/v1";
 var FILE_PRODUCTS = ${options.productAuthority === "file"};
 var CATALOG_CONNECT = ${options.catalogConnection === true};
 var WORKBUDDY_ACCESS = ${options.workbuddyAccess === true};
-var WEIXIN_CHANNEL = ${options.weixinChannel === true};
+var WEIXIN_ONLY = ${options.weixinOnly === true};
+var WEIXIN_CHANNEL = ${options.weixinChannel === true || options.weixinOnly === true};
 var MANUAL_SUPPORT = ${options.manualSupport === true};
 var viewSequence = 0;
 // 与 cloud/access/workbuddy-share-link 的 WORKBUDDY_CUSTODY_TERMS_VERSION 同值；
@@ -307,11 +311,11 @@ function send(method, path, body, apiBase, again) {
 }
 function showLogin() {
   viewSequence++;
-  if (WEIXIN_CHANNEL) $("weixin-tab").hidden = true;
-  if (MANUAL_SUPPORT) $("support-tab").hidden = true;
-  $("view").innerHTML = '<div class="card login-card"><h2>登录你的商家工作台</h2>' +
+  if (WEIXIN_CHANNEL && !WEIXIN_ONLY) $("weixin-tab").hidden = true;
+  if (MANUAL_SUPPORT && !WEIXIN_ONLY) $("support-tab").hidden = true;
+  $("view").innerHTML = '<div class="card login-card"><h2>' + (WEIXIN_ONLY ? '登录后连接店主微信' : '登录你的商家工作台') + '</h2>' +
     '<p class="muted">请使用商家管理员口令登录后回到本页。</p>' +
-    '<p><a class="act primary" href="/admin/login?next=%2Fmerchant%2F">去登录</a></p></div>';
+    '<p><a class="act primary" href="/admin/login?next=' + (WEIXIN_ONLY ? '%2Fmerchant%2Fweixin' : '%2Fmerchant%2F') + '">去登录</a></p></div>';
 }
 function key(p) { return p + "-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8); }
 function statePill(state) {
@@ -1076,7 +1080,12 @@ var views = {
   weixin: function () {
     return Promise.resolve('<div class="card"><h2>个人微信连接</h2>' +
       '<p class="muted">扫码确认后，只有配对的店主可以与 Kiwi 对话。微信不发送买家消息，也不批准正式操作。</p>' +
-      '<div id="weixin-panel"><p role="status">正在读取连接状态…</p></div></div>');
+      (WEIXIN_ONLY ? '' : '<p><a href="/merchant/weixin">打开手机配对与授权页</a></p>') +
+      '<div id="weixin-panel"><p role="status">正在读取连接状态…</p></div></div>' +
+      (WEIXIN_ONLY ? '<section class="card" id="weixin-mobile-drafts" hidden><h2>草稿</h2>' +
+        '<p>只有登录后的店主能在本页查看草稿。保存或放弃都不会向买家发送消息。</p>' +
+        '<button type="button" class="act" id="weixin-draft-refresh">刷新草稿</button>' +
+        '<div id="weixin-draft-list"></div><div id="weixin-draft-editor"></div></section>' : ''));
   },
   collection: async function () {
     var config = await call("GET", ALIPAY_COLLECTION);
@@ -1887,12 +1896,13 @@ function commitPolicy(draftId, digest) {
 function mountWeixin(sequence) {
   var panel = $("weixin-panel");
   var endpoint = "/channels/weixin";
+  var pairingNotice = '<p class="muted">在手机微信确认绑定，即授权 Kiwi 仅回复这个店主账号的私聊。不会调用模型或向买家发送消息。</p>';
   var qr = null;
   var expiryTimer;
   var statusTimer;
   var previousState = "";
   var busy = false;
-  var selectedDraft = new URLSearchParams(window.location.search).get("weixin_draft") || "";
+  var selectedDraft = WEIXIN_ONLY ? "" : new URLSearchParams(window.location.search).get("weixin_draft") || "";
   var draftsLoaded = false;
   var latestPreview;
   var latestProposal;
@@ -1907,6 +1917,23 @@ function mountWeixin(sequence) {
       reset();
     }).catch(problem);
   }
+  function renderMobileCapabilities(connection) {
+    var target = $("weixin-mobile-capabilities");
+    if (!WEIXIN_ONLY || !target) return;
+    var conversation = connection.conversation;
+    var direct = conversation && conversation.enabled && conversation.delivery === "paired_owner";
+    var replies = Boolean(connection.configured && direct && conversation.authorized === true && !conversation.unavailable);
+    var agent = conversation && conversation.agent;
+    var model = !direct ? "未启用" : conversation.unavailable ? "状态不可用" :
+      !agent ? "未启用或未配置" : agent.state === "unavailable" ? "配置不可用" :
+      agent.state !== "configured" ? "状态未知" : !replies || conversation.model_authorized !== true ? "已配置，未授权" :
+      "已配置并授权；未在此页验证推理连通性";
+    var owner = !connection.configured ? "未绑定" : conversation && conversation.unavailable ? "回信授权状态不可用" :
+      !direct ? "已绑定，未启用店主回信" : replies ? "已绑定，已授权店主回信" : "已绑定，待授权店主回信";
+    target.innerHTML = '<dt>店主绑定</dt><dd>' + owner + '</dd><dt>对话模型</dt><dd>' + model +
+      '</dd><dt>业务工具</dt><dd>' + (replies ? '支持待跟进询价、清单追问和起草；结果以业务数据源为准。' : '微信内未启用。') +
+      ' 不会向买家发送。</dd>';
+  }
   function renderConversation(conversation, configured, operationsAvailable) {
     var area = $("weixin-owner-preview");
     if (!area || !conversation || !conversation.enabled) return;
@@ -1914,21 +1941,24 @@ function mountWeixin(sequence) {
     var agent = conversation.agent;
     var modelReady = agent && agent.state === "configured";
     var modelUnavailable = agent && agent.state === "unavailable";
+    var modelAuthorized = modelReady && conversation.model_authorized === true;
     var modelService = modelReady ? agent.provider + " / " + agent.model + "（" + agent.endpoint + "）" : "";
     var title = $("weixin-conversation-title");
-    if (title) title.textContent = modelReady ? "店主微信对话 · Kiwi 智能体" : direct ? "店主微信对话" : "店主对话 · 工作台预览";
+    if (title) title.textContent = modelAuthorized ? "店主微信对话 · Kiwi 智能体" : direct ? "店主微信对话" : "店主对话 · 工作台预览";
     var preview = $("weixin-preview-text");
     if (preview) preview.textContent = conversation.unavailable ? "店主对话暂不可用。" :
-      modelUnavailable ? "对话模型配置不可用，未启用模型回信。" :
-      modelReady ? (conversation.authorized
-        ? "打开微信与 Kiwi 自然对话。模型服务：" + modelService + (conversation.unknown_count > 0 ? " 有回信结果无法确认，系统不会自动重发。" : "")
-        : "微信扫码不等于模型授权。请确认是否允许把你的私聊和有限近期上下文交给 " + modelService + " 处理。不要在聊天中发送密码、密钥或客户隐私。") :
+      modelAuthorized ? "打开微信与 Kiwi 自然对话。模型服务：" + modelService +
+        (conversation.unknown_count > 0 ? " 有回信结果无法确认，系统不会自动重发。" : "") :
       direct ? (conversation.authorized
-        ? "打开微信查询待跟进询价或预览草稿。此模式不调用大模型。" + (conversation.unknown_count > 0 ? " 有回信结果无法确认，系统不会自动重发。" : "")
-        : "现有扫码绑定还未授权微信回信，请在下方确认。") :
+        ? "可在微信查询待跟进询价或起草回复；当前不调用模型。" + (modelUnavailable ? " 对话模型配置不可用。" : "") +
+          (conversation.unknown_count > 0 ? " 有回信结果无法确认，系统不会自动重发。" : "")
+        : (configured ? "当前绑定未启用微信回信，可在这里重新开启。" : "请扫码绑定店主微信。") + (modelUnavailable ? " 对话模型配置不可用。" : "")) :
       conversation.preview || (conversation.authorized
         ? "可发送：今天哪三笔询价最该跟？或查库存 SKU-001。结果仅在本工作台显示。"
         : "当前绑定未授权业务预览。");
+    if (WEIXIN_ONLY && preview && !direct && !conversation.unavailable) {
+      preview.textContent = "当前实例仅支持工作台预览，未启用微信回信。";
+    }
     var controls = $("weixin-conversation-controls");
     if (controls) {
       controls.innerHTML = "";
@@ -1938,17 +1968,22 @@ function mountWeixin(sequence) {
         b.onclick = function () { ownerAction(name, confirmation, fields); };
         controls.appendChild(b);
       }
+      if (WEIXIN_ONLY && !direct) return;
       if (conversation.authorized) {
         action("清空对话", "clear-conversation", "清空对话和未出站结果？已落库草稿保留。");
         action(direct ? "停止微信对话" : "停止预览", "revoke-conversation", "停止店主对话？微信 /ping 继续可用。");
-      } else if (configured && !conversation.unavailable && !modelUnavailable) {
-        if (modelReady) action("授权 Kiwi 模型对话", "confirm-conversation",
-          "允许将你发送的微信私聊正文及最近最多 4 轮对话文本提交给 " + modelService + "？Kiwi 不会自动附上买家原文、身份或商家查询明细。请勿发送密码、密钥或客户隐私。",
+      } else if (configured && !conversation.unavailable) {
+        action(direct ? "授权微信回信（不使用模型）" : "确认店主归属", direct ? "confirm-replies" : "confirm-conversation", direct
+          ? "仅允许向当前扫码绑定的店主账号回复本人的私聊，不会将消息提交给模型。确认开启？" : undefined);
+      }
+      if (configured && !conversation.unavailable && modelReady) {
+        if (modelAuthorized) action("停止模型对话", "stop-model", "停止向模型提交私聊消息？本地查询仍可在微信使用。");
+        else action("授权 Kiwi 模型对话", "confirm-conversation",
+          "允许向当前店主回信，并将你发送的微信私聊正文及最近最多 4 轮对话文本提交给 " + modelService + " 处理？Kiwi 不会自动附上买家原文、身份或商家查询明细。请勿发送密码、密钥或客户隐私。",
           { model_consent: agent.consent });
-        else action(direct ? "授权微信回信" : "确认店主归属", "confirm-conversation", direct
-          ? "仅允许向当前扫码绑定的店主账号回复本人的私聊。确认开启？" : undefined);
       }
     }
+    if (WEIXIN_ONLY) return;
     if ((!draftsLoaded || latestPreview !== conversation.preview) && (configured || selectedDraft)) {
       var first = !draftsLoaded;
       latestPreview = conversation.preview;
@@ -2069,24 +2104,43 @@ function mountWeixin(sequence) {
       var target = $("weixin-draft-editor");
       if (!active() || !target || selectedDraft !== id) return;
       target.innerHTML = '<p>询价：' + esc(draft.inquiry) + ' · 草稿 v' + esc(draft.version) + '</p>' +
-        '<p>仅保存到工作台。正式发布未接通，不会发送给买家。' +
+        '<p>仅保存在本实例。正式发布未接通，不会发送给买家。' +
         (draft.current ? '' : ' 询价已变化或无法核实，此稿不可编辑。') + '</p>' +
         '<form id="weixin-draft-form"><label>回复正文 <textarea id="weixin-draft-body" maxlength="600" required></textarea></label> ' +
-        '<button class="act" type="submit">保存草稿</button></form>';
+        '<button class="act" type="submit">保存草稿</button> ' +
+        '<button class="act" type="button" id="weixin-draft-discard">放弃草稿</button></form>';
       var body = $("weixin-draft-body");
       body.value = draft.body;
       var form = $("weixin-draft-form");
-      var save = form.querySelector("button");
-      if (!draft.current) { body.readOnly = true; save.disabled = true; }
+      var save = form.querySelector('button[type="submit"]');
+      var discard = $("weixin-draft-discard");
+      var draftPath = endpoint + "/reply-drafts/" + id;
+      function saving(value) {
+        save.disabled = value || !draft.current;
+        discard.disabled = value;
+      }
+      body.readOnly = !draft.current;
+      saving(false);
       form.onsubmit = function (event) {
         event.preventDefault();
         if (save.disabled) return;
-        save.disabled = true;
-        call("POST", endpoint + "/reply-drafts/" + id, { version: draft.version, body: body.value }).then(function () {
+        saving(true);
+        call("POST", draftPath, { version: draft.version, body: body.value }).then(function () {
           if (!active()) return;
           bar("草稿已保存，未发送。", false);
-          loadDrafts(); loadDraft(id);
-        }).catch(problem).finally(function () { if (draft.current) save.disabled = false; });
+          loadDrafts();
+          if (selectedDraft === id) loadDraft(id);
+        }).catch(problem).finally(function () { saving(false); });
+      };
+      discard.onclick = function () {
+        if (discard.disabled || !window.confirm("放弃这份草稿？它将从列表移除，不会发送给买家。")) return;
+        saving(true);
+        call("POST", draftPath + "/discard", { version: draft.version }).then(function () {
+          if (!active()) return;
+          if (selectedDraft === id) { selectedDraft = ""; target.textContent = ""; }
+          bar("已放弃草稿，未发送。", false);
+          loadDrafts();
+        }).catch(problem).finally(function () { saving(false); });
       };
     }).catch(problem);
   }
@@ -2104,6 +2158,7 @@ function mountWeixin(sequence) {
     call("GET", endpoint).then(function (connection) {
       if (!active() || qr || busy) return;
       var state = connection.status;
+      var conversation = connection.conversation;
       if (state !== previousState) {
         previousState = state;
         var labels = {
@@ -2112,24 +2167,38 @@ function mountWeixin(sequence) {
           retrying: "微信暂不可用，正在重试…", reconnect_required: "微信会话已失效，请断开后重新扫码。",
           unavailable: "微信通道暂不可用，请稍后刷新。"
         };
-        panel.innerHTML = '<p role="status">' + esc(labels[state] || "连接状态未知") + '</p>' +
+        var replyOnPairing = conversation && conversation.enabled && conversation.delivery === "paired_owner";
+        panel.innerHTML = '<p role="status">微信连接：' + esc(labels[state] || "状态未知") + '</p>' +
+          (!connection.configured && replyOnPairing ? pairingNotice : '') +
+          (WEIXIN_ONLY ? '<dl id="weixin-mobile-capabilities"></dl>' : '') +
+          (WEIXIN_ONLY && (!conversation || !conversation.enabled)
+            ? '<p class="muted">此实例未启用店主对话，连接后仅支持 /ping，不会调用模型。</p>' : '') +
           (connection.configured
             ? '<button type="button" class="act" id="weixin-disconnect">断开连接</button>'
             : '<button type="button" class="act primary" id="weixin-begin">生成微信二维码</button>') +
           (connection.conversation && connection.conversation.enabled
             ? '<section id="weixin-owner-preview"><h3 id="weixin-conversation-title">店主对话</h3>' +
               '<pre id="weixin-preview-text" style="white-space:pre-wrap"></pre><div id="weixin-conversation-controls"></div>' +
-              '<h3>普通跟进草稿</h3><div id="weixin-draft-list"></div><div id="weixin-draft-editor"></div>' +
-              '<div id="weixin-followup-preference"></div>' +
-              '<div id="weixin-digest-proposal"></div><div id="weixin-digest-rules"></div><div id="weixin-digest-results"></div></section>'
+              (WEIXIN_ONLY ? '' : '<h3>普通跟进草稿</h3><div id="weixin-draft-list"></div><div id="weixin-draft-editor"></div>' +
+                '<div id="weixin-followup-preference"></div>' +
+                '<div id="weixin-digest-proposal"></div><div id="weixin-digest-rules"></div><div id="weixin-digest-results"></div>') + '</section>'
             : '');
         if (connection.configured) $("weixin-disconnect").onclick = disconnect;
-        else $("weixin-begin").onclick = begin;
+        else $("weixin-begin").onclick = function () { begin(replyOnPairing); };
         draftsLoaded = false;
         rulesLoaded = false;
         latestProposal = undefined;
         if (connection.configured && connection.conversation && connection.conversation.enabled) loadPreference();
       }
+      var mobileDrafts = $("weixin-mobile-drafts");
+      if (mobileDrafts) {
+        mobileDrafts.hidden = !conversation || !conversation.enabled || conversation.unavailable === true;
+        if (!mobileDrafts.hidden && !draftsLoaded) {
+          $("weixin-draft-refresh").onclick = loadDrafts;
+          loadDrafts();
+        }
+      }
+      renderMobileCapabilities(connection);
       renderConversation(connection.conversation, connection.configured, connection.operations_available);
       if (state === "checking" || state === "retrying" || state === "connected") statusTimer = setTimeout(updateStatus, 4000);
     }).catch(function (e) {
@@ -2140,7 +2209,7 @@ function mountWeixin(sequence) {
     });
   }
   function disconnect() {
-    if (busy || !window.confirm("断开后，此工作台将停止接收微信测试消息。确定断开？")) return;
+        if (busy || !window.confirm("断开后，Kiwi 将停止收取并回复店主微信消息。确定断开？")) return;
     busy = true;
     $("weixin-disconnect").disabled = true;
     call("POST", endpoint + "/disconnect", {}).catch(problem).finally(function () { busy = false; reset(); });
@@ -2157,7 +2226,7 @@ function mountWeixin(sequence) {
       for (var x = 0; x < row.length; x++) if (row[x] === "1") ctx.fillRect((x + 4) * module, (y + 4) * module, module, module);
     });
   }
-  function begin() {
+  function begin(replyOnPairing) {
     if (busy) return;
     busy = true;
     clearTimeout(statusTimer);
@@ -2166,6 +2235,7 @@ function mountWeixin(sequence) {
       if (!active()) return;
       qr = attempt.attempt_id;
       panel.innerHTML = '<p id="weixin-scan-state" role="status"></p>' +
+        (replyOnPairing ? pairingNotice : '') +
         '<canvas id="weixin-qr" role="img" aria-label="微信绑定二维码" style="max-width:100%;height:auto"></canvas>' +
         '<form id="weixin-verify" hidden><label>手机微信配对码 <input id="weixin-code" type="text" inputmode="numeric" pattern="[0-9]{1,12}" maxlength="12" autocomplete="off" required></label> ' +
         '<button class="act" id="weixin-submit-code">提交配对码</button></form>' +
@@ -2236,7 +2306,7 @@ function mountWeixin(sequence) {
   }
   updateStatus();
 }
-var current = "status";
+var current = WEIXIN_ONLY ? "weixin" : "status";
 var VIEW_COPY = {
   status: ["服务状态", "掌握接待状态，管理店铺与名片发布。"],
   products: ["商品与导入", "维护商品资料，先预览，再确认变更。"],
@@ -2321,13 +2391,22 @@ Array.prototype.forEach.call(document.querySelectorAll("#tabs button"), function
 });
 fetch("/merchant/api/session", { credentials: "same-origin" }).then(function (res) {
   if (res.status === 401) { showLogin(); return null; }
+  if (!res.ok) throw new Error("暂时无法读取登录状态，请刷新页面重试。");
   return res.json();
 }).then(function (session) {
   if (!session) return;
   CSRF = session.csrf_token || "";
   ROLE = session.role || "";
-  $("collection-tab").hidden = session.can_manage_alipay_collection !== true;
   $("who").textContent = "商家 " + session.merchant_id + " · " + ROLE;
+  if (WEIXIN_ONLY) {
+    if (ROLE !== "owner") {
+      $("view").innerHTML = '<div class="card" role="status">只有本实例的店主才能管理微信连接。请使用店主账号登录。</div>';
+      return;
+    }
+    refresh();
+    return;
+  }
+  $("collection-tab").hidden = session.can_manage_alipay_collection !== true;
   if (MANUAL_SUPPORT && ROLE === "owner") $("support-tab").hidden = false;
   if (WEIXIN_CHANNEL && ROLE === "owner") {
     $("weixin-tab").hidden = false;
@@ -2337,6 +2416,8 @@ fetch("/merchant/api/session", { credentials: "same-origin" }).then(function (re
     }
   }
   refresh();
+}).catch(function () {
+  $("view").innerHTML = '<div class="card" role="status">暂时无法读取登录状态，请刷新页面重试。</div>';
 });
 </script>
 </body>

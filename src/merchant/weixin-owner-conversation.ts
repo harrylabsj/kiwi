@@ -196,7 +196,23 @@ export class WeixinOwnerConversation {
           id TEXT PRIMARY KEY, command_key TEXT NOT NULL UNIQUE, epoch TEXT NOT NULL, principal TEXT NOT NULL,
           inquiry TEXT NOT NULL, source_version TEXT NOT NULL, version INTEGER NOT NULL, body TEXT NOT NULL,
           created INTEGER NOT NULL, updated INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS owner_reply_draft_discard (
+          id TEXT PRIMARY KEY REFERENCES owner_reply_draft(id), discarded INTEGER NOT NULL
         );`);
+      // 新版绑定可在模型授权失效时保留回信授权。只切换活跃会话，不删除历史或草稿。
+      this.atomic(() => {
+        const row = this.binding();
+        if (row === undefined || !row.revision.includes(":")) return;
+        const owner = this.options.ownerRevision(row.principal);
+        if (!owner) return;
+        const local = digest(["paired-owner-replies-v1", owner]);
+        if (row.revision.startsWith(`${local}:`) && /^[a-f0-9]{64}$/.test(row.revision.slice(local.length + 1)) &&
+            this.consentedAgent(row) === undefined) {
+          this.db.prepare("UPDATE owner_binding SET revision = ?, conversation = ? WHERE singleton = 1")
+            .run(local, randomUUID());
+        }
+      });
     } catch (error) {
       this.db.close();
       throw error;
@@ -226,17 +242,30 @@ export class WeixinOwnerConversation {
   private revisionFor(principal: string): string | undefined {
     const revision = this.options.ownerRevision(principal);
     if (!revision || !this.options.replyToOwner) return revision;
-    const agent = this.options.agent;
-    // Local reply consent and model-data consent are distinct; a model change invalidates the old session.
-    if (agent?.state === "unavailable") return undefined;
-    if (agent?.state === "configured") return digest(["paired-owner-agent-v1", revision, agent.consent]);
     return digest(["paired-owner-replies-v1", revision]);
+  }
+
+  /** 每次推理单独校验当轮绑定的模型数据授权，不能用微信回信授权替代。 */
+  private consentedAgent(row: Binding): Extract<WeixinOwnerAgent, { state: "configured" }> | undefined {
+    const agent = this.options.agent;
+    if (!this.options.replyToOwner || agent?.state !== "configured") return undefined;
+    const owner = this.options.ownerRevision(row.principal);
+    const local = this.revisionFor(row.principal);
+    if (!owner || !local) return undefined;
+    // 旧版将两类授权存成一个摘要，仅在原模型仍匹配时兼容。
+    return row.revision === `${local}:${agent.consent}` ||
+      row.revision === digest(["paired-owner-agent-v1", owner, agent.consent]) ? agent : undefined;
   }
 
   private active(fingerprint: string): Binding | undefined {
     if (!this.options.enabled) return undefined;
     const row = this.binding();
-    return row?.fingerprint === fingerprint && this.revisionFor(row.principal) === row.revision ? row : undefined;
+    if (row?.fingerprint !== fingerprint) return undefined;
+    const revision = this.revisionFor(row.principal);
+    if (!revision) return undefined;
+    const separated = this.options.replyToOwner && row.revision.startsWith(`${revision}:`) &&
+      /^[a-f0-9]{64}$/.test(row.revision.slice(revision.length + 1));
+    return row.revision === revision || separated || this.consentedAgent(row) !== undefined ? row : undefined;
   }
 
   /** 在轮询开始时固定授权，晚到的旧批次不能进入新会话。 */
@@ -244,15 +273,42 @@ export class WeixinOwnerConversation {
     return this.active(fingerprint)?.conversation;
   }
 
-  bind(principal: string, fingerprint: string): void {
+  bind(principal: string, fingerprint: string, modelConsent?: string): void {
     if (!this.options.enabled) throw new OwnerConversationError("unavailable", "店主对话未启用。");
     this.atomic(() => {
       const revision = this.revisionFor(principal);
       if (!revision) throw new OwnerConversationError("forbidden", "当前店主身份不能授权对话。");
+      if (modelConsent !== undefined && (!this.options.replyToOwner || this.options.agent?.state !== "configured" ||
+          this.options.agent.consent !== modelConsent)) throw new OwnerConversationError("conflict", "模型授权已变化。");
+      const active = this.active(fingerprint);
+      if (active?.principal === principal && modelConsent !== undefined) {
+        if (this.consentedAgent(active) !== undefined) return;
+        // An additional data consent changes the message epoch for admission without deleting the prior chat.
+        this.db.prepare("UPDATE owner_binding SET revision = ?, conversation = ? WHERE singleton = 1")
+          .run(`${revision}:${modelConsent}`, randomUUID());
+        return;
+      }
       this.revokeInTransaction();
       this.db.prepare("INSERT INTO owner_binding VALUES (1, ?, ?, ?, ?, ?)")
-        .run(randomUUID(), principal, revision, fingerprint, randomUUID());
+        .run(randomUUID(), principal, modelConsent === undefined ? revision : `${revision}:${modelConsent}`, fingerprint, randomUUID());
     });
+  }
+
+  stopModel(principal: string, fingerprint: string): void {
+    this.atomic(() => {
+      const binding = this.active(fingerprint);
+      if (binding?.principal !== principal || !this.options.replyToOwner) {
+        throw new OwnerConversationError("forbidden", "当前店主没有活动的微信对话。");
+      }
+      this.removeModelConsent(binding, this.revisionFor(principal)!);
+    });
+  }
+
+  private removeModelConsent(binding: Binding, revision: string): void {
+    if (binding.revision === revision) return;
+    if (this.agentCall?.conversation === binding.conversation) this.agentCall.abort.abort();
+    this.db.prepare("UPDATE owner_binding SET revision = ?, conversation = ? WHERE singleton = 1")
+      .run(revision, randomUUID());
   }
 
   revoke(): void {
@@ -289,6 +345,7 @@ export class WeixinOwnerConversation {
     const preview = this.db.prepare("SELECT reply, rule_proposal FROM owner_turn WHERE conversation = ? AND state = 'previewed' ORDER BY seq DESC LIMIT 1")
       .get(binding?.principal === principal ? binding.conversation : "");
     return { enabled: this.options.enabled, authorized: binding?.principal === principal,
+      ...(this.options.replyToOwner ? { model_authorized: binding?.principal === principal && this.consentedAgent(binding) !== undefined } : {}),
       delivery: this.options.replyToOwner ? "paired_owner" as const : "workbench_only" as const,
       last_result: last?.state ?? null, last_received_at: last?.received ?? null, unknown_count: unknown.count,
       preview: preview?.reply ?? null,
@@ -401,7 +458,7 @@ export class WeixinOwnerConversation {
 
   private async prepareTurn(fingerprint: string, binding: Binding, turn: Turn, signal: AbortSignal, previewOnly = false): Promise<void> {
     const text = turn.text ?? "";
-    const agent = previewOnly ? undefined : this.options.agent;
+    const agent = previewOnly ? undefined : this.consentedAgent(binding);
     const inventorySku = previewOnly ? ownerInventorySku(text) : undefined;
     let reply = "我可以帮你查待跟进询价、接着聊刚才的清单，或拟一份跟进草稿。你想先看什么？";
     let list: ListSnapshot | undefined;
@@ -523,7 +580,7 @@ export class WeixinOwnerConversation {
           const href = new URL(`/merchant/?weixin_draft=${saved.id}`, this.options.workbenchOrigin);
           reply = previewOnly
             ? `普通跟进草稿已保存，尚未发送给买家。\n${saved.body}\n工作台预览：${href.href}`
-            : `第 ${draft.index + 1} 笔的普通跟进草稿，尚未发送给买家：\n${saved.body}\n如需编辑，可打开工作台的「微信通道 → 普通跟进草稿」。`;
+            : `第 ${draft.index + 1} 笔的普通跟进草稿，尚未发送给买家：\n${saved.body}\n可以在本实例 /merchant/weixin 的「草稿」区核对或编辑。`;
         }
       }
       const state = previewOnly ? "previewed" : "ready";
@@ -567,7 +624,8 @@ export class WeixinOwnerConversation {
 
   listDrafts(principal: string): Array<{ id: string; inquiry: string; version: number; created: number }> {
     if (!this.options.ownerRevision(principal)) throw new OwnerConversationError("forbidden", "当前主体不能查看草稿。");
-    return this.db.prepare(`SELECT id, inquiry, version, created FROM owner_reply_draft WHERE principal=? ORDER BY created DESC, id LIMIT 20`)
+    return this.db.prepare(`SELECT id, inquiry, version, created FROM owner_reply_draft d WHERE principal=?
+      AND NOT EXISTS (SELECT 1 FROM owner_reply_draft_discard x WHERE x.id=d.id) ORDER BY created DESC, id LIMIT 20`)
       .all(principal) as Array<{ id: string; inquiry: string; version: number; created: number }>;
   }
 
@@ -575,7 +633,8 @@ export class WeixinOwnerConversation {
     // 已独立落库的草稿保留；当前真实 owner 主体才可打开，旧绑定不能凭链接授权。
     if (!this.options.ownerRevision(principal)) throw new OwnerConversationError("forbidden", "当前主体不能查看草稿。");
     const row = this.db.prepare(`SELECT id, epoch, principal, inquiry, source_version, version, body, created
-      FROM owner_reply_draft WHERE id=? AND principal=?`).get(id, principal) as DraftRow | undefined;
+      FROM owner_reply_draft d WHERE id=? AND principal=?
+      AND NOT EXISTS (SELECT 1 FROM owner_reply_draft_discard x WHERE x.id=d.id)`).get(id, principal) as DraftRow | undefined;
     if (row === undefined) throw new OwnerConversationError("not_found", "未找到回复草稿。");
     let current = false;
     try { current = this.options.source.get(row.inquiry)?.version === row.source_version; } catch { /* 不可读不代表仍有效 */ }
@@ -589,6 +648,17 @@ export class WeixinOwnerConversation {
       const text = this.body(body);
       this.db.prepare("UPDATE owner_reply_draft SET body=?, version=version+1, updated=? WHERE id=?").run(text, this.now(), id);
       return { ...row, body: text, version: version + 1 };
+    });
+  }
+
+  /** 放弃仅在已登录的店主页面执行：保留原始记录，不发送或删除正文。 */
+  discardDraft(principal: string, id: string, version: number): void {
+    this.atomic(() => {
+      if (!this.options.ownerRevision(principal)) throw new OwnerConversationError("forbidden", "当前主体不能放弃草稿。");
+      const row = this.db.prepare("SELECT version FROM owner_reply_draft WHERE id=? AND principal=?").get(id, principal);
+      if (row === undefined) throw new OwnerConversationError("not_found", "未找到回复草稿。");
+      if (row.version !== version) throw new OwnerConversationError("conflict", "草稿版本已变化，请重新查看。");
+      this.db.prepare("INSERT INTO owner_reply_draft_discard (id, discarded) VALUES (?, ?) ON CONFLICT(id) DO NOTHING").run(id, this.now());
     });
   }
 

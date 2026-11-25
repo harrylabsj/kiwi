@@ -1521,6 +1521,7 @@ async function routeMerchant(sub: string | undefined, args: ParsedArgs): Promise
   if (sub === "mcp") return await cmdMerchantMcp(args);
   if (sub === "admin-passwd") return await cmdMerchantAdminPasswd(args);
   if (sub === "workbench") return await cmdMerchantWorkbench(args);
+  if (sub === "model") return await cmdMerchantModel(args);
   if (sub === "runtime") return await cmdMerchantRuntime(args);
   if (sub === "connect") return await cmdMerchantConnect(args);
   if (sub === "credentials") return await cmdMerchantCredentials(args);
@@ -2397,6 +2398,19 @@ async function cmdMerchantMcp(args: ParsedArgs): Promise<number> {
  *
  *   kiwi merchant workbench serve [--profile <file>] [--host <host>] [--port N] [--data-dir <dir>] [--public-url <origin>]
  */
+async function cmdMerchantModel(args: ParsedArgs): Promise<number> {
+  const profile = requireProfileOrDefault(args);
+  const dataDir = configuredDataDir(args, profile);
+  const dirs = resolveMerchantMcpDirs({ ...(dataDir === undefined ? {} : { dataDir }), agentId: profile.agent_id });
+  const { runMerchantModelCli } = await import("./merchant/weixin-owner-model-cli.js");
+  return await runMerchantModelCli({
+    action: args.command[2] ?? "configure",
+    profile, dataDir: dirs.merchantDataDir, env: process.env,
+    log: (line) => process.stdout.write(`${line}\n`),
+    ...(process.stdin.isTTY ? { ask: (label: string) => promptLine(label, "") } : {}),
+  });
+}
+
 async function cmdMerchantWorkbench(args: ParsedArgs): Promise<number> {
   if (args.command[2] !== "serve") {
     process.stderr.write(

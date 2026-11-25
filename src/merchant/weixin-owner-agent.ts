@@ -17,7 +17,7 @@ export interface OwnerAgentTurn {
   history: ReadonlyArray<{ question: string; answer: string }>;
 }
 
-export type WeixinOwnerAgent = { state: "unavailable" } | {
+export type WeixinOwnerAgent = { state: "unavailable"; reason?: "not_configured" | "missing_credential" | "invalid_config" } | {
   state: "configured";
   consent: string;
   provider: string;
@@ -48,9 +48,16 @@ const tool = {
 };
 
 class OwnerAgentError extends Error {
-  constructor(readonly code: "unavailable" | "invalid_response" | "deadline") {
+  constructor(readonly code: "unavailable" | "invalid_response" | "deadline" | "quota_exhausted" | "rate_limited" | "provider_error" | "outcome_unknown") {
     super(code);
   }
+}
+
+/** Pi flattens API errors into text; surface only recognized codes, never the upstream payload. */
+function providerError(message: string | undefined): OwnerAgentError {
+  if (message !== undefined && /\b(?:insufficient_quota|insufficient_balance)\b/i.test(message)) return new OwnerAgentError("quota_exhausted");
+  if (message !== undefined && /^(?:\s*429\b)|\brate_limit_exceeded\b/i.test(message)) return new OwnerAgentError("rate_limited");
+  return new OwnerAgentError("provider_error");
 }
 
 function parseAction(args: Record<string, unknown>): OwnerAgentDecision {
@@ -95,6 +102,8 @@ export function createWeixinOwnerDecider(input: { model: Model<Api>; streamFn: S
         return stream.result();
       })()]);
       signal.throwIfAborted();
+      if (result.stopReason === "error") throw providerError(result.errorMessage);
+      if (result.stopReason === "aborted") throw new OwnerAgentError("outcome_unknown");
       if (result.stopReason === "toolUse") {
         const calls = result.content.filter((item) => item.type === "toolCall");
         const call = calls[0];

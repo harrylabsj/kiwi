@@ -7,12 +7,13 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { request as httpsRequest } from "node:https";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { Script } from "node:vm";
+import { createContext, Script } from "node:vm";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { adminCredentialsPath, writeAdminCredentials } from "../src/auth/merchant-sessions.js";
 import { loadProfile } from "../src/config/profile.js";
+import { renderMerchantManagementPage } from "../src/http/merchant-management/page.js";
 import {
   createWorkbenchRequestRouter,
   startStandaloneMerchantWorkbench,
@@ -112,6 +113,75 @@ async function startWorkbench(root: string, preview?: Parameters<typeof startSta
 }
 
 describe("standalone merchant workbench", () => {
+  it.each([
+    { label: "anonymous", role: "anonymous" },
+    { label: "operator", role: "operator" },
+    { label: "unbound owner", role: "owner", ownerState: "unbound" },
+    { label: "unbound preview-only owner", role: "owner", ownerState: "preview" },
+    { label: "owner before model consent", role: "owner", ownerState: "rules" },
+    { label: "owner after model consent", role: "owner", ownerState: "model" },
+  ])("opens the single-purpose Weixin page as $label without navigating the workbench", async ({ role, ownerState }) => {
+    const page = renderMerchantManagementPage({ productAuthority: "exact", weixinOnly: true });
+    const scripts = [...page.matchAll(/<script>([\s\S]*?)<\/script>/gi)].map((match) => match[1]);
+    expect(scripts.length).toBeGreaterThan(0);
+    const view = { innerHTML: "", setAttribute: () => {}, querySelectorAll: () => [] };
+    const panel = { innerHTML: "" };
+    const capabilities = { innerHTML: "" };
+    const drafts = { hidden: true };
+    const list = { textContent: "" };
+    const elements = new Map<string, object>([["view", view], ["who", {}], ["page-title", {}],
+      ["page-description", {}], ["weixin-panel", panel], ["weixin-begin", {}], ["weixin-disconnect", {}],
+      ["weixin-mobile-capabilities", capabilities], ["weixin-mobile-drafts", drafts], ["weixin-draft-refresh", {}], ["weixin-draft-list", list]]);
+    const requests: string[] = [];
+    const bound = ownerState === "rules" || ownerState === "model";
+    const context = createContext({
+      document: { getElementById: (id: string) => elements.get(id) ?? null, querySelectorAll: () => [] },
+      setTimeout: () => 0,
+      fetch: (url: string) => {
+        requests.push(url);
+        if (url === "/merchant/api/session") {
+          return Promise.resolve(role === "anonymous" ? new Response(null, { status: 401 }) : Response.json({ role, merchant_id: "fixture", csrf_token: "fixture" }));
+        }
+        if (url === "/merchant/api/v1/channels/weixin") return Promise.resolve(Response.json({
+          status: bound ? "connected" : "disconnected", configured: bound,
+          conversation: { enabled: true, authorized: bound, delivery: ownerState === "preview" ? "workbench_only" : "paired_owner",
+            model_authorized: ownerState === "model",
+            ...(bound ? { agent: { state: "configured", provider: "fixture", model: "fixture", endpoint: "https://example.invalid" } } : {}) },
+        }));
+        if (url === "/merchant/api/v1/channels/weixin/reply-drafts") return Promise.resolve(Response.json({ items: [] }));
+        throw new Error("unexpected request: " + url);
+      },
+    });
+    for (const script of scripts) await new Script(script!).runInContext(context);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    if (role === "anonymous") expect(view.innerHTML).toContain('/admin/login?next=%2Fmerchant%2Fweixin');
+    if (role === "operator") expect(view.innerHTML).toContain("只有本实例的店主");
+    if (role === "owner") {
+      expect(view.innerHTML).toContain('id="weixin-panel"');
+      expect(panel.innerHTML).toContain(bound ? "断开连接" : "生成微信二维码");
+      expect(panel.innerHTML).toContain(bound ? "在微信里向机器人发送 /ping 验证收发" : "微信连接：未连接");
+      expect(panel.innerHTML).toContain('id="weixin-mobile-capabilities"');
+      if (ownerState === "unbound") {
+        expect(panel.innerHTML).toContain("在手机微信确认绑定，即授权 Kiwi 仅回复这个店主账号的私聊");
+        expect(panel.innerHTML).toContain("不会调用模型或向买家发送消息");
+      } else {
+        expect(panel.innerHTML).not.toContain("在手机微信确认绑定，即授权");
+      }
+      expect(capabilities.innerHTML).toContain(bound ? "已绑定，已授权店主回信" : "未绑定");
+      expect(capabilities.innerHTML).toContain(ownerState === "model" ? "已配置并授权；未在此页验证推理连通性" :
+        ownerState === "rules" ? "已配置，未授权" : ownerState === "preview" ? "<dd>未启用</dd>" : "未启用或未配置");
+      expect(capabilities.innerHTML).toContain(bound ? "支持待跟进询价、清单追问和起草" : "微信内未启用");
+      expect(capabilities.innerHTML).toContain("不会向买家发送");
+      expect(view.innerHTML).toContain('id="weixin-mobile-drafts"');
+      expect(drafts.hidden).toBe(false);
+      expect(list.textContent).toContain("没有已保存的回复草稿");
+    } else {
+      expect(drafts.hidden).toBe(true);
+    }
+    expect(requests).toEqual(role === "owner" ? ["/merchant/api/session", "/merchant/api/v1/channels/weixin",
+      "/merchant/api/v1/channels/weixin/reply-drafts"] : ["/merchant/api/session"]);
+  });
+
   it("starts a local workbench with login/admin surfaces and /livez", async () => {
     const root = mkdtempSync(join(tmpdir(), "kiwi-workbench-"));
     dirs.push(root);
@@ -135,13 +205,25 @@ describe("standalone merchant workbench", () => {
     expect(live.status).toBe(200);
     expect((await live.json()) as { ok: boolean }).toMatchObject({ ok: true });
 
-    const login = await fetch(new URL("/admin/login?next=%2Fmerchant%2F", handle.url), {
+    const pairingPage = await fetch(new URL("/merchant/weixin/", handle.url));
+    expect(pairingPage.status).toBe(200);
+    expect(pairingPage.headers.get("cache-control")).toBe("no-store");
+    const pairingHtml = await pairingPage.text();
+    expect(pairingHtml).toContain("var WEIXIN_ONLY = true");
+    expect(pairingHtml).not.toContain('<nav id="tabs"');
+    const invalidMethod = await fetch(new URL("/merchant/weixin", handle.url), { method: "POST" });
+    expect(invalidMethod.status).toBe(405);
+    const anonymous = await fetch(new URL("/merchant/api/v1/channels/weixin", handle.url));
+    expect(anonymous.status).toBe(401);
+
+    const login = await fetch(new URL("/admin/login", handle.url), {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: "password=strong-pw-123&next=%2Fmerchant%2F",
+      body: "password=strong-pw-123&next=%2Fmerchant%2Fweixin",
       redirect: "manual",
     });
     expect(login.status).toBe(303);
+    expect(login.headers.get("location")).toBe("/merchant/weixin");
     const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
     expect(cookie).toContain("kiwi_admin=");
     const weixin = await fetch(new URL("/merchant/api/v1/channels/weixin", handle.url), { headers: { cookie } });

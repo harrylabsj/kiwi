@@ -797,7 +797,7 @@ export async function bootstrapCloudRuntime(
   const productsFilePath = config.productsFile;
   const applyPolicyOverride = assembly.service.policyApplier;
   const weixinEnv = options.env ?? process.env;
-  const weixinOwnerAgent = adminOptions === undefined ? undefined : configuredWeixinOwnerAgent(profile, weixinEnv);
+  const weixinOwnerAgent = adminOptions === undefined ? undefined : configuredWeixinOwnerAgent(profile, weixinEnv, config.dataDir);
   const weixinChannel = adminOptions === undefined ? undefined : new MerchantWeixinChannel({
     dataDir: config.dataDir,
     merchantId: profile.owner_id,
@@ -1665,6 +1665,20 @@ export async function bootstrapCloudRuntime(
     }));
   };
 
+  const merchantWeixinPage: CloudRequestListener = (req, res) => {
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      res.writeHead(405, { allow: "GET, HEAD", "cache-control": "no-store" });
+      res.end();
+      return;
+    }
+    res.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+      "referrer-policy": "no-referrer",
+    });
+    res.end(renderMerchantManagementPage({ productAuthority: "exact", weixinOnly: true }));
+  };
+
   if (signingIdentity !== undefined) {
     enrollmentHeartbeat = startEnrollmentHeartbeat({
       dataDir: config.dataDir,
@@ -1686,6 +1700,7 @@ export async function bootstrapCloudRuntime(
     ...(alipayLandingHandler !== undefined ? { alipayLandingHandler } : {}),
     trustedPageHandler: createTrustedWorkbenchPageHandler(),
     merchantHomePage,
+    ...(weixinChannel !== undefined && merchantApiHandler !== undefined ? { merchantWeixinPage } : {}),
     readiness,
     a2aPaths: [CLOUD_A2A_PATH],
     // I-01 回显探针：默认关闭；只有显式 KIWI_CLOUD_PROBE_ECHO=1 才挂载。

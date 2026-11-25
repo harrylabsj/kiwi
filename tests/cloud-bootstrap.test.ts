@@ -642,6 +642,18 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
       const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
       const workbench = await fetch(`${base}/merchant/`, { headers: { cookie } });
       expect(await workbench.text()).toContain("var WEIXIN_CHANNEL = true");
+      const pairingPage = await fetch(`${base}/merchant/weixin`);
+      expect(pairingPage.status).toBe(200);
+      expect(pairingPage.headers.get("cache-control")).toBe("no-store");
+      const pairingHtml = await pairingPage.text();
+      expect(pairingHtml).toContain("var WEIXIN_ONLY = true");
+      expect(pairingHtml).not.toContain('<nav id="tabs"');
+      const pairingLogin = await fetch(`${base}/admin/login`, {
+        method: "POST", redirect: "manual", headers: form,
+        body: `password=${ADMIN_PASSWORD}&next=%2Fmerchant%2Fweixin`,
+      });
+      expect(pairingLogin.status).toBe(303);
+      expect(pairingLogin.headers.get("location")).toBe("/merchant/weixin");
       const weixin = await fetch(`${base}/merchant/api/v1/channels/weixin`, { headers: { cookie } });
       expect(weixin.status).toBe(200);
       expect(await weixin.json()).toEqual({ status: "disconnected", configured: false });

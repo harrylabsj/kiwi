@@ -105,7 +105,24 @@ export class MerchantWeixinChannel {
       throw new OwnerConversationError("conflict", "请重新查看并确认当前对话模式及模型服务。");
     }
     const current = fingerprint(loadCredentials(this.credentialsFile));
+    const status = conversation.status(principal, current);
+    if (!status.authorized || (modelConsent !== undefined && !status.model_authorized)) {
+      conversation.bind(principal, current, modelConsent);
+    }
+  }
+
+  confirmReplies(owner: WeixinBindingOwner): void {
+    const { principal, conversation } = this.ownerConversation(owner);
+    if (this.conversationOptions?.replyToOwner !== true) throw new OwnerConversationError("unavailable", "微信回信未启用。");
+    if (!this.configured || !existsSync(this.credentialsFile)) throw new OwnerConversationError("conflict", "请先连接微信。");
+    const current = fingerprint(loadCredentials(this.credentialsFile));
     if (!conversation.status(principal, current).authorized) conversation.bind(principal, current);
+  }
+
+  stopModel(owner: WeixinBindingOwner): void {
+    const { principal, conversation } = this.ownerConversation(owner);
+    if (!this.configured || !existsSync(this.credentialsFile)) throw new OwnerConversationError("conflict", "请先连接微信。");
+    conversation.stopModel(principal, fingerprint(loadCredentials(this.credentialsFile)));
   }
 
   clearConversation(owner: WeixinBindingOwner): void {
@@ -134,6 +151,11 @@ export class MerchantWeixinChannel {
     const row = edit === undefined ? conversation.draft(principal, id) : conversation.edit(principal, id, edit.version, edit.body);
     const { inquiry, version, body, current, publication } = row;
     return { id: row.id, inquiry, version, body, current, publication };
+  }
+
+  discardReplyDraft(owner: WeixinBindingOwner, id: string, version: number): void {
+    const { principal, conversation } = this.ownerConversation(owner);
+    conversation.discardDraft(principal, id, version);
   }
 
   restore(): void {
@@ -227,7 +249,9 @@ export class MerchantWeixinChannel {
           const credentials = { ...result.credentials, saved_at: new Date(this.now()).toISOString() };
           const conversation = this.openConversation();
           if (conversation !== undefined) {
-            if (this.conversationOptions?.enabled && this.conversationOptions.agent === undefined && owner.principalId) {
+            // 手机确认只授权当前店主的本地回信；模型数据授权不能从扫码继承。
+            const options = this.conversationOptions;
+            if (options?.enabled && owner.principalId && (options.replyToOwner || options.agent === undefined)) {
               conversation.bind(owner.principalId, fingerprint(credentials));
             } else conversation.revoke();
           }

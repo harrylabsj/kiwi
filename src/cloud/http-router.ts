@@ -52,6 +52,8 @@ export interface CloudRouterOptions {
    * 认证）。精确匹配 `/merchant` 与 `/merchant/`；必须先于别名接管。
    */
   merchantHomePage?: CloudRequestListener;
+  /** 店主微信配对和授权静态壳，复用商家会话和管理 API。 */
+  merchantWeixinPage?: CloudRequestListener;
   /** Buyer 关注/隐私面；只有配置了可验证 Buyer 身份解析器时才挂载。 */
   buyerHandler?: CloudRequestListener;
   /** 支付宝交接的公开说明，永不包含收款资料。 */
@@ -252,6 +254,14 @@ export function createCloudRouter(options: CloudRouterOptions): CloudRequestList
       (pathname === "/merchant" || pathname === "/merchant/")
     ) {
       options.merchantHomePage(req, res);
+      return;
+    }
+
+    if (
+      options.merchantWeixinPage !== undefined &&
+      (pathname === "/merchant/weixin" || pathname === "/merchant/weixin/")
+    ) {
+      options.merchantWeixinPage(req, res);
       return;
     }
 
