@@ -4910,7 +4910,7 @@
     },
     {
       "path": "src/cloud/connect-service.ts",
-      "sha256": "sha256:d9b5d70d33a15ad38ec8bdcb13f4f76b46cec92b814ce99fcd28f2791bf7e6aa"
+      "sha256": "sha256:b75b37e8d817f3e5b440c7e1dba91feb34af116c08993b98b2b953cbe3cdde73"
     },
     {
       "path": "src/cloud/file-listing-publication.ts",
@@ -6796,7 +6796,7 @@
     },
     {
       "path": "tests/a297-connect-review.test.ts",
-      "sha256": "sha256:00ca866f8e73e418b86bcefd4121f26ddb4bf8b5b0d888384f97960880632c5d"
+      "sha256": "sha256:6aace05f3fa50865e47273452be4e3a61bd43d2dbf66aa38dd065b62dc422285"
     },
     {
       "path": "tests/a2a-accept-requires-merchant-agreement.test.ts",
@@ -6916,7 +6916,7 @@
     },
     {
       "path": "tests/a301-connect-independent.test.ts",
-      "sha256": "sha256:afef71d55eb73867bb4cd36222bf886a1a6aa510070b9546f1c9df11c4233e2a"
+      "sha256": "sha256:1933b1602872d882fe976321b16d2bdd332300a492b7b9b440cf5062526577fa"
     },
     {
       "path": "tests/a316-return-fix-kiwi.test.ts",
@@ -7468,7 +7468,7 @@
     },
     {
       "path": "tests/connect-service.test.ts",
-      "sha256": "sha256:9739d8ddc2c7269aff3643bf82d36bc554d5d4de72bd9c4f3fd3a5d60e45d825"
+      "sha256": "sha256:28ccadc40dec43df526524e1273f502dd6e90419c6570f50e2880ac1ed33963d"
     },
     {
       "path": "tests/connector-http.test.ts",
@@ -8588,7 +8588,7 @@
     },
     {
       "path": "tests/merchant-workbench-server.test.ts",
-      "sha256": "sha256:32bec39090997942a43e1ba184faf0eb1f006c908c368513a8fbbeb8ae6b3128"
+      "sha256": "sha256:ec6c1fa14c3566e66207ef9389d094583583a0bd33807cfd83ae5274a0ce22cd"
     },
     {
       "path": "tests/merchant-workbench-service.test.ts",
