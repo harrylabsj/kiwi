@@ -1,7 +1,7 @@
 {
   "format": "kiwi-npm-shipping-source/1",
   "source_base": "e703bc0d67e24a98c417274e46f37d210eff86ac",
-  "reviewed_release": "0.12.37",
+  "reviewed_release": "0.12.38",
   "owner_runtime_default": "dual-off/private",
   "tool": {
     "node": "v22.22.3",
@@ -98,8 +98,8 @@
     "arch": "arm64"
   },
   "stage": {
-    "package_sha256": "sha256:a48735cd41ab814c614b4bc379ba6507dd1ae46ff8c41be2e7f912adf44a2b2c",
-    "lock_sha256": "sha256:1931be72e6831bf70fc93d9e4ba4729210f9dedc34a18d986fb48ffe3311f92b"
+    "package_sha256": "sha256:8960cbc24c9d18fdfaf774dbfe108bcc86e844cc3d5d8299a574debba6aa7db3",
+    "lock_sha256": "sha256:db7532b41ea219dffc61f47a6fbdfdbe255a642ab4b77343b04be9bf536139b2"
   },
   "budgets": {
     "plain_bytes": 268435456,
@@ -254,11 +254,11 @@
     },
     {
       "path": "build-inputs/release0124-stage/package-lock.json",
-      "sha256": "sha256:1931be72e6831bf70fc93d9e4ba4729210f9dedc34a18d986fb48ffe3311f92b"
+      "sha256": "sha256:db7532b41ea219dffc61f47a6fbdfdbe255a642ab4b77343b04be9bf536139b2"
     },
     {
       "path": "build-inputs/release0124-stage/package.json",
-      "sha256": "sha256:a48735cd41ab814c614b4bc379ba6507dd1ae46ff8c41be2e7f912adf44a2b2c"
+      "sha256": "sha256:8960cbc24c9d18fdfaf774dbfe108bcc86e844cc3d5d8299a574debba6aa7db3"
     },
     {
       "path": "build-inputs/shipping-audit-allow.json",
@@ -3638,19 +3638,19 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "sha256:fe308fafb986762709bf5548e4a46370d0dfaa98253ef4b501f810207e89b412"
+      "sha256": "sha256:8044a20dc87c9e40433a9f20685edf8bd1b18b2641e4fc66123e801054a5453d"
     },
     {
       "path": "package.json",
-      "sha256": "sha256:496a2821976f3eac2befe956a8c44b0108dec611c5f89dcf1f28e0f678bcee11"
+      "sha256": "sha256:34258b92eaea49469d7760f8b2808032f30f52ce3fa55600df1cf9466c358c5d"
     },
     {
       "path": "packages/merchant-cloud/package-lock.json",
-      "sha256": "sha256:19199f56398a246d01c1a12495409dee2383057dcb7d21ddd5ee64e91ea2bcaf"
+      "sha256": "sha256:d59935b2769d9d79fddd9fbd58321312de04ff86b518838833b4c9754e80273d"
     },
     {
       "path": "packages/merchant-cloud/package.json",
-      "sha256": "sha256:95bd895eb574e8655a59adb6d1d18e26d454184d6adeb5bfb936a417af8a7bde"
+      "sha256": "sha256:7b05522d17e5e67d2d9b14a524f0b1c8bc2b9e44ea656e8cc142470ce47f66d5"
     },
     {
       "path": "packages/merchant-cloud/prepare.mjs",
@@ -3658,7 +3658,7 @@
     },
     {
       "path": "portfolio-products.json",
-      "sha256": "sha256:a9686d44b570c7433c211e00e2295107196fc2d78024285562fb7ed0b45d40aa"
+      "sha256": "sha256:42c76420962405a1325132548e8ff718d7a6e4f5061bf2de03649636b3b45bf3"
     },
     {
       "path": "portfolio.lock.json",
@@ -3826,7 +3826,7 @@
     },
     {
       "path": "scripts/lib/npm-shipping.mjs",
-      "sha256": "sha256:21a69eeafcda467c1d6951367c9c47591c9faaf053f083641e89ac0ea3394db7"
+      "sha256": "sha256:fd0949226e1e17a502204097598f96bf35432911a35608dbf287bd73f9315893"
     },
     {
       "path": "scripts/lib/portfolio-lock-verify.d.mts",
@@ -3998,7 +3998,7 @@
     },
     {
       "path": "scripts/verify-cloud-package-candidate.mjs",
-      "sha256": "sha256:c56a4e09b00ddcd0b1bf1de1c42f56707e103b4a9e38c4f7023c50e9cbebe087"
+      "sha256": "sha256:70ff17eccfe401ec2ed63b92354d134a6e2aa616de2f0682b8c5f8bcf003e5a6"
     },
     {
       "path": "scripts/verify-contract-vectors.mjs",
@@ -4022,7 +4022,7 @@
     },
     {
       "path": "scripts/verify-npm-shipping-installed.mjs",
-      "sha256": "sha256:9ef6a7c56e9cbe0d0f55a35f744fd345b6d328816616add2ceb39c536425ad8d"
+      "sha256": "sha256:d1839f6c557e78ad645a0b78667ed6f099ac2c5eb11331f618b6934eb17ca309"
     },
     {
       "path": "scripts/verify-npm-shipping-runtime.mjs",
@@ -6742,7 +6742,7 @@
     },
     {
       "path": "src/weixin/ilink-client.ts",
-      "sha256": "sha256:ee41fbdcfbcc2f16fa523139f4d3a207eb76a7d6df23dbfa19a5457b67fa4c40"
+      "sha256": "sha256:076a1e29a6e1ccc92b8e5ae42c18977ec119edc6fdbbae868928e5d78b5144ea"
     },
     {
       "path": "src/weixin/login.ts",
@@ -6790,9 +6790,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:6cd41873dc13c5345a2dc90cd4d73cbb6bbdd7cb55b73bb6aa33b650041de950",
+      "sha256": "sha256:63d17b7650891ba1f4b9861492ef421853e1d3fc6f8c740480b3a9373ad91871",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:beead53bb5dfbba75e3fea62b29e6bd1cfcd9d0b5125da709a7e3dfbabba0d0a"
+      "raw_sha256": "sha256:5b6e528770ff0e01dd2289f1c47c4dceefeee93b1a65a215079fc407f61ff822"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
@@ -8672,7 +8672,7 @@
     },
     {
       "path": "tests/npm-shipping-contract.test.ts",
-      "sha256": "sha256:e1966e60af2ad54038498b70695750e8d2f384b9477faff545f937d18803e739"
+      "sha256": "sha256:7ecda9acf359a8dd57823e723b0cba249e3c64f3b24757036cfa94183859ed96"
     },
     {
       "path": "tests/onboarding-local-fallback.test.ts",
@@ -9072,7 +9072,7 @@
     },
     {
       "path": "tests/weixin-ilink-client.test.ts",
-      "sha256": "sha256:85405903637b10e34407c1975814b76a2472e39ca5eca73cb6ad8427c06221b1"
+      "sha256": "sha256:3c13560baa949af22b1fb255dcbea0a70ca3e09ff33b0847788ff83e946c302e"
     },
     {
       "path": "tests/weixin-login.test.ts",
