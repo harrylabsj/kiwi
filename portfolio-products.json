@@ -6,7 +6,7 @@
     {
       "id": "kiwi-merchant-cloud",
       "name": "Kiwi Merchant Cloud",
-      "version": "0.12.35",
+      "version": "0.12.36",
       "version_source": {
         "type": "json",
         "scope": "central",
@@ -23,12 +23,12 @@
         "protected kiwi-release environment",
         "npm trusted publishing"
       ],
-      "last_known_registry_version": "0.12.35"
+      "last_known_registry_version": "0.12.36"
     },
     {
       "id": "kiwi",
       "name": "Kiwi runtime",
-      "version": "0.12.35",
+      "version": "0.12.36",
       "version_source": {
         "type": "json",
         "scope": "central",
@@ -39,7 +39,7 @@
       "release_controller": "portfolio-release",
       "artifact": "release/npm/*.tgz",
       "state": "candidate",
-      "last_known_registry_version": "0.12.35",
+      "last_known_registry_version": "0.12.36",
       "gates": [
         "full Kiwi verify",
         "protected kiwi-release environment",
