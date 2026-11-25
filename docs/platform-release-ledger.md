@@ -1,18 +1,35 @@
 # Kiwi 平台发布版本台账
 
-最近一次发布与生产部署核验为 2026-11-25（北京时间），各平台状态以对应条目的核验日期为准。本表记录**已观察到的版本与当时状态**，不是实时查询；候选代码、注册表版本、平台审核和实际云端运行分开记录。部署、上线或发布新版本后，应补充平台链接、版本、状态、核验时间与回执；不得以代码提交或审核提交代替上线证据。
+最近一次发布与生产部署核验为 2026-11-26（北京时间），各平台状态以对应条目的核验日期为准。本表记录**已观察到的版本与当时状态**，不是实时查询；候选代码、注册表版本、平台审核和实际云端运行分开记录。部署、上线或发布新版本后，应补充平台链接、版本、状态、核验时间与回执；不得以代码提交或审核提交代替上线证据。
 
 ## npm 与 PyPI
 
 | 平台 | 产品 | 已确认版本 | 证据与限制 |
 |---|---|---:|---|
-| npm | `@harrylabsj/kiwi` | 0.12.36 | 2026-11-25 portfolio run [45523214785](https://github.com/harrylabsj/kiwi/actions/runs/45523214785) 发布；发布后下载 tarball 核验 SHA-1（`d864b393…`）与发布日志一致（`verify-registry` job 因 needs 含 skipped job 未运行）。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi/v/0.12.36)。 |
-| npm | `@harrylabsj/kiwi-merchant-cloud` | 0.12.36 | 2026-11-25 同一 portfolio run 发布；下载 tarball 核验 SHA-1 与发布日志一致。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-merchant-cloud/v/0.12.36)。 |
+| npm | `@harrylabsj/kiwi` | 0.12.37 | 2026-11-26 portfolio run [45641461858](https://github.com/harrylabsj/kiwi/actions/runs/45641461858) 发布；发布后下载 tarball 核验 SHA-1（`c0189d0c…`）与发布日志一致（`verify-registry` job 因 needs 含 skipped job 未运行）。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi/v/0.12.37)。 |
+| npm | `@harrylabsj/kiwi-merchant-cloud` | 0.12.37 | 2026-11-26 同一 portfolio run 发布；下载 tarball 核验 SHA-1（`a48d2af9…`）与发布日志一致。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-merchant-cloud/v/0.12.37)。 |
 | npm | `@harrylabsj/kiwi-dsh-plugin` | 0.1.4 | 2026-11-11 portfolio run 发布并回读核验；npm 可查 0.1.4。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-dsh-plugin/v/0.1.4)。 |
 | PyPI | `kiwi-catalog` | 0.5.30 | 2026-11-25 portfolio run [45617840510](https://github.com/harrylabsj/kiwi/actions/runs/45617840510) 发布，手工回读 PyPI latest=0.5.30 并干净安装核验；**生产 kiwi-hk 已于同日部署 0.5.30 + admin 0.2.28（whl sha256 与 PyPI 逐字节一致），schema user_version=60 无变更**。[PyPI 版本页](https://pypi.org/project/kiwi-catalog/0.5.30/)。 |
 | PyPI | `shopping-cli` | 3.2.12 | 2026-11-25 回读 PyPI latest=3.2.12（发布链路见当日晚间其他会话记录，本台账只确认 registry 状态）。[PyPI 版本页](https://pypi.org/project/shopping-cli/3.2.12/)。 |
 
-上表确认指定版本可查，不声称它们必然仍是 registry 当前 latest（2026-11-25 已确认 `@harrylabsj/kiwi` latest=0.12.36、`@harrylabsj/kiwi-merchant-cloud` latest=0.12.36、`kiwi-catalog` latest=0.5.30、`shopping-cli` latest=3.2.12）。`kiwi-catalog-admin` 0.2.18 已推送私有 tag `v0.2.18`，并作为生产 catalog 的扩展安装；它不是公开 registry 制品。
+上表确认指定版本可查，不声称它们必然仍是 registry 当前 latest（2026-11-26 已确认 `@harrylabsj/kiwi` latest=0.12.37、`@harrylabsj/kiwi-merchant-cloud` latest=0.12.37、`kiwi-catalog` latest=0.5.30、`shopping-cli` latest=3.2.12）。`kiwi-catalog-admin` 0.2.18 已推送私有 tag `v0.2.18`，并作为生产 catalog 的扩展安装；它不是公开 registry 制品。
+
+## 2026-11-26 kiwi 0.12.37 发布与生产部署（Veyquo 微信 Pi 模型对话）
+
+- 动因：Veyquo 微信通道开启 Pi 模型对话——0.12.36 只恢复了规则模板回信；#230 的微信模型功能在 0.12.36 发布后才合入 main，故发 0.12.37。
+- 发布源：kiwi `1b07899d`（含 #230 微信模型对话与授权门槛、#231 冻源刷新、#232 台账、#233 0.12.37 候选）；catalog `11c12bd`、shopping-cli 3.2.12 未变、未重发。
+- GitHub run：dry-run [45629629627](https://github.com/harrylabsj/kiwi/actions/runs/45629629627) 成功；发布 [45641461858](https://github.com/harrylabsj/kiwi/actions/runs/45641461858) 成功（channels=`npm,merchant-cloud`，经 `kiwi-release` 保护环境人工审批；审批隔日完成，run 排队等待约 7 小时后放行）。
+- registry 回读（2026-11-26，手工）：npm kiwi/merchant-cloud latest=0.12.37；下载 tarball 复算 SHA-1 与发布日志逐项一致（kiwi `c0189d0c…`、merchant-cloud `a48d2af9…`），发布含 sigstore provenance。`verify-registry` job 仍 skipped（已知缺陷未修，手工回读覆盖）。
+- 生产部署（kiwi-hk，2026-11-26 06:13–06:15 北京时间）：
+  - 部署前快照 `backups/pre-0.12.37-20261126-061319.tgz`（data+config）。
+  - Veyquo runtime 与 workbench 均从**官方已发布 tarball**（SHA-1 已核验）新建目录安装：runtime `releases/kiwi-0.12.37-20261126-061319`（替代 candidate-63c2ef0b，线上=已发布制品）、workbench `releases/kiwi-0.12.37-workbench-20261126-061319`；两 drop-in 切换，旧 conf 改名 `.disabled-20261126-061319` 保留回滚路径。
+  - 验证：两服务 active、`https://veyquo.com/.well-known/agent-card.json` 200、`/merchant/` 200、重启后日志零错误。
+- 微信模型对话启用链（同日上午）：
+  - workbench env `KIWI_WEIXIN_OWNER_AGENT=1`（`KIWI_WEIXIN_OWNER_REPLIES=1` 保持），进程环境确认含 `DEEPSEEK_API_KEY`。
+  - 修复一个隐藏配置雷：profile `model.base_url` 为 `https://api.deepseek.com`（缺 `/v1`），微信 agent 门禁（`weixin-owner-agent-profile.ts`，端点精确比对）判 `unavailable`——修为官方地址 `https://api.deepseek.com/v1`（备份 `config/profile.yaml.bak-20261126-061319`）。附带发现产品层不一致：`PROVIDER_BASE_URL[deepseek]` 默认值同样缺 `/v1`，即不写 base_url 也过不了门禁，记为后续产品修复项。
+  - 按 #230 设计，模型配置变化使旧规则模式绑定自动失效（绑定 revision 折入 consent），店主在工作台完成「授权 Kiwi 模型对话」知情同意；服务端只读核对：`owner_binding.revision` 已折入当前 consent（`c67c19f1…`，与按 `["weixin-owner-agent-v1",provider,api,model,endpoint,keyRef]` 独立计算一致）、conversation 轮换、无错误日志。
+  - 微信消息实测 Pi 回信：**待店主发消息后核对 `owner_agent_turn` 记录与回信内容**（规则模板时代 `owner_agent_turn` 恒为空表）。
+- 未做：`verify-registry` job needs/`always()` 缺陷未修；冻源 PR 前置校验未做；微信模型对话「默认开启」产品化未排期；`PROVIDER_BASE_URL` 与门禁端点不一致未修；WorkBuddy/商城平台资产未随本次更新。
 
 ## 2026-11-25 kiwi 0.12.36 / kiwi-catalog 0.5.30 发布与生产部署（海纳百川恢复）
 
