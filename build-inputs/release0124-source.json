@@ -3658,11 +3658,11 @@
     },
     {
       "path": "portfolio-products.json",
-      "sha256": "sha256:2269225f2caca685e6b7a523d5bf67c29d79d001c576f93b8049d5464bd6aa41"
+      "sha256": "sha256:cc3ca34dd2127c6c32774ddd15518367e8b26e89a0e1039a644b3536fadf9cf0"
     },
     {
       "path": "portfolio.lock.json",
-      "sha256": "sha256:8953c7df113945cb7e60b51b5b637f4359b4337e50fee50e6eb36859f1555edb"
+      "sha256": "sha256:ffb6647d1f441251eacb5feee8dd139b62dab9ff89bc57b54acfa802544372b6"
     },
     {
       "path": "scripts/a236-packed-merchant-assembly.mjs",

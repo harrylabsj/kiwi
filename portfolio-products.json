@@ -49,7 +49,7 @@
     {
       "id": "kiwi-catalog",
       "name": "Kiwi Catalog",
-      "version": "0.5.29",
+      "version": "0.5.30",
       "version_source": {
         "type": "toml",
         "scope": "consumer",
@@ -71,7 +71,7 @@
     {
       "id": "shopping-cli",
       "name": "Shopping CLI",
-      "version": "3.2.11",
+      "version": "3.2.12",
       "version_source": {
         "type": "toml",
         "scope": "consumer",
