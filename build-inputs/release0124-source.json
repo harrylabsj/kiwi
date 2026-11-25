@@ -670,7 +670,7 @@
     },
     {
       "path": "docs/merchant-workbench-standalone.md",
-      "sha256": "sha256:66244c5c732d66655b3bb4890ab415bd1f110075067544ca333121cb143ff4ad"
+      "sha256": "sha256:3468a2a51ff4e1b475f29d4ae43ecb41dd1da8e3f290443d4167b15d8920dbb1"
     },
     {
       "path": "docs/open-inquiry-transport-contract.md",
@@ -4842,7 +4842,7 @@
     },
     {
       "path": "src/cli.ts",
-      "sha256": "sha256:e1fb1977ac76c4256fa152f4010d38394ef3e46be301e979b283e4b559bcd7d8"
+      "sha256": "sha256:4b29984a84fd9bf72d8a18392326332ac9553af6be75c40250a4c2b9034fd8ea"
     },
     {
       "path": "src/cloud/access/access-mode.ts",
@@ -4898,7 +4898,7 @@
     },
     {
       "path": "src/cloud/bootstrap.ts",
-      "sha256": "sha256:79e957c0a89fcab72e862c92861f43a02deae8144d345f236c45d73391b74f5d"
+      "sha256": "sha256:a16179d02c578677a75ab68f9e18d562cdf0b868029c34d6aff9bb0a59ac952f"
     },
     {
       "path": "src/cloud/catalog-client.ts",
@@ -4918,7 +4918,7 @@
     },
     {
       "path": "src/cloud/http-router.ts",
-      "sha256": "sha256:6ec2e064b70d0848e7639b09e48e7ac7904fc06b1e365dd427dfcbbfdca840ee"
+      "sha256": "sha256:f4b6cbe657a2a8dabb8f5906495d8bb45649fb8acca215ff37c102d01b0f96f8"
     },
     {
       "path": "src/cloud/listing-publisher.ts",
@@ -5394,7 +5394,7 @@
     },
     {
       "path": "src/http/merchant-management/api.ts",
-      "sha256": "sha256:496a91d7d701bee4ec6a00857481e4d2fd323077dbfa657adb85baf8ecb98f53"
+      "sha256": "sha256:dc52da81dc18bf5b26e95f995db24abb27087765b6a2047aceac5c23a02dfb34"
     },
     {
       "path": "src/http/merchant-management/draft-store.ts",
@@ -5410,7 +5410,7 @@
     },
     {
       "path": "src/http/merchant-management/page.ts",
-      "sha256": "sha256:d978fb1e660ef129de06cdb9d84f549562b46348cec973220fc815ff9d387cb2"
+      "sha256": "sha256:6f73d700e9b77c10e971c01aa8f2f152467e87c7302411babcc4cabf5a28d5e7"
     },
     {
       "path": "src/http/merchant-management/problem-client.ts",
@@ -6314,19 +6314,19 @@
     },
     {
       "path": "src/merchant/weixin-channel.ts",
-      "sha256": "sha256:82e27a711c84771eb57ae2a14db55aab63e5fe1b49eaf5a9ec5152d018eda859"
+      "sha256": "sha256:1f31940990499cc35926db2f387793d69f87b087f8289f1f7ac2b78fc389c09f"
     },
     {
       "path": "src/merchant/weixin-owner-agent-profile.ts",
-      "sha256": "sha256:5f1f2e41e4c1430f6281056a647f79f9fcbad77916c1649d6f093ff3340207e2"
+      "sha256": "sha256:4fb121afd12ad699fe33a5a300514a32873c4d1b05cf1511a5a8a29f4c2f3711"
     },
     {
       "path": "src/merchant/weixin-owner-agent.ts",
-      "sha256": "sha256:cc281ea700ec82bc6d525ca586b65b962ade31de993e2395b170affc63785779"
+      "sha256": "sha256:462bdc630cb07e7f04feceba60e7082e046621014fd48e0bddcbb7a69220f79f"
     },
     {
       "path": "src/merchant/weixin-owner-conversation.ts",
-      "sha256": "sha256:d76d9e25b262f0d20556a6460c58d50a910d97647d8ab22789c5f7eaa1c648f5"
+      "sha256": "sha256:259e8ffe39378b90e4ebc76ae9d1b7c5f00d01154b9adbef03cc3e6902d401ff"
     },
     {
       "path": "src/merchant/weixin-owner-digest.ts",
@@ -6337,12 +6337,20 @@
       "sha256": "sha256:8d986b7042a6e1459e7cbd10db248c116350d85f43b622f051887d9b5b1c7c30"
     },
     {
+      "path": "src/merchant/weixin-owner-model-cli.ts",
+      "sha256": "sha256:868b82e7808e1dd2c0fe94b3c3265e85d9d6aebcaa0acbd3319baca35deff075"
+    },
+    {
+      "path": "src/merchant/weixin-owner-model-config.ts",
+      "sha256": "sha256:f83fa57a50d2d576ac2caa8a51e5edbe35212ee21320b4ce3b75cbff2a22f632"
+    },
+    {
       "path": "src/merchant/weixin-owner-source.ts",
       "sha256": "sha256:e880b305491cab25248d14d564da101c8e93d4c984665475ac6333d87225b7cc"
     },
     {
       "path": "src/merchant/workbench-server.ts",
-      "sha256": "sha256:eb532c6679c30404f1520debe618101479b957e1a04ca5bb66388809ac62848a"
+      "sha256": "sha256:d2931fab258cea0b25c2ae65bbb1898bd9648a6ab14aeef45b59d9bce0f747bb"
     },
     {
       "path": "src/merchant/workbench-service.ts",
@@ -6510,7 +6518,7 @@
     },
     {
       "path": "src/product-cli.ts",
-      "sha256": "sha256:0820f9fcbb16e5e77a877f5039fa273eeba6b94394824a5eb705c87a0409eed8"
+      "sha256": "sha256:3c7979bb346a2adb7e9f39d9c9f289fe2191b031482b4a368f39c413d0994d31"
     },
     {
       "path": "src/product-compat.ts",
@@ -7368,7 +7376,7 @@
     },
     {
       "path": "tests/cloud-bootstrap.test.ts",
-      "sha256": "sha256:066e4e9d1a2de66ecd53b9cd2aaa4595e09cf8efd6f69b45a2e7219b101fb82c"
+      "sha256": "sha256:799d3bd33268e0d53359f8b786a273f7e7b3457c51a5376a4b0395269f4e86a0"
     },
     {
       "path": "tests/cloud-card-discovery.test.ts",
@@ -8588,7 +8596,7 @@
     },
     {
       "path": "tests/merchant-workbench-server.test.ts",
-      "sha256": "sha256:ec6c1fa14c3566e66207ef9389d094583583a0bd33807cfd83ae5274a0ce22cd"
+      "sha256": "sha256:053388fadb1cfcf240a0274235ffc0b194a62cd58f8f3b65c1c364b61f7b5863"
     },
     {
       "path": "tests/merchant-workbench-service.test.ts",
@@ -8596,7 +8604,7 @@
     },
     {
       "path": "tests/merchant-workbench-weixin.test.ts",
-      "sha256": "sha256:d40c9202dd85a97b93c681ccea8b4fc971e83d41cc6c1f6ca77420d5bad9414b"
+      "sha256": "sha256:b7a7e5c04da10edb86f7a7d25044c3520c4c9cadf6869d434718321fa90871a9"
     },
     {
       "path": "tests/merchant-workbuddy-header.test.ts",
@@ -9076,7 +9084,11 @@
     },
     {
       "path": "tests/weixin-owner-conversation.test.ts",
-      "sha256": "sha256:38485d85e01b9f50016024cc8ca2a0b9a8e67c9905a1e22233a91c62f27e556c"
+      "sha256": "sha256:23703550a72abf47f71d6ee2557ad7df4aac2800570a590dfd1bb4719abef5df"
+    },
+    {
+      "path": "tests/weixin-owner-model-config.test.ts",
+      "sha256": "sha256:0869865049e235eaf3314ea529fdff5c5532747acfdff2572c52b8e70bc999ac"
     },
     {
       "path": "tests/weixin-qr.test.ts",
