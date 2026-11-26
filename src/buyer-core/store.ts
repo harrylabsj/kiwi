@@ -623,24 +623,24 @@ export class TaskApprovalStore {
   }
 
   /** Only a bound protocol recovery result may replace an unfinished original merchant slot. */
-  replaceRecoveredCandidate(taskId: string, candidate: {merchant_id:string;status:string;provenance?:Record<string,unknown>;terms?:unknown}): void {
+  replaceRecoveredCandidate(taskId: string, candidate: {merchant_id:string;status:string;provenance?:Record<string,unknown>;terms?:unknown;failure?:Record<string,unknown>}): void {
     const slots=this.listCandidates(taskId).filter(c=>c.merchant_id===candidate.merchant_id);
     if(slots.length>1)throw new McpError("idempotency_conflict","ambiguous original merchant candidate slots");
     const current=slots[0];
     if(current===undefined){
-      this.addCandidate(taskId,{candidate_id:`cand-${contentDigest([taskId,candidate.merchant_id])}`,merchant_id:candidate.merchant_id,status:candidate.status,provenance:candidate.provenance,terms:candidate.terms,retryable:false});return;
+      this.addCandidate(taskId,{candidate_id:`cand-${contentDigest([taskId,candidate.merchant_id])}`,merchant_id:candidate.merchant_id,status:candidate.status,provenance:candidate.provenance,terms:candidate.terms,failure:candidate.failure,retryable:false});return;
     }
     if(current.status==="succeeded")return;
     const provenance=candidate.terms===undefined?candidate.provenance:{...candidate.provenance,_quote_terms:candidate.terms};
-    const result=this.db.prepare("UPDATE mcp_candidates SET status=?,provenance_json=?,failure_json=NULL,retryable=0 WHERE candidate_id=? AND task_id=? AND merchant_id=? AND status=?")
-      .run(candidate.status,JSON.stringify(provenance??{}),String(current.candidate_id),taskId,candidate.merchant_id,String(current.status));
+    const result=this.db.prepare("UPDATE mcp_candidates SET status=?,provenance_json=?,failure_json=?,retryable=0 WHERE candidate_id=? AND task_id=? AND merchant_id=? AND status=?")
+      .run(candidate.status,JSON.stringify(provenance??{}),candidate.failure === undefined ? null : JSON.stringify(candidate.failure),String(current.candidate_id),taskId,candidate.merchant_id,String(current.status));
     if(result.changes!==1)throw new McpError("idempotency_conflict","candidate changed during protocol recovery");
   }
 
   listCandidates(taskId: string): Array<Record<string, unknown>> {
     const rows = this.db
       .prepare(
-        "SELECT candidate_id, merchant_id, status, provenance_json, failure_json, expires_at, retryable FROM mcp_candidates WHERE task_id = ?",
+        "SELECT candidate_id, merchant_id, status, provenance_json, failure_json, expires_at, retryable FROM mcp_candidates WHERE task_id = ? ORDER BY rowid",
       )
       .all(taskId) as Array<Record<string, unknown>>;
     return rows.map((r) => {

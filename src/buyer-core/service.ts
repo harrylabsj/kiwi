@@ -244,7 +244,7 @@ import type { ProtocolTaskContext } from "./protocol-recovery.js";
 
 export interface QuoteFetcher {
   requestQuotes(intent: Record<string, unknown>, merchants: MerchantRecord[], context?: ProtocolTaskContext): Promise<QuoteCandidateInput[]>;
-  recoverQuotes?: (context: ProtocolTaskContext) => Promise<QuoteCandidateInput[]>;
+  recoverQuotes?: (context: ProtocolTaskContext, observe?: ReadonlySet<string>) => Promise<QuoteCandidateInput[]>;
   /**
    * 买家识别与交易回执 · K2：按本店授权查询上次已发报价（可选能力；
    * 生产实现 A2AQuoteFetcher）。返回 unavailable 时调用方退回澄清。
@@ -508,6 +508,12 @@ function rejectQuoteForOtherSku(
       detail: "merchant quote SKU does not match explicit intent SKU",
     },
   };
+}
+
+function quoteCandidateUnconfirmed(candidate: Record<string, unknown>): boolean {
+  const failure = candidate.failure as { classification?: unknown; retryable?: unknown } | undefined;
+  return candidate.status === "pending" || (candidate.status === "failed" &&
+    failure?.classification === "protocol_error" && failure.retryable === false);
 }
 
 /** 候选当前可接受的条款摘要：优先商家最新 agreed terms，其次旧候选快照。 */
@@ -1289,16 +1295,21 @@ export class KiwiBuyerService {
     }
 
     // Recovery reads existing protocol evidence and never dispatches a new RFQ.
+    return { task: await this.recoverQuoteTask(persisted, merchantIds), created: false };
+  }
+
+  private async recoverQuoteTask(persisted: StoredTask, merchantIds: string[], observe?: ReadonlySet<string>): Promise<Record<string, unknown>> {
+    const task = this.decodeTask(persisted);
     if (this.quoteFetcher?.recoverQuotes === undefined ||
         !["in_progress", "partial_success"].includes(persisted.status) ||
-        this.store.hasAgreementForTask(persisted.task_id)) {
-      return { task, created: false };
-    }
+        this.store.hasAgreementForTask(persisted.task_id)) return task;
     const originalCandidates = this.store.listCandidates(persisted.task_id);
-    const recovered = await this.quoteFetcher.recoverQuotes(this.protocolContext(persisted, merchantIds));
-    const explicitSku = originalIntent === undefined ? explicitIntentItemSku(input.intent) : originalSku;
-    const results = recovered.map((result) => rejectQuoteForOtherSku(result, explicitSku));
-    if (results.length === 0) return { task, created: false };
+    const recovered = await this.quoteFetcher.recoverQuotes(this.protocolContext(persisted, merchantIds), observe);
+    const intent = task.intent;
+    const sku = intent !== null && typeof intent === "object" ? explicitIntentItemSku(intent as Record<string, unknown>) : undefined;
+    const results = recovered.filter((result) => observe === undefined || observe.has(result.merchant_id))
+      .map((result) => rejectQuoteForOtherSku(result, sku));
+    if (results.length === 0) return task;
 
     return this.store.transaction(() => {
       if (this.store.hasAgreementForTask(persisted.task_id) ||
@@ -1307,15 +1318,19 @@ export class KiwiBuyerService {
       }
       for (const result of results) this.store.replaceRecoveredCandidate(persisted.task_id, result);
       const candidates = this.northboundCandidates(persisted.task_id);
-      const status = candidates.length > 0 && candidates.every((candidate) => candidate.status === "succeeded")
-        ? "succeeded" : "partial_success";
+      const success = candidates.filter((candidate) => candidate.status === "succeeded").length;
+      const complete = merchantIds.every((merchantId) => candidates.some((candidate) => candidate.merchant_id === merchantId));
+      const status = complete && success === candidates.length && success > 0 ? "succeeded" :
+        success > 0 ? "partial_success" :
+        !complete || candidates.some(quoteCandidateUnconfirmed) ? "in_progress" : "failed";
       const updated = this.store.updateTask(persisted.task_id, {
         status,
+        resumable: status !== "failed",
         payload: JSON.stringify({ ...task, status, updated_at: this.now(), candidates }),
       }, persisted);
       const decoded = this.decodeTask(updated);
       assertNorthboundContractValid("persistent-task", decoded, "recovered quotes result");
-      return { task: decoded, created: false };
+      return decoded;
     });
   }
 
@@ -1376,6 +1391,27 @@ export class KiwiBuyerService {
       throw new McpError("task_expired", `task ${taskId} expired at ${task.expires_at}`);
     }
     return { task: this.decodeTask(task) };
+  }
+
+  /** 状态查询可核对原询价的未确认结果；绝不创建任务或发送 RFQ。 */
+  async refreshTask(taskId: string): Promise<{ task: Record<string, unknown> }> {
+    const snapshot = this.getTask(taskId);
+    const persisted = this.taskFor(taskId);
+    if (persisted?.task_kind !== "request_quotes" || !["in_progress", "partial_success"].includes(persisted.status) ||
+        this.quoteFetcher?.recoverQuotes === undefined) return snapshot;
+    const candidates = this.store.listCandidates(taskId);
+    // The original request inserts one candidate per merchant, in request order, transactionally.
+    // An early crash can leave no slots; same-key replay still has the exact original selection.
+    const merchantIds = candidates.map((candidate) => String(candidate.merchant_id));
+    if (new Set(merchantIds).size !== merchantIds.length) return snapshot;
+    const unresolved = new Set(candidates.filter(quoteCandidateUnconfirmed).map((candidate) => String(candidate.merchant_id)));
+    if (unresolved.size === 0) return snapshot;
+    try {
+      await this.recoverQuoteTask(persisted, merchantIds, unresolved);
+    } catch {
+      // Unavailable/untrusted evidence or a racing update does not erase the last known snapshot.
+    }
+    return this.getTask(taskId);
   }
 
   /** 只查询当前买家已有任务、候选和商家返回的回执；不接受 URL 或新商家。 */

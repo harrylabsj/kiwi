@@ -10,6 +10,7 @@ import {
   type NegotiationEnvelope,
 } from "../negotiation/domain/envelope.js";
 import { A2A_TASK_STATES, type A2ATask } from "../a2a/client/types.js";
+import type { RfqReceiptRef } from "../a2a/rfq-receipt.js";
 import { extractKnpEnvelope } from "./a2a-knp.js";
 import { readMerchantReplyExtensions, restoreMerchantReplyExtensions, type MerchantReplyExtensions } from "./a2a-merchant-extensions.js";
 import { McpError } from "./errors.js";
@@ -69,6 +70,7 @@ export interface ProtocolExchange {
   build: (negotiationId: string) => NegotiationEnvelope;
   send: (wire: NegotiationEnvelope) => Promise<A2ATask>;
   get: (taskId: string) => Promise<A2ATask>;
+  lookupRfq?: (ref: RfqReceiptRef) => Promise<A2ATask>;
   timeoutMs: number;
   pollIntervalMs: number;
 }
@@ -247,7 +249,7 @@ export class BuyerProtocolRecovery {
       )
         throw new ProtocolOperationConflict();
       try {
-        return await this.resume(prior, input.get, input.timeoutMs, input.pollIntervalMs);
+        return await this.resume(prior, input.get, input.timeoutMs, input.pollIntervalMs, undefined, input.lookupRfq);
       } catch (error) {
         if (error instanceof BuyerReplyRejected || error instanceof MerchantDeclined) throw error;
         throw new ProtocolOperationUnknown();
@@ -300,12 +302,7 @@ export class BuyerProtocolRecovery {
     }
     try {
       const task = await input.send(wire);
-      this.validateTask(task);
-      this.ledger.append({
-        ...this.content(wire, "system", { ...op, kind: "receipt" }),
-        remote_task_id: task.id,
-        ...(typeof task.contextId === "string" ? { remote_context_id: task.contextId } : {}),
-      });
+      this.recordReceipt(sent, wire, task);
       return await this.resume(sent, input.get, input.timeoutMs, input.pollIntervalMs, task);
     } catch (error) {
       if (
@@ -405,26 +402,66 @@ export class BuyerProtocolRecovery {
       if (existing?.remote_context_id !== context) throw new ProtocolOperationUnknown();
     }
   }
+  private readReceipt(sent: LedgerEvent): LedgerEvent | undefined {
+    const receipts = this.events(sent.negotiation_id).filter((e) =>
+      e.event_kind === "system" && metadata(e)?.operation_id === metadata(sent)?.operation_id &&
+      (metadata(e) as unknown as { kind: string })?.kind === "receipt");
+    if (receipts.length > 1 || (receipts.length === 1 && !receipts[0]?.remote_task_id)) {
+      throw new ProtocolOperationUnknown();
+    }
+    return receipts[0];
+  }
+
+  private recordReceipt(sent: LedgerEvent, wire: NegotiationEnvelope, task: A2ATask): LedgerEvent {
+    this.validateTask(task);
+    const prior = this.readReceipt(sent);
+    if (prior !== undefined) {
+      this.validateTask(task, prior, prior.remote_context_id);
+      return prior;
+    }
+    try {
+      this.ledger.append({
+        ...this.content(wire, "system", { ...metadata(sent), kind: "receipt" }),
+        remote_task_id: task.id,
+        ...(typeof task.contextId === "string" ? { remote_context_id: task.contextId } : {}),
+      });
+    } catch (error) {
+      if ((error as { code?: string }).code !== "ledger_duplicate_content") throw error;
+    }
+    const receipt = this.readReceipt(sent);
+    if (receipt === undefined) throw new ProtocolOperationUnknown();
+    this.validateTask(task, receipt, receipt.remote_context_id);
+    return receipt;
+  }
+
   private async resume(
     sent: LedgerEvent,
     get: (id: string) => Promise<A2ATask>,
     timeout: number,
     interval: number,
     initial?: A2ATask,
+    lookupRfq?: (ref: RfqReceiptRef) => Promise<A2ATask>,
   ): Promise<ProtocolReply> {
     const op = metadata(sent)!;
     const wire = validateWireEnvelope(sent.wire_payload);
-    const events = this.events(sent.negotiation_id);
-    const complete = events.find(
+    const complete = this.events(sent.negotiation_id).find(
       (e) => e.event_kind === "message_received" && metadata(e)?.operation_id === op.operation_id,
     );
-    const receipt = events.find(
-      (e) =>
-        e.event_kind === "system" &&
-        metadata(e)?.operation_id === op.operation_id &&
-        (metadata(e) as unknown as { kind: string })?.kind === "receipt",
-    );
-    if (!receipt?.remote_task_id) throw new ProtocolOperationUnknown();
+    let task = initial;
+    let receipt = this.readReceipt(sent);
+    if (receipt === undefined) {
+      if (complete || lookupRfq === undefined || op.stage !== "rfq" || wire.action !== "rfq") {
+        throw new ProtocolOperationUnknown();
+      }
+      task = await lookupRfq({ message_id: wire.message_id, negotiation_id: wire.negotiation_id, wire_digest: wire.digest });
+      this.validateTask(task);
+      if (task.status.state !== "working" && task.status.state !== "completed") throw new ProtocolOperationUnknown();
+      // Before adopting a new remote task ID, also validate any reply against the original RFQ.
+      const reply = extractKnpEnvelope(task, wire);
+      if (reply && reply.message_id !== wire.message_id) assertBuyerReplySemantics(reply, wire, this.now);
+      receipt = this.recordReceipt(sent, wire, task);
+    }
+    const remoteTaskId = receipt.remote_task_id!;
     const finish = (reply: NegotiationEnvelope, event: LedgerEvent): ProtocolReply => {
       try {
         this.idempotency.commit({
@@ -446,9 +483,8 @@ export class BuyerProtocolRecovery {
       return finish(this.completedReply(complete, receipt, wire), complete);
     }
     const deadline = Date.now() + timeout;
-    let task = initial;
     for (;;) {
-      if (!task) task = await get(receipt.remote_task_id);
+      if (!task) task = await get(remoteTaskId);
       const bound = this.events(sent.negotiation_id).find(
         (e) =>
           e.event_kind === "system" &&
@@ -526,17 +562,25 @@ export class BuyerProtocolRecovery {
     get: (endpoint: string, id: string) => Promise<A2ATask>,
     timeout: number,
     interval: number,
-  ): Promise<ProtocolReply[]> {
+    options: {
+      lookupRfq?: (endpoint: string, ref: RfqReceiptRef) => Promise<A2ATask>;
+      merchantIds?: ReadonlySet<string>;
+    } = {},
+  ): Promise<(ProtocolReply | { merchantId: string; decline: MerchantDeclined })[]> {
     this.requireContext(context);
-    const results: ProtocolReply[] = [];
-    for (const id of this.ledger.listNegotiations())
+    const results: (ProtocolReply | { merchantId: string; decline: MerchantDeclined })[] = [];
+    const negotiationIds = options.merchantIds === undefined ? this.ledger.listNegotiations() :
+      [...options.merchantIds].map((merchantId) =>
+        `neg_${contentDigest([this.slot(context, "rfq", 0, merchantId), merchantId])}`);
+    for (const id of negotiationIds)
       for (const sent of this.events(id)) {
         const op = metadata(sent);
         if (
           sent.event_kind !== "message_sent" ||
           !op ||
           op.stage !== "rfq" ||
-          op.task_id !== context.taskId
+          op.task_id !== context.taskId ||
+          (options.merchantIds !== undefined && !options.merchantIds.has(op.merchant_id))
         )
           continue;
         if (
@@ -546,16 +590,15 @@ export class BuyerProtocolRecovery {
         )
           throw new ProtocolOperationConflict();
         try {
+          const lookup = options.lookupRfq;
           results.push(
-            await this.resume(sent, (taskId) => get(op.endpoint, taskId), timeout, interval),
+            await this.resume(sent, (taskId) => get(op.endpoint, taskId), timeout, interval, undefined,
+              lookup === undefined ? undefined : (ref) => lookup(op.endpoint, ref)),
           );
         } catch (error) {
-          if (
-            error instanceof ProtocolOperationConflict ||
-            error instanceof BuyerReplyRejected ||
-            error instanceof MerchantDeclined
-          )
-            throw error; /* unknown remains in ledger; no resend */
+          if (error instanceof MerchantDeclined) results.push({ merchantId: op.merchant_id, decline: error });
+          else if (error instanceof ProtocolOperationConflict || error instanceof BuyerReplyRejected) throw error;
+          // Missing/unreadable evidence leaves the original operation unknown; never resend.
         }
       }
     return results;

@@ -30,6 +30,7 @@ import { quoteQuantity } from "./quote-quantity.js";
 import { asRecord, REQUIREMENTS_KEY } from "./procurement/requirements.js";
 import { newNegotiationId } from "../negotiation/domain/identifiers.js";
 import type { A2AOutboundSigner } from "../a2a/client/types.js";
+import { awaitWithAbort } from "../net/request-budget.js";
 import {
   A2AEndpointResolutionError,
   buildA2AClient,
@@ -527,7 +528,9 @@ export class A2AQuoteFetcher implements QuoteFetcher {
         binding: { intent, merchant, payload: envelope.payload, delegation },
         build: (id) => buildRfqEnvelope({ negotiationId:id, sku, quantity, deliveryBefore:constraintsDeadline(intent), requestedTerms, ...(publicMessage !== undefined ? { publicMessage } : {}), now:()=>context.createdAt }),
         send: (wire) => client.sendMessage(envelopeToMessage(wire, delegationMetadata)),
-        get: (id) => client.getTask(id), timeoutMs:this.timeoutMs, pollIntervalMs:this.pollIntervalMs,
+        get: (id) => client.getTask(id),
+        lookupRfq: (ref) => client.getRfqReceipt(ref),
+        timeoutMs: this.timeoutMs, pollIntervalMs: this.pollIntervalMs,
       });
       return this.project(exchange, requestedSku);
     } catch (error) {
@@ -565,17 +568,7 @@ export class A2AQuoteFetcher implements QuoteFetcher {
         };
       }
       // 商家明确拒绝（结构化 decline）：这是终态，不能归成"结果未知/可重试"。
-      if (error instanceof MerchantDeclined) {
-        return {
-          merchant_id: merchantId,
-          status: "failed",
-          failure: {
-            classification: "rejected",
-            retryable: false,
-            detail: redactShareParameter(`merchant_declined:${error.reasonCode}${error.merchantMessage ? `：${error.merchantMessage}` : ""}`),
-          },
-        };
-      }
+      if (error instanceof MerchantDeclined) return this.declinedCandidate(merchantId, error);
       return {
         merchant_id: merchantId,
         status: "failed",
@@ -636,34 +629,50 @@ export class A2AQuoteFetcher implements QuoteFetcher {
       ...(agreedTerms!==undefined ? {latest_agreed_terms:agreedTerms,latest_terms_digest:contentDigest(agreedTerms)} : {}),
     }};
   }
-  async recoverQuotes(context:ProtocolTaskContext):Promise<QuoteCandidateInput[]> {
-    if(!this.recovery)throw new ProtocolOperationUnknown();
-    const results=await this.recovery.recover(context,async (endpoint,id)=>{
-      // 恢复路径只知道端点：用按 origin 的映射继续带码（B-04：不是只对首次请求有效）。
-      const resolved=this.merchantAccess===undefined?null:await this.merchantAccess.forEndpoint(endpoint);
-      if (resolved?.relayRequired===true) {
+  private declinedCandidate(merchantId: string, error: MerchantDeclined): QuoteCandidateInput {
+    return { merchant_id: merchantId, status: "failed", failure: {
+      classification: "rejected", retryable: false,
+      detail: redactShareParameter(`merchant_declined:${error.reasonCode}${error.merchantMessage ? `：${error.merchantMessage}` : ""}`),
+    } };
+  }
+
+  async recoverQuotes(context: ProtocolTaskContext, observe?: ReadonlySet<string>): Promise<QuoteCandidateInput[]> {
+    if (!this.recovery) throw new ProtocolOperationUnknown();
+    // Status reads get one shared deadline and at most one merchant observation per RFQ.
+    const signal = observe === undefined ? undefined : AbortSignal.timeout(Math.min(2_500, this.timeoutMs));
+    const clientFor = async (endpoint: string) => {
+      signal?.throwIfAborted();
+      // 先重查已保存端点的当前路由；不得绕过已撤回的目录中继。
+      const resolved = this.merchantAccess === undefined ? null :
+        await awaitWithAbort(this.merchantAccess.forEndpoint(endpoint), signal);
+      signal?.throwIfAborted();
+      if (resolved?.relayRequired === true) {
         throw new MerchantAccessUnavailable(
           "RELAY_REQUIRED",
           "share-code merchant must use the directory relay; legacy coded recovery is disabled",
         );
       }
-      // 显式 direct 标记等价于“无门禁传输”，走标准无码恢复；其余传输按 relayWired
-      // 做与首请求相同的终态检查，避免旧缓存把分享码带回恢复请求。
-      const access=resolved?.direct===true?null:resolved;
-      if (access!==null && this.relayWired && access.openInquiry===undefined) {
+      const access = resolved?.direct === true ? null : resolved;
+      if (access !== null && this.relayWired && access.openInquiry === undefined) {
         throw new MerchantAccessUnavailable(
           "RELAY_REQUIRED",
           "share-code merchant must use the directory relay; legacy coded recovery is disabled",
         );
       }
-      return buildA2AClient(endpoint,{
-        bearerToken:access===null?this.bearerToken:undefined,allowPrivateRanges:this.allowPrivateRanges,skipDnsCheck:this.skipDnsCheck,timeoutMs:this.timeoutMs,
-        ...(access?.openInquiry?{signer:access.openInquiry.signer}:this.signer!==undefined?{signer:this.signer}:{}),
-        ...(access!==null&&!access.openInquiry?{sendUrl:access.sendUrlFor(endpoint)}:{}),
-        ...(access?.openInquiry?{fetchImpl:access.openInquiry.fetchImpl}:this.rpcFetchImpl!==undefined?{fetchImpl:this.rpcFetchImpl}:{}),
-      }).getTask(id);
-    },this.timeoutMs,this.pollIntervalMs);
-    return results.map(result=>this.project(result));
+      return buildA2AClient(endpoint, {
+        bearerToken: access === null ? this.bearerToken : undefined,
+        allowPrivateRanges: this.allowPrivateRanges, skipDnsCheck: this.skipDnsCheck, timeoutMs: this.timeoutMs,
+        ...(access?.openInquiry ? { signer: access.openInquiry.signer } : this.signer !== undefined ? { signer: this.signer } : {}),
+        ...(access !== null && !access.openInquiry ? { sendUrl: access.sendUrlFor(endpoint) } : {}),
+        ...(access?.openInquiry ? { fetchImpl: access.openInquiry.fetchImpl } : this.rpcFetchImpl !== undefined ? { fetchImpl: this.rpcFetchImpl } : {}),
+      });
+    };
+    const results = await this.recovery.recover(context,
+      async (endpoint, id) => (await clientFor(endpoint)).getTask(id, { signal }),
+      observe === undefined ? this.timeoutMs : 0, this.pollIntervalMs,
+      { merchantIds: observe, lookupRfq: async (endpoint, ref) => (await clientFor(endpoint)).getRfqReceipt(ref, { signal }) });
+    return results.map((result) => "decline" in result
+      ? this.declinedCandidate(result.merchantId, result.decline) : this.project(result));
   }
 
   /**

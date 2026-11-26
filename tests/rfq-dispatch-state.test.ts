@@ -442,12 +442,13 @@ it("a thrown send remains unknown and same-key recovery reads state without rese
     task: Record<string, unknown>;
     created: boolean;
   };
+  expect(recoveryReads).toBe(1);
   const readback = JSON.parse((await mcp.call(4, "kiwi_get_task", { task_id: first.task.task_id })).content[0]!.text) as {
     task: Record<string, unknown>;
   };
   expect(second.task.task_id).toBe(first.task.task_id);
   expect(second.created).toBe(false);
-  expect(recoveryReads).toBe(1);
+  expect(recoveryReads).toBe(2); // same key and status read both reconcile without dispatch
   expect(sendAttempts).toBe(1);
   expect(readback.task.status).toBe("in_progress");
   expect((readback.task.candidates as Array<Record<string, unknown>>)[0]!.retryable).toBe(false);

@@ -35,6 +35,7 @@ import { A2AClientError, invalidResponse } from "./error.js";
 import { buildJsonRpcRequest, parseJsonRpcResponse, tryParseJsonRpcError } from "./jsonrpc.js";
 import { parseTaskResult } from "./parse.js";
 import type { A2AOutboundSigner, A2AMessage, A2AClientOptions, A2ATask } from "./types.js";
+import { parseRfqReceiptRef, RFQ_RECEIPT_METADATA, type RfqReceiptRef } from "../rfq-receipt.js";
 import { serializeUcpAgentHeader, UCP_AGENT_HEADER } from "../ucp-agent.js";
 import { assertResolvableTargetUrl, assertSafeTargetUrl } from "./url-policy.js";
 import { isRedirectResponse, readJsonBody, SafeHttpError } from "../../net/safe-http.js";
@@ -130,6 +131,20 @@ export class A2AClient {
   async getTask(taskId: string, options?: ReadRequestOptions): Promise<A2ATask> {
     const wireMethod = this.version === "1.0" ? METHOD_GET_TASK : "tasks/get";
     return this.rpc(wireMethod, { id: taskId }, options);
+  }
+
+  /** 按原 RFQ 引用读取商家已保存的结果；旧商家不返回绑定证明，不能当成回执。 */
+  async getRfqReceipt(ref: RfqReceiptRef, options?: ReadRequestOptions): Promise<A2ATask> {
+    if (this.signer === undefined) throw invalidResponse("RFQ receipt lookup requires a buyer signer");
+    const wireMethod = this.version === "1.0" ? METHOD_GET_TASK : "tasks/get";
+    const task = await this.rpc(wireMethod, {
+      id: ref.message_id,
+      metadata: { [RFQ_RECEIPT_METADATA]: ref },
+    }, options);
+    const binding = parseRfqReceiptRef(task.metadata?.[RFQ_RECEIPT_METADATA]);
+    if (binding?.message_id !== ref.message_id || binding.negotiation_id !== ref.negotiation_id ||
+        binding.wire_digest !== ref.wire_digest) throw invalidResponse("RFQ receipt is not bound to the original request");
+    return task;
   }
 
   private async rpc(method: string, params: unknown, options?: ReadRequestOptions): Promise<A2ATask> {
