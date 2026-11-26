@@ -31,9 +31,19 @@ export interface OwnerInquiry {
   quantity?: number;
 }
 
+/** 区间统计的最小事实：仅计数，不携带询价 ID、SKU、身份或正文。 */
+export interface OwnerRangeStats {
+  /** 区间内最后买家入站落进范围的询价链路数。 */
+  inquiries: number;
+  /** 其中仍待商家回复的链路数。 */
+  pending: number;
+}
+
 export interface OwnerInquirySource {
   list(): readonly OwnerInquiry[];
   get(id: string): OwnerInquiry | undefined;
+  /** 按起始时间的咨询统计；未装配则区间/今日统计明确不可用，不得编造。 */
+  rangeStats?(since: number): OwnerRangeStats;
 }
 
 export type FollowupStyle = "concise" | "warm";
@@ -127,6 +137,17 @@ function checkAgentTarget(intent: OwnerAgentDecision, text: string): OwnerIntent
   return intent;
 }
 
+const CN_DAYS: Record<string, number> = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+
+/** 区间天数只取店主明确给出的 1–30，超出范围不猜、回落为不支持。 */
+function parseOwnerDays(text: string): number | undefined {
+  if (/^[0-9]{1,2}$/.test(text)) {
+    const n = Number(text);
+    return n >= 1 && n <= 30 ? n : undefined;
+  }
+  return CN_DAYS[text];
+}
+
 /** 只把边界明确的自然语言意图映射到业务能力，不执行正式操作。 */
 function classify(text: string): OwnerIntent {
   // 「先别发」是草稿限制，不应被误读为拒绝起草或发送授权。
@@ -150,6 +171,11 @@ function classify(text: string): OwnerIntent {
   }
   if (/^(?:你好|您好|在吗|嗨|hi|hello|你是谁|你是做什么的|你能做什么|你可以帮我做什么)[。！？!?\s]*$/i.test(request)) return { kind: "greeting" };
   if (/库存|订单|询价详情|客户资料|联系方式|成交|付款状态|退款状态/.test(request)) return { kind: "private_lookup" };
+  const daysText = /(?:最近|过去|近)\s*([0-9]{1,2}|[一二两三四五六七八九十])\s*天/.exec(request)?.[1];
+  const days = daysText !== undefined ? parseOwnerDays(daysText) : undefined;
+  if (days !== undefined && /咨询|询价|客户|买家|商机/.test(request)) return { kind: "range", days };
+  if (/(?:这周|本周|这一周|上个?周|上个?星期)/.test(request) && /咨询|询价|客户|买家|商机/.test(request)) return { kind: "range", days: 7 };
+  if (/今天|今日/.test(request) && /咨询|询价|买家|客户|新增/.test(request)) return { kind: "today" };
   return { kind: "unsupported" };
 }
 
@@ -488,7 +514,9 @@ export class WeixinOwnerConversation {
       } else if (intent.kind === "reply") {
         reply = intent.text;
       } else if (intent.kind === "today") {
-        reply = "我还没有可核实今天新增咨询的数据来源，不能判断今天有没有新买家来咨询。我可以帮你查当前待跟进的询价，但那不等于今天新增。";
+        reply = this.countReply("今天", this.startOfDay(this.now()));
+      } else if (intent.kind === "range") {
+        reply = this.countReply(`过去 ${intent.days} 天`, this.now() - intent.days * DAY_MS);
       } else if (intent.kind === "clarify_target") {
         reply = "我还不能确定你指哪一笔。请告诉我清单中的序号；如果有多份清单，也请带上清单号。";
       } else if (intent.kind === "greeting") {
@@ -590,8 +618,27 @@ export class WeixinOwnerConversation {
     });
   }
 
-  private async inventoryPreview(sku: string): Promise<string> {
-    if (this.options.inventory === undefined) return "此实例未接入精确库存来源，不能判断库存。";
+  /** 计数口径的统计回复：区间词与起点由本机决定，回复只含计数，不含 ID/SKU/身份。 */
+  private countReply(label: string, since: number): string {
+    const stats = this.options.source.rangeStats?.(since);
+    if (stats === undefined) return `此实例未接入按时间的咨询统计来源，不能给出${label}的数字。`;
+    const scope = "仅覆盖已接入的 A2A 询价链路，不含其他渠道；明细请在工作台核对。";
+    return stats.inquiries === 0
+      ? `${label}没有买家咨询进入询价链路。${scope}`
+      : `${label}有 ${stats.inquiries} 笔买家咨询进入询价链路，其中 ${stats.pending} 笔仍待回复。${scope}`;
+  }
+
+  /** 「今天」起点按对话时区的本地零点；用墙钟回推偏移，不假定宿主时区。 */
+  private startOfDay(nowMs: number): number {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: this.options.timeZone ?? "Asia/Shanghai",
+      year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit",
+      hour12: false }).formatToParts(nowMs);
+    const take = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+    const offset = Date.UTC(take("year"), take("month") - 1, take("day"), take("hour"), take("minute"), take("second")) - nowMs;
+    return Date.UTC(take("year"), take("month") - 1, take("day")) - offset;
+  }
+
+  private async inventoryPreview(sku: string): Promise<string> {    if (this.options.inventory === undefined) return "此实例未接入精确库存来源，不能判断库存。";
     try {
       const result = await this.options.inventory(sku);
       const listing = result.listingPaused === null ? "销售状态未核实" : result.listingPaused ? "已暂停销售" : "未暂停销售";
