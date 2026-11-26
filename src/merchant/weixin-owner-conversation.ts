@@ -58,7 +58,7 @@ export interface WeixinOwnerConversationOptions {
   /** 显式开启仅配对店主的私聊回信。缺省仍为工作台预览。 */
   replyToOwner?: boolean;
   /** An independently opted-in model for owner private chat; never used in preview mode. */
-  agent?: WeixinOwnerAgent;
+  agent?: WeixinOwnerAgent | undefined;
   /** 尚有效的单实例管理员凭据代次；口令轮换、主体替换后必须改变。 */
   ownerRevision: (principalId: string) => string | undefined;
   source: OwnerInquirySource;
@@ -327,6 +327,18 @@ export class WeixinOwnerConversation {
         throw new OwnerConversationError("forbidden", "当前店主没有活动的微信对话。");
       }
       this.removeModelConsent(binding, this.revisionFor(principal)!);
+    });
+  }
+
+  modelChanged(): void {
+    this.atomic(() => {
+      const binding = this.binding();
+      if (binding === undefined) return;
+      if (this.agentCall?.conversation === binding.conversation) this.agentCall.abort.abort();
+      const revision = this.revisionFor(binding.principal);
+      if (revision !== undefined && (binding.revision.startsWith(`${revision}:`) || this.consentedAgent(binding) !== undefined)) {
+        this.removeModelConsent(binding, revision);
+      }
     });
   }
 

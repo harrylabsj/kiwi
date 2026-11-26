@@ -53,15 +53,21 @@ kiwi merchant workbench serve \
 
 ## 配置店主对话模型
 
+以店主身份打开「微信通道 → 店主微信对话模型」，选择服务商，填写模型 ID 和本商家申请的 API Key。点击「测试并保存」时，Kiwi 通过 Pi 验证文本回复与询价工具调用，两个测试通过后才保存和立即应用。测试使用合成消息，可能计入模型用量。
+
+密钥加密保存在本商家实例的持久数据目录。再次编辑同一服务商时，密钥框留空可继续使用，填写新密钥可更换。更换服务商时输入对应的新密钥。迁移实例时需要一起迁移模型配置和该实例的模型加密密钥文件。
+
+配置只作用于店主微信对话。保存后，在同页绑定微信并点击「授权 Kiwi 模型对话」。切换模型或更换密钥会撤回原模型授权，已授权的基础回信仍可使用。运行环境显式设置 `KIWI_WEIXIN_OWNER_REPLIES=0` 或 `KIWI_WEIXIN_OWNER_AGENT=0` 时，工作台无法覆盖停用设置。
+
 ```bash
 kiwi merchant model --profile ./merchant.yaml --data-dir /path/to/merchant-state
 kiwi merchant model status --profile ./merchant.yaml --data-dir /path/to/merchant-state
 kiwi merchant model test --profile ./merchant.yaml --data-dir /path/to/merchant-state
 ```
 
-`--data-dir` 须与商家运行时一致。交互向导提供 OpenAI、DeepSeek 的官方端点；只输入模型 ID 与服务环境中的密钥变量名，不在向导输入密钥。向导在确认后发送两条合成测试请求，通过后才保存；`status` 不联网，`test` 会显式发起合成请求，可能计费。配置仅用于店主私聊，不改变询报价模型或规则。
+`--data-dir` 须与商家运行时一致。交互向导与工作台使用同一组服务商。命令行交互向导选择服务环境中的密钥变量名。向导在确认后发送两条合成测试请求，通过后才保存。`status` 读取本地配置，`test` 发起合成测试。
 
-重启时加载持久配置。微信回信和模型调用仍分别由 `KIWI_WEIXIN_OWNER_REPLIES=1` 与 `KIWI_WEIXIN_OWNER_AGENT=1` 开启；启用后还须由店主授权把私聊与有限上下文交给所选模型服务。模型配置有效不代表真实请求一定可用。
+通过命令行保存后需重启运行时，并分别设置 `KIWI_WEIXIN_OWNER_REPLIES=1` 与 `KIWI_WEIXIN_OWNER_AGENT=1`。工作台保存的配置在重启后自动加载。
 
 ## 安全
 

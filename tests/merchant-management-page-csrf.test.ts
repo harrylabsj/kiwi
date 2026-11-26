@@ -154,6 +154,43 @@ describe("merchant workbench view lifecycle", () => {
     expect(elements["alipay-form"]).toHaveProperty("onsubmit", expect.any(Function));
   });
 
+  it("loads and saves the selected owner model from the Weixin view", async () => {
+    const elements: Record<string, Element> = {};
+    const calls: unknown[] = [];
+    const providers = [{ id: "dashscope", label: "通义千问" }];
+    const context = createPageContext(elements, async (path, init) => {
+      switch (path) {
+        case "/merchant/api/session":
+          return Response.json({ role: "owner", csrf_token: "fixture-csrf" });
+        case "/merchant/api/v1/runtime/status":
+          return Response.json({ capabilities: {} });
+        case "/merchant/api/v1/channels/weixin":
+          return Response.json({ configured: false, status: "disconnected" });
+        case "/merchant/api/v1/channels/weixin/model":
+          if (init?.body) {
+            calls.push({ body: init.body, csrf: init.headers?.["x-csrf-token"] });
+            return Response.json({ editable: true, active: true, credential_saved: true, provider: "dashscope", model: "qwen-plus", providers });
+          }
+          return Response.json({ editable: true, active: false, providers });
+        default:
+          throw new Error(`unexpected request ${path}`);
+      }
+    });
+    await loadPage(context, true);
+    runInContext('current = "weixin"; refresh();', context);
+    await eventually(() => elements["weixin-model-form-area"]?.innerHTML.includes("测试并保存") === true);
+    expect(elements["weixin-model-form-area"]!.innerHTML).toContain("通义千问");
+    runInContext(`$("weixin-model-provider").value = "dashscope";
+      $("weixin-model-provider").onchange();
+      $("weixin-model-id").value = "qwen-plus";
+      $("weixin-model-credential").value = "merchant-fixture-secret";
+      $("weixin-model-form").onsubmit({ preventDefault: function () {} });`, context);
+    await eventually(() => elements["weixin-model-result"]?.textContent.includes("配置已保存") === true);
+    expect(calls).toEqual([{ csrf: "fixture-csrf", body: JSON.stringify({ provider: "dashscope", model: "qwen-plus", credential: "merchant-fixture-secret" }) }]);
+    expect(elements["weixin-model-credential"]?.value).toBe("");
+    expect(elements["weixin-model-form-area"]?.innerHTML).not.toContain("merchant-fixture-secret");
+  });
+
   it("ignores a stale view after a 401 and can render again when requests succeed", async () => {
     const elements: Record<string, Element> = {};
     let finishOldStatus: (response: Response) => void = () => { throw new Error("no pending status request"); };
