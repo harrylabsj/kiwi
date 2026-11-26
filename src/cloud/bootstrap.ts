@@ -213,7 +213,7 @@ export function projectFileProductRecord(
     currency: record.currency,
     price: record.price,
     price_unit: record.unit,
-    ...(record.trade_platform === undefined ? {} : { trade_platform: record.trade_platform }),
+    ...(record.trade_platform === undefined ? {} : { trade_platform: record.trade_platform, trade_platform_label: platformRules.find((rule) => rule.id === record.trade_platform)?.label ?? record.trade_platform }),
     ...(record.platform_product_id === undefined ? {} : { platform_product_id: record.platform_product_id }),
     ...(record.trade_platform === undefined ? {} : {
       platform_product_url: buildMarketplaceProductLink(
@@ -222,6 +222,11 @@ export function projectFileProductRecord(
         platformRules,
       ),
     }),
+    category: record.category ?? null,
+    stock: record.stock ?? null,
+    supply_note: record.supply_note ?? null,
+    public_details: record.public_details ?? {},
+    test: record.test ?? false,
     min_order_qty: record.moq ?? null,
     valid_until: record.valid_until,
     updated_at: record.updated_at,
@@ -1325,6 +1330,7 @@ export async function bootstrapCloudRuntime(
       } : {}),
       ...(productsFilePath !== undefined && config.catalogUrl !== undefined && !config.sample
         ? { fileListingPublication: createFileListingPublicationService({
+            discoveryOnly: true,
             dataDir: config.dataDir, productsFile: productsFilePath, profile,
             catalogUrl: config.catalogUrl, publicOrigin: config.publicOrigin,
             platformRules: tradePlatformRulesCache.current(),

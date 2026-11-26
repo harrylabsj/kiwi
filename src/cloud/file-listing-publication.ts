@@ -75,6 +75,9 @@ export class FileListingPublicationError extends Error {
 }
 
 export interface FileListingPublicationOptions {
+  /** Workbench discovery metadata: only name/category/platform/status/listed are business fields. */
+  discoveryOnly?: boolean;
+
   /** Runtime dataDir（enrollment/私钥所在；草稿与回执同存此目录下，0700/0600）。 */
   dataDir: string;
   /**
@@ -358,13 +361,13 @@ export function createFileListingPublicationService(options: FileListingPublicat
       if (record === undefined) {
         throw new FileListingPublicationError("SKU_UNKNOWN", `SKU 不在文件商品表中：${sku}`);
       }
-      if (record.status !== "active") {
+      if (!options.discoveryOnly && record.status !== "active") {
         throw new FileListingPublicationError("PRODUCT_PAUSED", `SKU 处于暂停状态，不可发布：${sku}`);
       }
-      if (Date.parse(record.valid_until) <= nowMs) {
+      if (!options.discoveryOnly && Date.parse(record.valid_until) <= nowMs) {
         throw new FileListingPublicationError("PRODUCT_EXPIRED", `SKU 有效期已过，不可发布：${sku}`);
       }
-      const productLink = buildMarketplaceProductLink(
+      const productLink = options.discoveryOnly ? undefined : buildMarketplaceProductLink(
         record.trade_platform,
         record.platform_product_id,
         currentRules(),
@@ -375,15 +378,17 @@ export function createFileListingPublicationService(options: FileListingPublicat
           listing_type: "product",
           source_product_ref: sku,
           title: record.title,
-          ...(record.public_details === undefined ? {} : { summary: overview ?? "", attributes }),
+          ...(options.discoveryOnly
+            ? { attributes: { trade_platform: record.trade_platform ?? "", status: record.status, listed: true } }
+            : record.public_details === undefined ? {} : { summary: overview ?? "", attributes }),
           category,
-          source_revision: record.public_details_revision === undefined ? `file:${record.updated_at}`
+          source_revision: options.discoveryOnly || record.public_details_revision === undefined ? `file:${record.updated_at}`
             : `file:${record.updated_at}:qa:${record.public_details_revision}`,
           ...(productLink === undefined ? {} : {
             handoff_destination_types: ["external_checkout_url"],
             handoff_destination_ref: productLink,
           }),
-          fresh_until: computeFreshUntil(nowMs, record.valid_until, freshDays),
+          ...(options.discoveryOnly ? {} : { fresh_until: computeFreshUntil(nowMs, record.valid_until, freshDays) }),
         },
         binding.agentId,
         binding.merchantId,
@@ -446,6 +451,15 @@ export function createFileListingPublicationService(options: FileListingPublicat
     }
     // 逐项核对：payload 摘要、身份归属、幂等键派生链都必须与冻结绑定自洽。
     for (const item of draft.items) {
+      if (options.discoveryOnly) {
+        const keys = new Set(["listing_type", "owner_agent_id", "merchant_id", "source_product_ref", "source_revision", "title", "category", "attributes"]);
+        const attributes = item.listing["attributes"] as Record<string, unknown> | undefined;
+        if (Object.keys(item.listing).some((key) => !keys.has(key)) || !attributes ||
+            Object.keys(attributes).some((key) => !["trade_platform", "status", "listed"].includes(key)) ||
+            typeof attributes["trade_platform"] !== "string" || !["active", "paused"].includes(String(attributes["status"])) || attributes["listed"] !== true) {
+          throw new FileListingPublicationError("DRAFT_CORRUPTED", "网关发布范围已调整；请重新预览商品名称、类目、交易平台、状态与上架信息");
+        }
+      }
       if (signedListingDigest(item.listing) !== item.listing_digest ||
           item.listing["owner_agent_id"] !== draft.binding.agent_id ||
           item.listing["merchant_id"] !== draft.binding.merchant_id ||

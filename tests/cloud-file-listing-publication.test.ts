@@ -310,6 +310,30 @@ function newService(
 const SEL = (sku: string, category = "widgets") => ({ sku, category });
 
 describe("file listing publication core", () => {
+  it("工作台仅发送五项发现字段；库存、价格、介绍、规格、交易链接保留本机", async () => {
+    const fixture = createFixture();
+    const table = productTable(OWNER);
+    Object.assign(table.products[0]!, { stock: 17, trade_platform: "jd", platform_product_id: "100057430155", public_details: { overview: "本机介绍", capacity: "450 mL" } });
+    writeFileSync(fixture.productsFile, JSON.stringify(table));
+    const bytes = readFileSync(fixture.productsFile, "utf8");
+    const service = newService(fixture, { discoveryOnly: true });
+    const preview = await service.preview([SEL("SKU-A", "工具")]);
+    const listing = preview.items[0]!.listing;
+    expect(Object.keys(listing).sort()).toEqual(["attributes", "category", "listing_type", "merchant_id", "owner_agent_id", "source_product_ref", "source_revision", "title"]);
+    expect(listing).toMatchObject({ title: "Widget Alpha", category: "工具", attributes: { trade_platform: "jd", status: "active", listed: true } });
+    expect(Object.keys(listing.attributes as object).sort()).toEqual(["listed", "status", "trade_platform"]);
+    expect(JSON.stringify(listing)).not.toMatch(/stock|price|450 mL|本机介绍|100057430155|item.jd.com|supply_note/);
+    await expect(service.commit(preview.draft_id, preview.digest)).resolves.toMatchObject({ status: "succeeded" });
+    expect(fixture.stub.publishCalls[0]!.body).toEqual(listing);
+    expect(readFileSync(fixture.productsFile,"utf8")).toBe(bytes);
+  });
+  it("工作台拒绝继续发送旧版包含额外字段的发布草稿，必须重新预览", async () => {
+    const fixture = createFixture();
+    const legacy = await newService(fixture).preview([SEL("SKU-A")]);
+    await expect(newService(fixture, { discoveryOnly: true }).commit(legacy.draft_id, legacy.digest)).rejects.toMatchObject({ code: "DRAFT_CORRUPTED" });
+    expect(fixture.stub.publishCalls).toHaveLength(0);
+  });
+
   it("previews and publishes only the merchant's reviewed QA fields for the selected SKU", async () => {
     const fixture = createFixture();
     const table = productTable(OWNER);

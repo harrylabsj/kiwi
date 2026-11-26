@@ -878,6 +878,7 @@ function productTable(overrides: Record<string, unknown> = {}): Record<string, u
       {
         sku: "SKU-1",
         title: "测试商品",
+        stock: 20,
         currency: "CNY",
         unit: "piece",
         price: 99.5,
@@ -1025,7 +1026,7 @@ describe("merchant management api — 商品导入（BD-03）", () => {
     const parsed = await fetch(`${base}/merchant/api/v1/products/import-parse?format=csv`, {
       method: "POST",
       headers: { cookie: auth.cookie, origin: ORIGIN, "content-type": "text/csv", "x-csrf-token": auth.csrf },
-      body: "sku,title,currency,unit,price,valid_until\nSKU-QA,更新商品,CNY,个,88,2027-12-31",
+      body: "sku,title,currency,unit,price,valid_until,stock\nSKU-QA,更新商品,CNY,个,88,2027-12-31,20",
     });
     expect(parsed.status).toBe(200);
     const { table: fromCsv } = await parsed.json() as { table: unknown };
@@ -1296,8 +1297,8 @@ describe("merchant management page — 同源工作台壳（BD-03）", () => {
 });
 
 describe("Workbench /merchant/api/v1 — WP12 表格导入（CSV/xlsx 解析与模板）", () => {
-  const TEMPLATE_HEADER = "sku,title,currency,unit,price,valid_until";
-  const TEMPLATE_ROW = "T-1,测试商品,CNY,个,9.9,2027-12-31";
+  const TEMPLATE_HEADER = "sku,title,currency,unit,price,valid_until,stock";
+  const TEMPLATE_ROW = "T-1,测试商品,CNY,个,9.9,2027-12-31,20";
   const TEMPLATE_CSV = `${TEMPLATE_HEADER}\n${TEMPLATE_ROW}`;
 
   it("GET /products/import-template 未登录 401；登录后返回 CSV 模板（含双写表头与示例行）", async () => {
