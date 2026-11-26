@@ -6322,11 +6322,11 @@
     },
     {
       "path": "src/merchant/weixin-owner-agent.ts",
-      "sha256": "sha256:038fc0f436433e00dbf25c8864a9ba46e6d46bba152e0c98ef49495ca53f6d6a"
+      "sha256": "sha256:175a357e7454ee2853fa02f86e8df3dc0140dadebd52ccc28b985d8861d6a3e2"
     },
     {
       "path": "src/merchant/weixin-owner-conversation.ts",
-      "sha256": "sha256:d69c2059c20107c7667ba2b7cd1e82a2b39f6216b6a4398889f162b419889249"
+      "sha256": "sha256:c77ff4e6db3f8125eb890d822d5f436281fccee341b8e548a10bb287eb92ea4a"
     },
     {
       "path": "src/merchant/weixin-owner-digest.ts",
@@ -9084,7 +9084,7 @@
     },
     {
       "path": "tests/weixin-owner-conversation.test.ts",
-      "sha256": "sha256:19bd9edc4c0b99ca7756c489dad3ccabdbc0cac92734595565d38d3d9c8561c2"
+      "sha256": "sha256:e0bf09c19d82c8d567525fd8d7b3b2dfd90d63e53d7b5f2a9496128678ab0b45"
     },
     {
       "path": "tests/weixin-owner-model-config.test.ts",
