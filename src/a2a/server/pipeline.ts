@@ -36,7 +36,8 @@
 import { uuidv7 } from "../../negotiation/domain/identifiers.js";
 import { contentDigest } from "../../negotiation/jcs.js";
 import { NegotiationValidationError } from "../../negotiation/domain/common.js";
-import { validateEnvelope, verifyEnvelopeDigest } from "../../negotiation/domain/envelope.js";
+import { validateEnvelope, validateWireEnvelope, verifyEnvelopeDigest } from "../../negotiation/domain/envelope.js";
+import type { RfqReceiptRef } from "../rfq-receipt.js";
 import type { NegotiationEnvelope } from "../../negotiation/domain/envelope.js";
 import { IdempotencyConflictError, idempotencyKey } from "../../negotiation/idempotency/index.js";
 import type { IdempotencyRecord, IdempotencyStore } from "../../negotiation/idempotency/index.js";
@@ -56,6 +57,7 @@ import { A2AServerThrottle, domainFromUcpProfile, type ThrottleRequest } from ".
 import { hasBuyerFollowupQuery } from "../../merchant-core/support/buyer-followups.js";
 import { isQuoteHistoryRecall, parseHistoryQueryExtension } from "../../merchant-core/customer-memory/quote-history.js";
 import type { TrustLevel } from "../../trust/identity/trust-policy.js";
+import { isAnonymousIdentity } from "./identity.js";
 import { isKnownTaskState, newArtifactId, newTaskId, TaskRegistry, type TaskOwner } from "./task-registry.js";
 import type {
   InboundNegotiationContext,
@@ -709,6 +711,32 @@ export class InboundPipeline {
     const inMemory = this.tasks.get(taskId, owner);
     if (inMemory !== null) return inMemory;
     return this.tasks.resolveFromLedger(this.ledger, taskId, owner);
+  }
+
+  /** 只读、已验签的原 RFQ 回执。仅凭 in-flight、缺失或不吻合的证据不返回任务。 */
+  getRfqReceipt(ref: RfqReceiptRef, owner: TaskOwner): A2ATask | null {
+    if (!owner.identityVerified || isAnonymousIdentity(owner.identity)) return null;
+    const record = this.idempotency.get(owner.identity, ref.message_id);
+    if (record === null || record.sender_identity !== owner.identity || record.message_id !== ref.message_id ||
+        record.negotiation_id !== ref.negotiation_id || record.outcome.kind !== "ok") return null;
+    const task = (record.outcome.result as { task?: unknown } | undefined)?.task;
+    if (!isTaskLike(task)) return null;
+    const event = this.ledger.verifiedEvents(ref.negotiation_id).find((e) =>
+      e.event_kind === "message_received" && e.message_id === ref.message_id &&
+      e.negotiation_id === ref.negotiation_id && e.wire_digest === ref.wire_digest &&
+      e.identity.actor === "buyer" && e.identity.sender_identity === owner.identity &&
+      e.identity.counterparty_identity === owner.identity && e.remote_task_id === task.id &&
+      e.remote_context_id === task.contextId && e.event_id === record.ledger_event_id &&
+      e.event_digest === record.ledger_event_digest);
+    if (event === undefined) return null;
+    const payload = this.ledger.resolvePayload(event);
+    if (payload.outcome.kind !== "ok" || payload.outcome.result?.request_digest !== record.digest ||
+        payload.outcome.result?.task_state !== task.status.state) return null;
+    const wire = validateWireEnvelope(payload.wire_payload);
+    if (wire.action !== "rfq" || wire.actor !== "buyer" || wire.message_id !== ref.message_id ||
+        wire.negotiation_id !== ref.negotiation_id || wire.digest !== ref.wire_digest) return null;
+    // 若内存仍有当前状态（如已取消），不将旧结果冒充当前结果。
+    return this.tasks.get(task.id, owner) ?? task;
   }
 
   /** ListTasks（issue 10 / TCK CORE-LIST）：返回**本人**任务列表。 */

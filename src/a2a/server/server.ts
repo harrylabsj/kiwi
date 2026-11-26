@@ -36,6 +36,7 @@ import { isAnonymousIdentity } from "./identity.js";
 import http from "node:http";
 import { isIP } from "node:net";
 import { isOpenInquiryIdentity } from "../open-inquiry-identity.js";
+import { parseRfqReceiptRef, RFQ_RECEIPT_METADATA } from "../rfq-receipt.js";
 import { isJsonRpcRequest } from "../client/index.js";
 import { NegotiationValidationError } from "../../negotiation/domain/common.js";
 import { parseUcpAgentHeader, UCP_AGENT_HEADER } from "../ucp-agent.js";
@@ -868,10 +869,22 @@ export class A2AServer {
     if (anonymousCaller(caller)) {
       throw protocolError("authentication_required", "task access requires an authenticated identity");
     }
-    const task = await this.pipeline.getTask(id, {
-      identity: caller.identity,
-      identityVerified: caller.identityVerified === true,
-    });
+    const owner = { identity: caller.identity, identityVerified: caller.identityVerified === true };
+    const metadata = p.metadata as Record<string, unknown> | undefined;
+    const lookup = metadata?.[RFQ_RECEIPT_METADATA];
+    let task;
+    if (lookup !== undefined) {
+      const ref = parseRfqReceiptRef(lookup);
+      if (ref === undefined || ref.message_id !== id) {
+        throw new ServerProtocolError({ code: JSONRPC_CODES.INVALID_PARAMS, message: "invalid RFQ receipt reference" });
+      }
+      task = this.pipeline.getRfqReceipt(ref, owner);
+      if (task !== null) {
+        return { task: { ...task, metadata: { ...task.metadata, [RFQ_RECEIPT_METADATA]: ref } } };
+      }
+    } else {
+      task = await this.pipeline.getTask(id, owner);
+    }
     if (task === null) {
       throw new ServerProtocolError({
         code: JSONRPC_CODES.TASK_NOT_FOUND,

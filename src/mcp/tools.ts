@@ -230,8 +230,8 @@ export function buildKiwiTools(service: KiwiBuyerService, profile: BuyerToolProf
       name: "kiwi_get_task",
       description:
         tr(
-          "Read task status, quotes, partial failures, pending approvals, and expiry info. Unified status/resume read surface; replaces keeping offer/pending state in plugin memory.",
-          "读取任务状态、报价、部分失败、待审批与过期信息。统一 status/resume 读取面；替代把 offer/pending 状态放在插件内存。",
+          "Read task status, quotes, partial failures, pending approvals, and expiry info. Checks unconfirmed quotes by their original references without resending an RFQ.",
+          "读取任务状态、报价、部分失败、待审批与过期信息。原询价结果未确认时尝试查回执，不重复发送询价。",
         ),
       inputSchema: {
         $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -242,7 +242,7 @@ export function buildKiwiTools(service: KiwiBuyerService, profile: BuyerToolProf
       },
       async handle(args) {
         try {
-          return ok(JSON.stringify(service.getTask(requiredString(args, "task_id"))));
+          return ok(JSON.stringify(await service.refreshTask(requiredString(args, "task_id"))));
         } catch (error) {
           return err(error);
         }
