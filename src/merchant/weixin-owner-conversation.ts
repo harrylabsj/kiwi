@@ -486,7 +486,7 @@ export class WeixinOwnerConversation {
     const text = turn.text ?? "";
     const agent = previewOnly ? undefined : this.consentedAgent(binding);
     const inventorySku = previewOnly ? ownerInventorySku(text) : undefined;
-    let reply = "我可以帮你查待跟进询价、接着聊刚才的清单，或拟一份跟进草稿。你想先看什么？";
+    let reply = "这超出了我目前能核实的范围，没有执行任何查询。我可以帮你查当前待跟进的询价、按区间统计咨询（比如「过去 7 天」）、接着聊刚才的清单，或拟一份跟进草稿。";
     let list: ListSnapshot | undefined;
     let ruleProposal: ReturnType<typeof ownerWeekdayDigest>;
     let draft: { item: OwnerInquiry; body: string; index: number } | undefined;
