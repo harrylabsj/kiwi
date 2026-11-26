@@ -26,8 +26,20 @@ describe("WeChat owner Pi decider (offline only)", () => {
     expect(stream.mock.calls[0]?.[2]).toMatchObject({ maxTokens: 600, timeoutMs: 25_000, maxRetries: 0, cacheRetention: "none" });
   });
 
-  it("refuses writes, arbitrary recipients, out-of-range ordinals, and multiple actions in one response", async () => {
-    const arrays = [
+  it("accepts a bounded range stats action and rejects missing, guessed, or out-of-range days", async () => {
+    const { streamFn, handle } = createScriptedFakeStreamFn([
+      fauxAssistantMessage([fauxToolCall(ACTION, { action: "range", days: 7 })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall(ACTION, { action: "range" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall(ACTION, { action: "range", days: 0 })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall(ACTION, { action: "range", days: 31 })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall(ACTION, { action: "range", days: 7, ordinal: 1 })], { stopReason: "toolUse" }),
+    ]);
+    const decide = createWeixinOwnerDecider({ model: handle.getModel(), streamFn, getApiKey: () => "fixture" });
+    await expect(decide(turn, signal)).resolves.toEqual({ kind: "range", days: 7 });
+    for (let i = 0; i < 4; i++) await expect(decide(turn, signal)).rejects.toMatchObject({ code: "invalid_response" });
+  });
+
+  it("refuses writes, arbitrary recipients, out-of-range ordinals, and multiple actions in one response", async () => {    const arrays = [
       [fauxToolCall("publish_quote", {})],
       [fauxToolCall(ACTION, { action: "list", to: "other" })],
       [fauxToolCall(ACTION, { action: "draft", ordinal: 4 })],

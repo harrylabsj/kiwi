@@ -9,7 +9,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LedgerStore } from "../src/negotiation/ledger/index.js";
-import { rankOwnerInquiries, WeixinOwnerConversation, type OwnerInquiry, type WeixinOwnerConversationOptions } from "../src/merchant/weixin-owner-conversation.js";
+import { rankOwnerInquiries, WeixinOwnerConversation, type OwnerInquiry, type OwnerRangeStats, type WeixinOwnerConversationOptions } from "../src/merchant/weixin-owner-conversation.js";
 import { createOwnerA2aInquirySource, createWorkbenchWeixinOwnerOptions } from "../src/merchant/weixin-owner-source.js";
 import type { InboundMessage } from "../src/weixin/types.js";
 import type { OwnerAgentDecision, WeixinOwnerAgent } from "../src/merchant/weixin-owner-agent.js";
@@ -35,10 +35,12 @@ describe("persisted owner follow-up", () => {
   let now: number;
 
   function open(compose?: WeixinOwnerConversationOptions["compose"], inventory?: WeixinOwnerConversationOptions["inventory"],
-    delivery: Pick<WeixinOwnerConversationOptions, "replyToOwner" | "agent"> = {}) {
+    delivery: Pick<WeixinOwnerConversationOptions, "replyToOwner" | "agent"> = {},
+    rangeStats?: ReturnType<typeof vi.fn<(since: number) => OwnerRangeStats>>) {
     const result = new WeixinOwnerConversation(dbPath, {
       enabled: true, workbenchOrigin: "https://merchant.example", ownerRevision: (p) => p === principal ? revision : undefined,
-      source: { list: () => data, get: (id) => data.find((item) => item.id === id) },
+      source: { list: () => data, get: (id) => data.find((item) => item.id === id),
+        ...(rangeStats === undefined ? {} : { rangeStats }) },
       ...(compose === undefined ? {} : { compose }),
       ...(inventory === undefined ? {} : { inventory }),
       ...delivery,
@@ -151,6 +153,30 @@ describe("persisted owner follow-up", () => {
       expect(() => admit(a, message("1", question), message("2", "fixture batch failure"))).toThrow();
       expect(second.prepare("SELECT COUNT(*) count FROM owner_turn").get()).toMatchObject({ count: 0 });
     } finally { second.close(); }
+  });
+
+  it("answers range and today stats with local counts only and stays honest when the source is not provisioned", async () => {
+    const stats = vi.fn((_since: number): OwnerRangeStats => ({ inquiries: 3, pending: 2 }));
+    const c = open(undefined, undefined, { replyToOwner: true }, stats);
+    c.bind(principal, scope);
+    const send = vi.fn(async (_input: { text: string; context: string }) => {});
+    admit(c, message("1", "请查询一下过去 7 天有没有来咨询的客户"), message("2", "今天有买家来咨询吗？"));
+    await c.process(scope, signal, send);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls[0]?.[0].text).toBe(
+      "过去 7 天有 3 笔买家咨询进入询价链路，其中 2 笔仍待回复。仅覆盖已接入的 A2A 询价链路，不含其他渠道；明细请在工作台核对。");
+    expect(stats.mock.calls[0]?.[0]).toBe(now - 7 * 24 * 60 * 60_000);
+    // 「今天」按对话时区本地零点：2026-11-23 09:00Z = 北京时间 17:00，零点回推为 2026-11-22T16:00Z。
+    expect(send.mock.calls[1]?.[0].text).toBe(
+      "今天有 3 笔买家咨询进入询价链路，其中 2 笔仍待回复。仅覆盖已接入的 A2A 询价链路，不含其他渠道；明细请在工作台核对。");
+    expect(stats.mock.calls[1]?.[0]).toBe(Date.UTC(2026, 10, 22, 16));
+    c.close();
+    const d = open(undefined, undefined, { replyToOwner: true });
+    d.bind(principal, scope);
+    const send2 = vi.fn(async (_input: { text: string; context: string }) => {});
+    admit(d, message("range-noprovision", "过去 3 天有没有来咨询的客户"));
+    await d.process(scope, signal, send2);
+    expect(send2.mock.calls[0]?.[0].text).toContain("未接入按时间的咨询统计来源");
   });
 
   it("reports the pending count but lists only the top three and can repeat it in natural language", async () => {
@@ -405,6 +431,10 @@ describe("A2A inquiry source", () => {
       expect(JSON.stringify(data.get("pending"))).not.toContain("buyer free text");
       expect(data.get("foreign")).toBeUndefined();
       expect(data.get("answered")).toBeUndefined();
+      // 区间统计按链路计：已回复的计入 inquiries 但不算 pending；未绑定本商家的不计；区间外不计。
+      expect(data.rangeStats!(Date.now() - 7 * 24 * 60 * 60_000)).toEqual({ inquiries: 2, pending: 1 });
+      expect(data.rangeStats!(Date.now() + 60_000)).toEqual({ inquiries: 0, pending: 0 });
+      expect(JSON.stringify(data.rangeStats!(0))).not.toContain("buyer free text");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

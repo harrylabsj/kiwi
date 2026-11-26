@@ -26,7 +26,8 @@ export function createOwnerA2aInquirySource(dataDir: string, localAgent: string)
     }
     return new LedgerStore({ dir });
   };
-  function read(ledger: LedgerStore, id: string): OwnerInquiry | undefined {
+  /** 绑定校验 + 最后一条买家入站筛选（待回复判定与区间统计共用，不携带买家正文）。 */
+  function lastInbound(ledger: LedgerStore, id: string) {
     const events = ledger.verifiedEvents(id);
     const marker = events.find((event) => event.event_kind === "reconciliation" &&
       event.identity.actor === "merchant" && event.identity.sender_identity === localAgent &&
@@ -34,19 +35,26 @@ export function createOwnerA2aInquirySource(dataDir: string, localAgent: string)
       (event.outcome.result?.peer_binding as { type?: unknown; version?: unknown } | undefined)?.type === "merchant-peer-binding" &&
       (event.outcome.result?.peer_binding as { version?: unknown } | undefined)?.version === 1);
     if (marker === undefined) return undefined;
-    const phase = events.filter((event) => event.state_transition !== undefined).at(-1)?.state_transition?.to_phase;
-    if (phase !== undefined && (TERMINAL_PHASES as readonly string[]).includes(phase)) return undefined;
     const inbound = events.filter((event) => event.event_kind === "message_received").at(-1);
     if (inbound === undefined || inbound.identity.actor !== "buyer" || inbound.message_id === undefined ||
         inbound.identity.sender_identity !== marker.identity.counterparty_identity) return undefined;
-    // 出站可先于对应入站回执落账；显式 in_reply_to 与时间都必须核对。
-    if (events.some((event) => event.event_kind === "message_sent" &&
-      (event.in_reply_to === inbound.message_id || event.occurred_at >= inbound.occurred_at))) return undefined;
     const wire = ledger.resolvePayload(inbound).wire_payload as { action?: string; payload?: { items?: unknown; terms?: { items?: unknown } } } | undefined;
     if (wire?.action === undefined || !INBOUND_ACTIONS.has(wire.action)) return undefined;
     const receivedAt = Date.parse(inbound.recorded_at);
+    if (!Number.isFinite(receivedAt)) return undefined;
+    return { events, inbound, wire, receivedAt };
+  }
+  function read(ledger: LedgerStore, id: string): OwnerInquiry | undefined {
+    const hit = lastInbound(ledger, id);
+    if (hit === undefined) return undefined;
+    const { events, inbound, wire, receivedAt } = hit;
+    const phase = events.filter((event) => event.state_transition !== undefined).at(-1)?.state_transition?.to_phase;
+    if (phase !== undefined && (TERMINAL_PHASES as readonly string[]).includes(phase)) return undefined;
+    // 出站可先于对应入站回执落账；显式 in_reply_to 与时间都必须核对。
+    if (events.some((event) => event.event_kind === "message_sent" &&
+      (event.in_reply_to === inbound.message_id || event.occurred_at >= inbound.occurred_at))) return undefined;
     const version = events.at(-1)?.event_digest;
-    if (!Number.isFinite(receivedAt) || !version) return undefined;
+    if (!version) return undefined;
     const items = wire.payload?.items ?? wire.payload?.terms?.items;
     const first = Array.isArray(items) ? items[0] as { sku?: unknown; quantity?: { value?: unknown } } | undefined : undefined;
     const sku = first?.sku;
@@ -66,6 +74,20 @@ export function createOwnerA2aInquirySource(dataDir: string, localAgent: string)
       });
     },
     get(id) { return read(open(), id); },
+    rangeStats(since) {
+      if (!Number.isSafeInteger(since)) throw new OwnerConversationError("invalid_input", "统计区间起点无效。");
+      const ledger = open();
+      const ids = ledger.listNegotiations();
+      if (ids.length > MAX_LEDGER_CHAINS) throw new OwnerConversationError("unavailable", "试点询价视图超出查询容量。");
+      let inquiries = 0, pending = 0;
+      for (const id of ids) {
+        const hit = lastInbound(ledger, id);
+        if (hit === undefined || hit.receivedAt < since) continue;
+        inquiries += 1;
+        if (read(ledger, id) !== undefined) pending += 1;
+      }
+      return { inquiries, pending };
+    },
   };
 }
 
