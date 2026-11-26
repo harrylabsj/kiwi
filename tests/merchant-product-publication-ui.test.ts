@@ -73,6 +73,7 @@ const DRAFT = {
         handoff_destination_ref: "https://shop.example/p?a=1&b=2",
         fresh_until: "2027-01-31T00:00:00+00:00",
         summary: "手工拉坯", brand: "陶社", regions: ["华东"], tags: ["陶瓷", "手作"],
+        attributes: { capacity: "450 mL", features: "杯身 <手绘> & 双层", internal_note: "private-note" },
         commercial_hints: { moq: 2, lead_time_hint: "3-5天", supports_customization: true },
         handoff_destination_types: ["commerce"],
         owner_agent_id: "private-owner", merchant_id: "private-merchant",
@@ -82,6 +83,7 @@ const DRAFT = {
       sku: "SKU-2", category: "玻璃杯", status: "ready",
       listing: {
         title: "耐热玻璃杯", source_product_ref: "SKU-2", category: "玻璃杯",
+        summary: "", attributes: {},
         handoff_destination_ref: "javascript:alert(1)",
       },
     },
@@ -180,6 +182,8 @@ describe("商品发布体验（勾选 + 分类 → 表格预览/结果）", () =
     expect(html).toContain("预览公开内容");
     expect(html).toContain("按 SKU 追加/更新");
     expect(html).toContain("文件里没有的商品会保留");
+    expect(html).toContain('"public_details":');
+    expect(html).toContain("导入后还需预览并确认发布，公开目录才会更新");
     expect(html).not.toContain("整表替换");
     // 只有一个商品表：不再出现上下重复的列表。
     expect((html.match(/id="pub-rows"/g) ?? []).length).toBe(1);
@@ -231,6 +235,11 @@ describe("商品发布体验（勾选 + 分类 → 表格预览/结果）", () =
     expect(html).toContain("2030-12-31T00:00:00Z（草稿到期时间）");
     // 其余公开字段（白名单）可见。
     expect(html).toContain("摘要：手工拉坯");
+    expect(html).toContain("特点：杯身 &lt;手绘&gt; &amp; 双层");
+    expect(html).toContain("容量：450 mL");
+    expect(html).toContain("摘要：未提供");
+    expect(html).toContain("问答规格：未提供");
+    expect(html).not.toContain("private-note");
     expect(html).toContain("品牌：陶社");
     expect(html).toContain("起订量：2");
     expect(html).toContain("交期提示：3-5天");

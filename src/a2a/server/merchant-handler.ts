@@ -31,7 +31,10 @@ import { statSync as statReceiptLedger } from "node:fs";
 import { StreamGateError } from "../../merchant-core/customer-delivery/stream-gate.js";
 import { BoundedMap, BoundedSet } from "../../runtime/bounded-memory.js";
 import { checkedProductStock, checkedSourceEvidence, quoteFactsStillValid, recoverQuoteSourceSnapshot, type ProductSourceEvidence, type QuoteSourceSnapshot, type ResolvedProductFacts } from "./merchant-product-facts.js";
+import { nextQuantityRfq } from "./buyer-negotiation-next-step.js";
 import type { CommerceDataSource } from "../../commerce/data-source.js";
+import { answerProductQuestions, classifyProductQuestions, hasPublicProductTopic, type BuyerProductQa, type ProductAnswer } from "./buyer-product-qa.js";
+import { buyerFollowupQuery, hasBuyerFollowupQuery, type BuyerFollowups } from "../../merchant-core/support/buyer-followups.js";
 import { LedgerStore } from "../../negotiation/ledger/index.js";
 import {
   newAgreementId,
@@ -286,6 +289,9 @@ export interface MerchantHandlerOptions {
   offerPriceMinor?: number;
   /** 真实商品源（接 shopping-cli /products/{sku} 等开放商品层）；缺省用内置演示价。 */
   productSource?: MerchantProductSource;
+  buyerProductQa?: BuyerProductQa;
+  buyerFollowups?: BuyerFollowups;
+  buyerNegotiationAssist?: boolean;
   procurementFacts?: MerchantProcurementProvider;
   /** 商品源故障时是否回退内置演示价（fail-open）；缺省 false = fail-closed
    *  （decline temporarily_unavailable）。仅本地 demo/测试形态显式开启。 */
@@ -363,6 +369,9 @@ export interface MerchantHandlerOptions {
  * 约定一致，也符合 shopping-cli wire 值；测试桩 `{price: 99}` → 9900 minor 同此）。
  */
 export interface MerchantProductSource {
+  getPublicProductFacts?: NonNullable<CommerceDataSource["getPublicProductFacts"]>;
+  /** 仅为首轮商品问答定位候选；回答前仍须校验公开发布。 */
+  findBuyerQaSku?(question: string): string | undefined;
   /** P0a/M2：按买家文字搜索本店公开商品（只返回公开字段与候选，不报价）。 */
   searchProducts?(query: string): Promise<
     Array<{
@@ -396,6 +405,7 @@ export interface MerchantProductSource {
  */
 export function dataSourceProductSource(dataSource: CommerceDataSource): MerchantProductSource {
   return {
+    ...(dataSource.getPublicProductFacts === undefined ? {} : { getPublicProductFacts: dataSource.getPublicProductFacts.bind(dataSource) }),
     async getProduct(sku: string) {
       const fact = await dataSource.getProduct(sku);
       if (fact === undefined || fact.price_minor === undefined || fact.currency === undefined) {
@@ -624,9 +634,10 @@ function multiItemCountOf(envelope: { action: string; payload?: unknown }): numb
   return Array.isArray(items) ? items.length : 0;
 }
 
-const envelopeReply = (reply: ReturnType<typeof finalizeEnvelope>): NegotiationHandlerResult => ({
+const envelopeReply = (reply: ReturnType<typeof finalizeEnvelope>, data?: Record<string, unknown>): NegotiationHandlerResult => ({
   kind: "accepted",
   taskState: "working",
+  ...(data === undefined ? {} : { artifactParts: [{ kind: "data" as const, data }] }),
   message: {
     role: "agent",
     parts: [{ kind: "data", data: { knp_envelope: reply } }],
@@ -695,6 +706,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Merchant
       ? options.merchantPolicy()
       : options.merchantPolicy;
   const quoteSources = new Map<string, { offer_id: string; snapshot: QuoteSourceSnapshot }>();
+  const buyerQaSkus = new BoundedMap<string, string>();
   const conditionalByNegotiation = new Map<
     string,
     { conditional: Record<string, unknown>; quantity: number }
@@ -1421,6 +1433,8 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Merchant
       }
       if (event.event_kind !== "message_sent") continue;
       if (event.identity.sender_identity === sender && event.outcome.kind === "ok") {
+        const qaSku = event.outcome.result?.buyer_qa_sku;
+        if (typeof qaSku === "string") buyerQaSkus.set(negotiationId, qaSku);
         const saved = event.outcome.result?.merchant_quote_source as { offer_id?: unknown; snapshot?: unknown } | undefined;
         const snapshot = recoverQuoteSourceSnapshot(saved?.snapshot);
         if (snapshot !== undefined && typeof saved?.offer_id === "string") quoteSources.set(negotiationId, { offer_id: saved.offer_id, snapshot });
@@ -1559,6 +1573,31 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Merchant
       const envelope = ctx.envelope;
       const negotiationId = envelope.negotiation_id;
       const inReplyTo = envelope.message_id;
+      const inquirySubject = envelope.action === "inquiry" ? (envelope.payload as { subject?: unknown }).subject : undefined;
+      if (hasBuyerFollowupQuery(inquirySubject)) {
+        const query = buyerFollowupQuery(inquirySubject);
+        const missing = () => textReply("无法查询该确认回执。 / Follow-up unavailable.", "completed");
+        if (options.buyerFollowups === undefined || ctx.identityVerified !== true || query === undefined || query.negotiation_id === negotiationId) return missing();
+        try {
+          const receipt = options.buyerFollowups.readBuyer(ctx.senderIdentity, query.negotiation_id, query.case_ref);
+          if (receipt === undefined) return missing();
+          const messages = { pending: "等待商家处理", in_progress: "商家处理中", answered: "商家已确认", closed_without_answer: "已关闭，未获得答案", expired: "回执已到期" };
+          const text = `${messages[receipt.status]}${receipt.answer === undefined ? "" : `：${receipt.answer}`}`;
+          return { ...textReply(text, "completed"), artifactParts: [{ kind: "data", data: { type: "kiwi_buyer_followup", version: 1, ...receipt } }] } as NegotiationHandlerResult;
+        } catch { return missing(); }
+      }
+      const withFollowup = (answer: ProductAnswer, sku: string | undefined, language: "zh" | "en", quantity?: number): ProductAnswer => {
+        if (options.buyerFollowups === undefined || answer.status !== "needs_merchant") return answer;
+        try {
+          if (ctx.identityVerified === true && envelope.actor === "buyer" && sku !== undefined) {
+            const receipt = options.buyerFollowups.create({ buyer: ctx.senderIdentity, negotiation: negotiationId,
+              message: inReplyTo, sku, index: answer.index, topic: answer.topic, wireDigest: envelope.digest,
+              ...(quantity === undefined ? {} : { quantity }) });
+            if (receipt !== undefined) return { ...answer, followup: receipt, answer: `${answer.answer}${language === "zh" ? "；已创建跟进，回执 " : "; follow-up registered: "}${receipt.case_ref}` };
+          }
+        } catch { /* No unverified reference or database details leave this boundary. */ }
+        return { ...answer, answer: `${answer.answer}${language === "zh" ? "；未创建跟进" : "; no follow-up was created"}` };
+      };
       // 买家原文只用于理解问题；它是 untrusted 数据，不是指令。
       const buyerMessage = buyerMessageForAdvisor(ctx.message);
 
@@ -1810,6 +1849,48 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Merchant
           if (parseHistoryQueryExtension((ctx.envelope.payload as { subject?: unknown }).subject) !== undefined) {
             return textReply("历史报价不可用，请提供商品规格后继续询价。");
           }
+          if (options.buyerProductQa !== undefined) {
+            const text = buyerMessage ?? envelope.public_message ?? "";
+            const questions = questionCodes.map((field) => ({ field: field.replace(/^product\./u, ""), reason: "" }));
+            if (text.trim() !== "" && questions.length < 12) questions.push({ field: "", reason: text });
+            const qa = options.buyerProductQa;
+            const language = replyLanguageOf(text);
+            const work = await classifyProductQuestions(qa, questions);
+            const args = { qa, work, language, now };
+            const bound = quoteSources.get(negotiationId)?.snapshot.sku ?? buyerQaSkus.get(negotiationId);
+            let sku = bound ?? structuredSku;
+            if (sku === undefined && hasPublicProductTopic(work)) {
+              try {
+                const source = options.productSource;
+                const query = text.slice(0, 160);
+                if (source?.findBuyerQaSku !== undefined) {
+                  sku = source.findBuyerQaSku(query);
+                } else {
+                  const candidates = await source?.searchProducts?.(query);
+                  if (candidates?.length === 1 && candidates[0]?.title && query.toLowerCase().includes(candidates[0].title.toLowerCase())) sku = candidates[0].sku;
+                }
+              } catch { /* Ask for the SKU rather than guessing based on missing candidates. */ }
+            }
+            const answers = (await answerProductQuestions({ ...args, ...(sku === undefined ? {} : { sku }) })).map((answer) => withFollowup(answer, sku, language));
+            if (answers.length > 0) {
+              const message = answers.map((item) => item.answer).join(language === "zh" ? "；" : "; ");
+              const messageId = newMessageId();
+              const data = { type: "kiwi_product_answers", version: 1, answers };
+              if (sku !== undefined && answers.some((item) => item.status === "answered" || item.status === "needs_merchant")) {
+                // 首问只发 A2A 文本和 artifact；账本不伪造 KNP clarification_response。
+                await ledger.append({ event_kind: "message_sent", negotiation_id: negotiationId,
+                  exchange_id: envelope.exchange_id, message_id: messageId, in_reply_to: inReplyTo,
+                  identity: { sender_identity: sender, counterparty_identity: ctx.senderIdentity, actor: "merchant" },
+                  capability: { capability: envelope.capability, protocol_version: envelope.protocol_version },
+                  outcome: { kind: "ok", result: { buyer_qa_sku: sku, buyer_qa_reply_digest: contentDigest({ message, data }) } },
+                  occurred_at: now(),
+                });
+                buyerQaSkus.set(negotiationId, sku);
+              }
+              return { kind: "accepted", taskState: "completed", message: { role: "agent", messageId, parts: [{ kind: "text", text: message }] },
+                artifactParts: [{ kind: "data", data }] };
+            }
+          }
           if (options.reception !== undefined) {
             try {
               const received = await options.reception.engine.respond({
@@ -1967,7 +2048,9 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Merchant
           const quantity = quantityRaw as number;
           const floorMinor = floorMinorForSku(sku);
           if (floorMinor === null) return declineReply("temporarily_unavailable");
-          const resolved = await resolveProductOrDecline(sku);
+          // 受控换量后的正式询价与普通 RFQ 使用同一动作；启用该能力时，
+          // 每份新 RFQ 都重新读取价格、库存和有效期，不接受建议或旧缓存作事实。
+          const resolved = await resolveProductOrDecline(sku, { force: options.buyerNegotiationAssist === true });
           if ("declined" in resolved) return resolved.declined;
           const product = resolved.product;
           const { priceMinor, currency } = product;
@@ -2289,7 +2372,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Merchant
               ? bulkMinor
               : undefined;
           // C：顾问只改措辞。任何异常/越界输出都回退到既有文案，价格不变。
-          const advisedMessage = await adviseMessage({
+          const advisedMessage = options.buyerNegotiationAssist === true ? undefined : await adviseMessage({
             sku,
             quantity,
             currency,
@@ -2323,12 +2406,20 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Merchant
                 ? `您的还价 ${(counterMinor / 100).toFixed(2)} ${currency} 低于本店可自动确认的折扣范围；本次按可自动确认的价格报价，更低价需商家确认。`
                 : `Your counter of ${(counterMinor / 100).toFixed(2)} ${currency} is below the merchant's automatic discount range; this reply uses the lowest automatically confirmable price, and any lower price needs merchant confirmation.`
             : undefined;
+          const nextStep = options.buyerNegotiationAssist === true ? nextQuantityRfq({
+            text: buyerMessage ?? envelope.public_message ?? "", sku, quantity, unit: requestedUnit,
+            acceptsUnit: (unit) => !unitMismatch(product.unit, unit, unitPolicy),
+          }) : undefined;
+          const tradeoffNote = nextStep === undefined ? undefined : counterLanguage === "zh"
+            ? `如需按 ${nextStep.quantity.value} ${requestedUnit} 重新核价，请确认后提交新询价；这不是该数量的报价。`
+            : `For ${nextStep.quantity.value} ${requestedUnit}, confirm and submit a new RFQ. This is not a quote for that quantity.`;
           const quoteNote = quoteMessage(product);
           const counterPublicMessage = [
             // 库存/来源未确认时的 needs_confirmation 安全文案必须保留。
             quoteNote.public_message,
             advisedMessage,
             counterNote,
+            tradeoffNote,
           ]
             .filter((part): part is string => part !== undefined && part.trim() !== "")
             .join(" ") || undefined;
@@ -2435,7 +2526,7 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Merchant
           if (!advanced) return declineReply("state_conflict");
           await appendSent(reply, { ...snapshotFor(sku, quantity, product, authorityPromotion), ...(procurement ? { procurement } : {}) });
           await indexHistoryOffer(ctx, reply, product);
-          return envelopeReply(reply);
+          return envelopeReply(reply, nextStep === undefined ? undefined : { type: "kiwi_negotiation_next_step", version: 1, ...nextStep });
         }
         case "clarification": {
           const questions =
@@ -2516,10 +2607,22 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Merchant
               ? "已记录您的问题；其他条款需商家确认（非约束性）"
               : "your question is recorded; other terms need merchant confirmation (nonbinding)";
           };
-          const answers = questions.map((q) => ({
-            field: q.field ?? "…",
-            answer: answerFor(q.field ?? "", q.reason ?? ""),
-          }));
+          // 先恢复原商业相位，再建立独立人工确认待办；状态不合法时不建单。
+          const restored = await advancePhase(negotiationId, { type: "clarification_response" });
+          if (!restored) return declineReply("state_conflict");
+          const bound = quoteSources.get(negotiationId)?.snapshot;
+          const boundSku = bound?.sku ?? buyerQaSkus.get(negotiationId);
+          const qa = options.buyerProductQa;
+          const productAnswers = qa === undefined ? [] : (await answerProductQuestions({
+            qa, ...(boundSku === undefined ? {} : { sku: boundSku }), work: await classifyProductQuestions(qa, questions), language, now,
+          })).map((answer) => withFollowup(answer, boundSku, language, bound?.quantity));
+          const answers = questions.map((q, index) => {
+            const matching = productAnswers.filter((answer) => answer.index === index);
+            return {
+              field: q.field ?? "…",
+              answer: matching.length === 0 ? answerFor(q.field ?? "", q.reason ?? "") : matching.map((item) => item.answer).join(language === "zh" ? "；" : "; "),
+            };
+          });
           const publicMessage = Array.from(new Set(answers.map((a) => a.answer))).join(
             language === "zh" ? "；" : "; ",
           );
@@ -2535,16 +2638,8 @@ export function createMerchantHandler(options: MerchantHandlerOptions): Merchant
             },
             public_message: `${publicMessage}${language === "zh" ? "。" : "."}`,
           });
-          // 出站应答即恢复（restore 边，§21.2）：顶层推进已把相位挂到
-          // AWAITING_CLARIFICATION，clarification_response 同轮弹回
-          // resume_phase（OFFER_OPEN/OPEN），否则「问一句再 accept」的
-          // happy path 会被相位机永久 state_conflict。恢复失败 fail-closed。
-          const restored = await advancePhase(negotiationId, { type: "clarification_response" });
-          if (!restored) {
-            return declineReply("state_conflict");
-          }
           await appendSent(reply);
-          return envelopeReply(reply);
+          return envelopeReply(reply, productAnswers.length === 0 ? undefined : { type: "kiwi_product_answers", version: 1, answers: productAnswers });
         }
         case "accept_nonbinding": {
           const stored = conditionalByNegotiation.get(negotiationId);

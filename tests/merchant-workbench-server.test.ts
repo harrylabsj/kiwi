@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { adminCredentialsPath, writeAdminCredentials } from "../src/auth/merchant-sessions.js";
+import { BuyerFollowups } from "../src/merchant-core/support/buyer-followups.js";
 import { loadProfile } from "../src/config/profile.js";
 import { renderMerchantManagementPage } from "../src/http/merchant-management/page.js";
 import {
@@ -505,4 +506,41 @@ describe("standalone merchant workbench router", () => {
     const missing = await fetch(`${base}/unknown`);
     expect(missing.status).toBe(404);
   });
+});
+
+it("allows only an authenticated owner with CSRF to publish an answer to the original buyer", async () => {
+  const root = mkdtempSync(join(tmpdir(), "kiwi-buyer-workbench-"));
+  dirs.push(root);
+  const before = process.env.KIWI_BUYER_FOLLOWUPS;
+  process.env.KIWI_BUYER_FOLLOWUPS = "1";
+  try {
+    const handle = await startWorkbench(root);
+    expect(handle).toBeDefined();
+    workbenches.push(handle!);
+    const queue = new BuyerFollowups(join(root, "a2a"), "merchant-001", () => new Date().toISOString());
+    const created = queue.create({ buyer: "buyer:fixture", negotiation: "neg_fixture", message: "msg_fixture", index: 0,
+      sku: "CUP-1", topic: "customization", quantity: 50, wireDigest: "sha256:fixture" })!;
+    const url = new URL("/merchant/api/v1/buyer-followups", handle!.url);
+    expect((await fetch(url)).status).toBe(401);
+    const login = await fetch(new URL("/admin/login", handle!.url), {
+      method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "password=strong-pw-123", redirect: "manual",
+    });
+    expect(login.status).toBe(303);
+    const cookie = login.headers.get("set-cookie")?.split(";")[0] ?? "";
+    const { csrf_token: csrf } = await (await fetch(new URL("/merchant/api/session", handle!.url), { headers: { cookie } })).json() as { csrf_token: string };
+    const list = await fetch(url, { headers: { cookie } });
+    expect(list.status).toBe(200);
+    expect(await list.json()).toMatchObject({ cases: [{ case_ref: created.case_ref, topic: "customization", status: "pending", version: 1 }] });
+    const act = (action: string, body: unknown, token = csrf) => fetch(url.href + "/" + created.case_ref + "/" + action, {
+      method: "POST", headers: { cookie, "x-csrf-token": token, origin: url.origin, "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+    expect((await act("claim", { version: 1 }, "bad")).status).toBe(403);
+    expect((await act("claim", { version: 1 })).status).toBe(200);
+    expect((await act("answer", { version: 1, answer: "stale" })).status).toBe(409);
+    expect((await act("answer", { version: 2, answer: "支持单色丝印" })).status).toBe(200);
+    expect(queue.readBuyer("buyer:fixture", "neg_fixture", created.case_ref)).toMatchObject({ status: "answered", answer: "支持单色丝印" });
+    expect(queue.readBuyer("buyer:other", "neg_fixture", created.case_ref)).toBeUndefined();
+    expect((await act("close", { version: 3 })).status).toBe(200);
+    expect(queue.readBuyer("buyer:fixture", "neg_fixture", created.case_ref)).not.toHaveProperty("answer");
+  } finally { if (before === undefined) delete process.env.KIWI_BUYER_FOLLOWUPS; else process.env.KIWI_BUYER_FOLLOWUPS = before; }
 });

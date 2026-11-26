@@ -109,7 +109,22 @@ export class CommerceError extends Error {
  *   ERP 或其他数据库——外部数据接入在 shopping-cli 仓实现，
  *   `shopping_cli/data_sources/erp_source.py` + migration v17（product provenance））。
  */
+export const PUBLIC_PRODUCT_FIELDS = ["title", "overview", "features", "capacity", "material", "dimensions", "weight", "color", "customization"] as const;
+export type PublicProductField = (typeof PUBLIC_PRODUCT_FIELDS)[number];
+
+/** 已发布商品的窄投影；revision 必须标识读回的公开内容，而非读取时间。 */
+export interface PublicProductFacts {
+  merchant_id: string;
+  sku: string;
+  revision: string;
+  valid_until?: string;
+  fields: Partial<Record<PublicProductField, string>>;
+}
+export type ReadPublicProductFacts = (sku: string) => Promise<PublicProductFacts | undefined>;
+
 export interface CommerceDataSource {
+  /** 独立发布面；不能从带 owner 权限的商品对象直接投影。 */
+  getPublicProductFacts?: ReadPublicProductFacts;
   /** 按 SKU 取商品事实；未知 SKU 返回 undefined。 */
   getProduct(sku: string): Promise<ProductFact | undefined>;
   /** 搜索商品（query 匹配标题/SKU；limit 夹在 1..100）。 */

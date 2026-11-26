@@ -68,6 +68,31 @@ function stubSource(product?: ProductFact): CommerceDataSource {
 }
 
 describe("ShoppingCliCommerceDataSource（唯一数据入口）", () => {
+  it("projects only anonymous published information for the bound merchant and exact SKU", async () => {
+    const requestHeaders: Headers[] = [];
+    const product = { sku: "CUP-1", merchant_id: "merchant-fixture", title: "Test cup", description: "Public description", stock: 42, private_note: "not for buyers" };
+    let next: Response = jsonResponse({ product });
+    const source = new ShoppingCliCommerceDataSource({
+      baseUrl: "https://shopping-cli.example",
+      publicMerchantId: "merchant-fixture",
+      authToken: "owner-fixture-not-real",
+      fetchImpl: async (url, init) => {
+        expect(new URL(String(url)).pathname).toBe("/products/CUP-1");
+        requestHeaders.push(new Headers(init?.headers));
+        return next;
+      },
+    });
+    const facts = await source.getPublicProductFacts("CUP-1");
+    expect(facts).toEqual({ merchant_id: "merchant-fixture", sku: "CUP-1", revision: expect.stringMatching(/^sha256:/u), fields: { title: "Test cup", overview: "Public description" } });
+    expect(requestHeaders[0]?.has("authorization")).toBe(false);
+    for (const patch of [{ merchant_id: "other-merchant" }, { sku: "other-sku" }, { listing_paused: true }]) {
+      next = jsonResponse({ product: { ...product, ...patch } });
+      expect(await source.getPublicProductFacts("CUP-1")).toBeUndefined();
+    }
+    next = jsonResponse({ error: "not found" }, 404);
+    expect(await source.getPublicProductFacts("CUP-1")).toBeUndefined();
+  });
+
   it("getProduct 解析 {product} 信封：price 元→minor 转换 + UPSTREAM_PROXY 标注", async () => {
     const source = new ShoppingCliCommerceDataSource({
       baseUrl: "https://shopping-cli.example",

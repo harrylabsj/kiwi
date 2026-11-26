@@ -108,6 +108,22 @@ describe("A647 real exchange and persisted complete admission", () => {
     expect(second).toEqual(first); expect(f.counts()).toEqual({ sends: 1, gets: 0 });
     expect(f.recovery.ledger.events(first.wire.negotiation_id).filter(e => e.event_kind === "message_received")).toHaveLength(1);
   });
+  it("retains a checked new-RFQ suggestion on a verified counter and on reopen without changing its terms", async () => {
+    const f = fixture("counter");
+    const data = { type: "kiwi_negotiation_next_step", version: 1, kind: "new_rfq", sku: "SKU", quantity: { value: 4, unit: "kg" }, requires_buyer_confirmation: true };
+    const send = f.input.send;
+    f.input.send = async (wire) => ({ ...await send(wire), artifacts: [{ artifactId: "next-step", parts: [{ kind: "data", data: { ...data, private_note: "not a public field" } }] }] });
+    const first = await f.recovery.exchange(f.input);
+    expect(first.extensions?.next_step).toEqual({ kind: "new_rfq", sku: "SKU", quantity: { value: 4, unit: "kg" }, requires_buyer_confirmation: true });
+    expect(first.reply.payload).toHaveProperty("proposed_terms.items.0.quantity.value", 2);
+    expect(await new BuyerProtocolRecovery(f.dir, "buyer-a647", () => NOW).exchange(f.input)).toEqual(first);
+    expect(f.counts()).toEqual({ sends: 1, gets: 0 });
+    const bad = fixture("counter");
+    const sendBad = bad.input.send;
+    bad.input.send = async (wire) => ({ ...await sendBad(wire), artifacts: [{ artifactId: "bad-step", parts: [{ kind: "data", data: { ...data, sku: "OTHER" } }] }] });
+    expect((await bad.recovery.exchange(bad.input)).extensions).toBeUndefined();
+  });
+
   it("optional expiry stays optional; fractional requested quantity is legal when its total is representable", async () => {
     const f = fixture(); const build = f.input.build; f.input.build = id => mutate(build(id), e => { if (e.payload.type === "rfq") e.payload.items[0]!.quantity.value = 0.5; });
     f.set(w => { const t = terms(); t.items![0]!.quantity.value = 0.5; delete t.valid_until; return offer(w, t); });

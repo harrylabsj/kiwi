@@ -112,6 +112,8 @@ import {
 } from "../merchant-core/ownership/runtime.js";
 import { WORKBENCH_CURRENCY_TABLE_VERSION } from "../merchant/application/money.js";
 import { OnboardingStore } from "./onboarding/store.js";
+import { BuyerFollowups } from "../merchant-core/support/buyer-followups.js";
+import { findFileProductQaSku, readPublishedCloudProduct } from "./public-product-qa.js";
 import { CatalogClient } from "./catalog-client.js";
 import { buildMarketplaceProductLink } from "../handoff/marketplace-product-link.js";
 import { createEnrollmentChallengeResponder, readEnrollmentStore } from "./binding/enrollment-challenge.js";
@@ -706,7 +708,16 @@ export async function bootstrapCloudRuntime(
       alipayCollection: { origin: config.publicOrigin, current: () => collectionStore?.current() },
     } : {}),
     ...(a2aSigningIdentity !== undefined ? { signingIdentity: a2aSigningIdentity } : {}),
-    ...(fileProductSource !== undefined ? { productSource: fileProductSource.source } : {}),
+    ...(fileProductSource !== undefined ? { productSource: {
+      ...fileProductSource.source,
+      ...(process.env.KIWI_BUYER_PRODUCT_QA === "1" && config.catalogUrl !== undefined && !config.sample ? {
+        findBuyerQaSku: (question: string) => findFileProductQaSku(fileProductSource, question),
+        getPublicProductFacts: readPublishedCloudProduct({
+          source: fileProductSource, profile, dataDir: config.dataDir, publicOrigin: config.publicOrigin, catalogUrl: config.catalogUrl,
+          ...(options.catalogFetchImpl !== undefined ? { fetchImpl: options.catalogFetchImpl } : {}),
+        }),
+      } : {}),
+    } } : {}),
     ...(serviceAvailability !== undefined ? { serviceAvailability } : {}),
     ...(config.a2aThrottle !== undefined ? { throttle: config.a2aThrottle } : {}),
     promotionPrice: ({ sku, quantity }) => {
@@ -1467,6 +1478,7 @@ export async function bootstrapCloudRuntime(
         : {}),
       // WP11 会话旁观/运营报告：与 A2A 节点同一事实源（<dataDir>/a2a 账本 +
       // stats.sqlite），只读投影，不新增写路径。
+      ...(process.env.KIWI_BUYER_FOLLOWUPS === "1" ? { buyerFollowups: new BuyerFollowups(path.join(config.dataDir, "a2a"), profile.owner_id, () => new Date().toISOString()) } : {}),
       negotiationObserver: createNegotiationObserver({
         ledgerDir: path.join(config.dataDir, "a2a"),
       }),
@@ -1662,6 +1674,7 @@ export async function bootstrapCloudRuntime(
       catalogConnection: directConnection !== undefined,
       workbuddyAccess: isWorkbuddyAppOrigin(new URL(config.publicOrigin)),
       weixinChannel: weixinChannel !== undefined,
+      buyerFollowups: process.env.KIWI_BUYER_FOLLOWUPS === "1",
     }));
   };
 

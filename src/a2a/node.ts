@@ -81,6 +81,7 @@ import { createMerchantHandler } from "./server/merchant-handler.js";
 import { NegotiationApprovalStore } from "./server/negotiation-approvals.js";
 import { createDeepSeekNegotiationAdvisor } from "./server/negotiation-advisor.js";
 import { createDeepSeekInquiryInterpreter } from "./server/inquiry-interpreter.js";
+import { createBuyerQaLocalModel } from "./server/buyer-product-qa-model.js";
 import { buildModel, realStreamFn } from "../runtime/model.js";
 import { createPiReceptionRuntime } from "./reception/agent-runtime.js";
 import { SqliteReceptionSkillCatalog } from "../merchant-core/learning/reception-skill-catalog.js";
@@ -90,6 +91,8 @@ import { ReceptionConversationStore } from "./reception/conversation-store.js";
 import { runReceptionRetention } from "./reception/retention.js";
 import { createMerchantReceptionEngine } from "./reception/engine.js";
 import { StreamGate, streamKey } from "../merchant-core/customer-delivery/stream-gate.js";
+import { ShoppingCliCommerceDataSource } from "../commerce/shopping-cli-source.js";
+import { BuyerFollowups } from "../merchant-core/support/buyer-followups.js";
 import { ReceptionBudget } from "./reception/budget.js";
 import { ReceptionReplyOutbox } from "./reception/reply-outbox.js";
 import { createReceptionResponder } from "./reception/responder.js";
@@ -299,7 +302,10 @@ function buildProductSource(profile: AgentProfile): MerchantProductSource {
     );
   }
   const client = new HttpMerchantClient(commerceUrl, broker);
+  const publicSource = process.env.KIWI_BUYER_PRODUCT_QA === "1"
+    ? new ShoppingCliCommerceDataSource({ baseUrl: commerceUrl, publicMerchantId: profile.owner_id, timeoutMs: 1_200 }) : undefined;
   return {
+    ...(publicSource === undefined ? {} : { getPublicProductFacts: publicSource.getPublicProductFacts.bind(publicSource) }),
     // M2：按买家文字做本店商品候选搜索。只做本地标题/SKU 匹配，不引入
     // 向量检索或跨商家搜索；候选仍要经 getProduct 重新取事实后才能报价。
     searchProducts: async (query) => {
@@ -958,6 +964,11 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
           sender: profile.agent_id,
           counterparty: "buyer:*",
           productSource: productSource as MerchantProductSource,
+          ...(process.env.KIWI_BUYER_PRODUCT_QA === "1" && productSource?.getPublicProductFacts !== undefined ? {
+            buyerProductQa: { merchantId: profile.owner_id, read: productSource.getPublicProductFacts.bind(productSource),
+              ...createBuyerQaLocalModel(process.env.KIWI_BUYER_PRODUCT_QA_LOCAL_MODEL_PORT),
+            },
+          } : {}),
           ...(process.env.KIWI_MERCHANT_PROCUREMENT_FACTS ? { procurementFacts: fileProcurementProvider(process.env.KIWI_MERCHANT_PROCUREMENT_FACTS) } : {}),
           ...(customerIdentityWriter !== undefined
             ? {
@@ -997,6 +1008,8 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
           // B2：低于自动边界的还价落本地审批队列，人工批准后买家重试命中。
           // 与接待引擎共用同一实例（上方创建）。
           negotiationApprovals,
+          buyerNegotiationAssist: process.env.KIWI_BUYER_NEGOTIATION_ASSIST === "1",
+          ...(process.env.KIWI_BUYER_FOLLOWUPS === "1" && !isEphemeral ? { buyerFollowups: new BuyerFollowups(dir, profile.owner_id, now) } : {}),
           // C：措辞顾问默认关闭；KIWI_MERCHANT_ADVISOR=deepseek 才启用，
           // 且只生成 public_message，价格仍由确定性引擎计算。
           ...(process.env.KIWI_MERCHANT_ADVISOR === "deepseek"

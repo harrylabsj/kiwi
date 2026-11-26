@@ -33,6 +33,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { MerchantProductSource } from "../a2a/server/merchant-handler.js";
+import { PUBLIC_PRODUCT_FIELDS, type PublicProductField } from "../commerce/data-source.js";
 import {
   buildMarketplaceProductLink,
   MarketplaceProductLinkError,
@@ -57,6 +58,10 @@ export interface CloudProductRecord {
   moq?: number;
   /** 公开供货说明。 */
   supply_note?: string;
+  /** 商家拟公开的问答资料；仅在显式确认 listing 发布后对买家可用。 */
+  public_details?: Partial<Record<Exclude<PublicProductField, "title">, string>>;
+  /** 本机导入赋予的问答资料修订，不能用上传方提供的值。 */
+  public_details_revision?: string;
   /** 数据时间戳（ISO）。 */
   updated_at: string;
   /** 有效期（ISO）：过期后停止自动报价。 */
@@ -127,6 +132,21 @@ function requireIso(value: unknown, field: string): string {
   return text;
 }
 
+function parsePublicDetails(value: unknown, field: string): NonNullable<CloudProductRecord["public_details"]> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new ProductTableError("PRODUCT_TABLE_INVALID", `${field} 必须是公开问答字段对象`);
+  }
+  const result: NonNullable<CloudProductRecord["public_details"]> = {};
+  for (const [key, raw] of Object.entries(value).sort(([left], [right]) => left.localeCompare(right))) {
+    const publicField = PUBLIC_PRODUCT_FIELDS.find((name) => name === key);
+    if (publicField === undefined || publicField === "title" || typeof raw !== "string" || !raw.trim() || raw.length > 360 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(raw)) {
+      throw new ProductTableError("PRODUCT_TABLE_INVALID", `${field} 只允许公开问答字段，每项须为不超过 360 字的单行非空文本`);
+    }
+    result[publicField] = raw.trim();
+  }
+  return result;
+}
+
 /** 严格解析商品表：任何结构问题都抛错（不"尽力解析"半个表）。 */
 export function parseProductTable(
   value: unknown,
@@ -193,6 +213,12 @@ export function parseProductTable(
       }
       throw error;
     }
+    const details = Object.hasOwn(record, "public_details")
+      ? parsePublicDetails(record["public_details"], `products[${index}].public_details`) : undefined;
+    const detailsRevision = record["public_details_revision"];
+    if (detailsRevision !== undefined && (details === undefined || typeof detailsRevision !== "string" || !/^sha256:[a-f0-9]{64}$/.test(detailsRevision))) {
+      throw new ProductTableError("PRODUCT_TABLE_INVALID", `products[${index}].public_details_revision 不是合法的问答资料修订`);
+    }
     return {
       sku: requireString(record["sku"], `products[${index}].sku`),
       title: requireString(record["title"], `products[${index}].title`),
@@ -207,6 +233,8 @@ export function parseProductTable(
       ...(stock !== undefined ? { stock } : {}),
       ...(record["test"] === true ? { test: true } : {}),
       ...tradeFields,
+      ...(details === undefined ? {} : { public_details: details }),
+      ...(detailsRevision === undefined ? {} : { public_details_revision: detailsRevision }),
     };
   });
   const merchantId = table["merchant_id"];

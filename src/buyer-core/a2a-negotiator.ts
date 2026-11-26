@@ -26,6 +26,7 @@
 import { asRecord } from "./procurement/requirements.js";
 import { thumbprintFromOpenInquiryIdentity } from "../commerce/receipt/receipts.js";
 import { McpError } from "./errors.js";
+import { readBuyerFollowup } from "./a2a-buyer-followups.js";
 import { assertGenericA2AAcceptTerms, assertGenericA2AAgreement } from "./a2a-accept-terms.js";
 import {
   buildA2AClient,
@@ -307,6 +308,16 @@ export class A2ANegotiator implements Negotiator {
     }) };
   }
 
+  async readFollowup(candidate: Record<string, unknown>, caseRef: string) {
+    const provenance = asRecord(candidate.provenance);
+    const endpoint = provenance.a2a_endpoint;
+    const negotiation = provenance.negotiation_id;
+    if (typeof endpoint !== "string" || typeof negotiation !== "string") return undefined;
+    const { client, signer } = await this.clientFor(endpoint);
+    if (signer === undefined) return undefined;
+    return readBuyerFollowup(client, { case_ref: caseRef, negotiation_id: negotiation }, this.now);
+  }
+
   async recoverNegotiation(
     intent: Record<string, unknown>, step: NegotiationStep, rawCandidate: Record<string, unknown>, context: ProtocolTaskContext,
   ): Promise<NegotiationStep | undefined> {
@@ -322,7 +333,8 @@ export class A2ANegotiator implements Negotiator {
     const merchantOffer = step.action === "counter_offer" ? merchantOfferFromReply(
       result.reply, String(candidate.candidate_id ?? ""), intentQuantity(intent),
     ) : undefined;
-    return { ...step, reply: JSON.stringify(result.reply), ...(merchantOffer ? { merchant_offer: merchantOffer } : {}) };
+    return { ...step, reply: JSON.stringify(result.reply), ...(merchantOffer ? { merchant_offer: merchantOffer } : {}),
+      ...(result.extensions ? { merchant_extensions: { ...result.extensions, candidate_id: String(candidate.candidate_id ?? "") } } : {}) };
   }
 
   async negotiate(
@@ -401,7 +413,8 @@ export class A2ANegotiator implements Negotiator {
           timeoutMs: this.timeoutMs,
           pollIntervalMs: 1000,
         });
-        return { ...current, reply: JSON.stringify(result.reply) };
+        return { ...current, reply: JSON.stringify(result.reply),
+          ...(result.extensions ? { merchant_extensions: { ...result.extensions, candidate_id: String(candidate.candidate_id ?? "") } } : {}) };
       }
       const verifiedQuote = this.recovery && context ? this.recovery.validatedQuote({
         context, negotiationId, merchantId: String(candidate.merchant_id ?? ""),
@@ -516,6 +529,7 @@ export class A2ANegotiator implements Negotiator {
       return {
         ...current,
         reply: JSON.stringify(result.reply),
+        ...(result.extensions ? { merchant_extensions: { ...result.extensions, candidate_id: String(candidate.candidate_id ?? "") } } : {}),
         ...(merchantOffer !== undefined ? { merchant_offer: merchantOffer } : {}),
       };
     } catch (error) {

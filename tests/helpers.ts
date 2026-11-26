@@ -250,11 +250,10 @@ export interface CapturedInbound {
  */
 export async function startTestA2aStack(
   options: {
-    productSource?: {
-      getProduct(
-        sku: string,
-      ): Promise<{ price: number; currency: string; title?: string; stock?: number; unit?: string; valid_until?: string; source_evidence?: import("../src/a2a/server/merchant-product-facts.js").ProductSourceEvidence }>;
-    };
+    productSource?: import("../src/a2a/server/merchant-handler.js").MerchantProductSource;
+    buyerNegotiationAssist?: boolean;
+    buyerFollowups?: (merchantDir: string) => import("../src/merchant-core/support/buyer-followups.js").BuyerFollowups;
+    buyerProductQa?: Parameters<typeof import("../src/a2a/server/merchant-handler.js").createMerchantHandler>[0]["buyerProductQa"];
     catalogAgentId?: string;
     /** 传入数组后，每次入站信封（action/senderIdentity/envelope）被 push 进来。 */
     capture?: CapturedInbound[];
@@ -329,6 +328,9 @@ export async function startTestA2aStack(
     sender: "merchant:merchant-001",
     counterparty: "buyer:*",
     ...(options.productSource !== undefined ? { productSource: options.productSource } : {}),
+    ...(options.buyerProductQa !== undefined ? { buyerProductQa: options.buyerProductQa } : {}),
+    ...(options.buyerFollowups !== undefined ? { buyerFollowups: options.buyerFollowups(merchantDir) } : {}),
+    ...(options.buyerNegotiationAssist === undefined ? {} : { buyerNegotiationAssist: options.buyerNegotiationAssist }),
     ...(options.decisionBackend !== undefined ? { decisionBackend: options.decisionBackend } : {}),
     ...(options.merchantPolicy !== undefined ? { merchantPolicy: options.merchantPolicy } : {}),
     ...(options.alipayCollection !== undefined ? { alipayCollection: options.alipayCollection } : {}),

@@ -11,6 +11,7 @@ import {
 } from "../negotiation/domain/envelope.js";
 import { A2A_TASK_STATES, type A2ATask } from "../a2a/client/types.js";
 import { extractKnpEnvelope } from "./a2a-knp.js";
+import { readMerchantReplyExtensions, restoreMerchantReplyExtensions, type MerchantReplyExtensions } from "./a2a-merchant-extensions.js";
 import { McpError } from "./errors.js";
 import { assertBuyerReplySemantics, BuyerReplyRejected } from "./receive-gate.js";
 
@@ -97,6 +98,7 @@ function structuredDecline(task: A2ATask): { reasonCode: string; message?: strin
 
 export interface ProtocolReply {
   reply: NegotiationEnvelope;
+  extensions?: MerchantReplyExtensions;
   wire: NegotiationEnvelope;
   endpoint: string;
   merchantId: string;
@@ -437,7 +439,8 @@ export class BuyerProtocolRecovery {
       } catch {
         throw new ProtocolOperationUnknown();
       }
-      return { reply, wire, endpoint: op.endpoint, merchantId: op.merchant_id };
+      const extensions = event.outcome.kind === "ok" ? restoreMerchantReplyExtensions(event.outcome.result?.merchant_reply_extensions, wire, reply) : undefined;
+      return { reply, wire, endpoint: op.endpoint, merchantId: op.merchant_id, ...(extensions === undefined ? {} : { extensions }) };
     };
     if (complete) {
       return finish(this.completedReply(complete, receipt, wire), complete);
@@ -472,8 +475,13 @@ export class BuyerProtocolRecovery {
         assertBuyerReplySemantics(reply, wire, this.now);
         let event: LedgerEvent;
         try {
+          const content = this.content(reply, "message_received", { ...op, kind: "complete" });
+          const extensions = readMerchantReplyExtensions(wire, reply, task);
           event = this.ledger.append({
-            ...this.content(reply, "message_received", { ...op, kind: "complete" }),
+            ...content,
+            ...(extensions !== undefined && content.outcome.kind === "ok" ? {
+              outcome: { kind: "ok", result: { ...content.outcome.result, merchant_reply_extensions: extensions } },
+            } : {}),
             remote_task_id: receipt.remote_task_id,
             ...(typeof (knownContext ?? task.contextId) === "string"
               ? { remote_context_id: knownContext ?? task.contextId }

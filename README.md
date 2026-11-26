@@ -177,6 +177,14 @@ node scripts/a2a-agent.mjs --role buyer                   # 交互式 buyer（�
 
 > `model.provider: fake` 使用内置确定性模型，无需任何凭据即可本地冒烟 / CI。
 
+### 买家商品问答与本机分类模型
+
+商家运行时设置 `KIWI_BUYER_PRODUCT_QA=1` 后，买家可在首轮询问或磋商澄清中获得带发布版本证据的商品答案。只读取当前商家、当前 SKU 的已发布白名单字段，不用演示数据填补缺项。
+
+如需辅助理解规则未识别的问法，可另设 `KIWI_BUYER_PRODUCT_QA_LOCAL_MODEL_PORT=<端口号>`。Kiwi 只请求 `http://127.0.0.1:<端口号>/v1/chat/completions`，模型 ID 固定为 `deepseek-flash`；独立商家节点和云运行时共用此配置。不设端口即仅用规则，不继承 `KIWI_MODEL_*` 或模型 API 密钥。仅连接自己控制且不会向外部转发或记录真实买家文本的本机服务；输入筛选不等于完整脱敏。Kiwi 不启动这个服务，也不替商家配置第三方模型。
+
+本机服务以 HTTP 200 返回 OpenAI 兼容 JSON：`model` 为 `deepseek-flash`，仅含一个 `choice`，`finish_reason` 为 `stop`，其 `message.content` 是形如 `{"rows":[{"index":0,"topics":["capacity"]}]}` 的 JSON 字符串。模型只分类，不能提供事实、选择 SKU 或发起操作。每轮最多一次调用、等待上限 2.5 秒；服务不可用、超时或返回无效数据时，问答继续按规则处理。删除端口配置并重启即可回到纯规则模式。
+
 ### Merchant Experience（0.8 升级能力）
 
 Merchant profile 可选择开启基于 `commerce-agents` 设计借鉴的运营能力层：经营摘要、A2A
