@@ -2069,6 +2069,7 @@ function mountWeixin(sequence) {
       $("weixin-model-endpoint").textContent = service ? service.endpoint : "—";
       var alreadySaved = settings.credential_saved && provider.value === settings.provider;
       key.required = !alreadySaved;
+      key.placeholder = alreadySaved ? "*****" : "";
       $("weixin-model-key").textContent = alreadySaved ? "已保存本商家的密钥，留空可继续使用。" :
         "请填写本商家在所选服务商申请的密钥。密钥将加密保存在当前实例。";
     }
@@ -2113,6 +2114,32 @@ function mountWeixin(sequence) {
       draftsLoaded = false;
       reset();
     }).catch(problem);
+  }
+  function renderModelConsent(controls, modelService, consent) {
+    var notice = document.createElement("p");
+    notice.id = "weixin-model-consent-notice";
+    notice.className = "muted";
+    notice.textContent = "授权后，Kiwi 可向当前店主回信，并将你发送的微信私聊正文及最近最多 4 轮对话文本提交给 " + modelService +
+      " 处理。Kiwi 不会自动附上买家原文、身份或商家查询明细。请勿发送密码、密钥或客户隐私。";
+    controls.appendChild(notice);
+    var button = document.createElement("button");
+    button.id = "weixin-model-consent-submit";
+    button.type = "button";
+    button.className = "act";
+    button.textContent = "同意并开启 Kiwi 模型对话";
+    button.setAttribute("aria-describedby", notice.id);
+    button.onclick = function () {
+      if (!active() || busy) return;
+      busy = true;
+      clearTimeout(statusTimer);
+      button.disabled = true;
+      button.textContent = "正在提交模型授权…";
+      call("POST", endpoint + "/confirm-conversation", { model_consent: consent }).catch(problem).finally(function () {
+        busy = false;
+        reset();
+      });
+    };
+    controls.appendChild(button);
   }
   function renderMobileCapabilities(connection) {
     var target = $("weixin-mobile-capabilities");
@@ -2175,9 +2202,7 @@ function mountWeixin(sequence) {
       }
       if (configured && !conversation.unavailable && modelReady) {
         if (modelAuthorized) action("停止模型对话", "stop-model", "停止向模型提交私聊消息？本地查询仍可在微信使用。");
-        else action("授权 Kiwi 模型对话", "confirm-conversation",
-          "允许向当前店主回信，并将你发送的微信私聊正文及最近最多 4 轮对话文本提交给 " + modelService + " 处理？Kiwi 不会自动附上买家原文、身份或商家查询明细。请勿发送密码、密钥或客户隐私。",
-          { model_consent: agent.consent });
+        else renderModelConsent(controls, modelService, agent.consent);
       }
     }
     if (WEIXIN_ONLY) return;
