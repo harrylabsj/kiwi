@@ -413,7 +413,8 @@ describe("merchant Workbench Weixin channel", () => {
       enabled: true, replyToOwner: true, workbenchOrigin: ORIGIN,
       ownerRevision: (id) => id === "fixture-owner" ? "fixture-revision" : undefined,
       agent: { state: "configured", consent, provider: "fixture", model: "fixture-model", endpoint: "https://model.example/v1", decide },
-      source: { list: () => [{ id: "private-inquiry", version: "v1", receivedAt: now - 1000, sku: "PRIVATE-SKU" }], get: () => undefined },
+      source: { list: () => [{ id: "private-inquiry", version: "v1", receivedAt: now - 1000, sku: "PRIVATE-SKU" }], get: () => undefined,
+        rangeStats: () => ({ inquiries: 3, pending: 1 }) },
     };
     function updates(cursor: string, ...texts: string[]) {
       getUpdates.mockResolvedValueOnce({
@@ -447,7 +448,7 @@ describe("merchant Workbench Weixin channel", () => {
     expect(sendMessage.mock.calls.slice(1).map(([out]) => out.text)).toEqual([
       "可以，先从店铺定位和常见客户问题聊起。",
       expect.stringContaining("有 1 笔待跟进询价"),
-      expect.stringContaining("不能判断今天有没有新买家来咨询"),
+      expect.stringContaining("今天有 3 笔买家咨询进入询价链路，其中 1 笔仍待回复"),
     ]);
     expect(stream).toHaveBeenCalledTimes(3);
     await channel.close();
