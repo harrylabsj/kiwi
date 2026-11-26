@@ -27,6 +27,8 @@ import { createContext, runInContext } from "node:vm";
 import { renderMerchantManagementPage } from "../src/http/merchant-management/page.js";
 
 type Element = {
+  id?: string;
+  appendChild?: (child: Element) => void;
   value: string;
   innerHTML: string;
   textContent: string;
@@ -84,7 +86,11 @@ function createPageContext(
     clearTimeout,
     document: {
       querySelectorAll: () => [],
-      getElementById: (id: string) => (elements[id] ??= fakeElement()),
+      createElement: () => fakeElement(),
+      getElementById: (id: string) => (elements[id] ??= {
+        ...fakeElement(),
+        appendChild(child: Element) { if (child.id) elements[child.id] = child; },
+      }),
     },
   });
 }
@@ -155,6 +161,8 @@ describe("merchant workbench view lifecycle", () => {
   });
 
   it("loads and saves the selected owner model from the Weixin view", async () => {
+    expect(renderMerchantManagementPage({ productAuthority: "file", weixinChannel: true }))
+      .not.toMatch(/(?:type|name)=["']password/);
     const elements: Record<string, Element> = {};
     const calls: unknown[] = [];
     const providers = [
@@ -183,6 +191,7 @@ describe("merchant workbench view lifecycle", () => {
     runInContext('current = "weixin"; refresh();', context);
     await eventually(() => elements["weixin-model-form-area"]?.innerHTML.includes("测试并保存") === true);
     expect(elements["weixin-model-form-area"]!.innerHTML).toContain("通义千问");
+    expect(elements["weixin-model-credential"]).toHaveProperty("type", "password");
     runInContext(`$("weixin-model-provider").value = "deepseek"; $("weixin-model-provider").onchange();`, context);
     expect(elements["weixin-model-endpoint"]?.textContent).toBe(providers[0]!.endpoint);
     runInContext(`$("weixin-model-provider").value = "dashscope";
