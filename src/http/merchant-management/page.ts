@@ -1992,7 +1992,7 @@ function mountWeixin(sequence) {
         '<p>访问地址（Base URL）：<code id="weixin-model-endpoint"></code></p>' +
         '<p><label>模型 ID <input id="weixin-model-id" type="text" required maxlength="128" value="' +
         esc(settings.model || "") + '"></label></p>' +
-        '<p><label>API Key <input id="weixin-model-credential" type="password" maxlength="2048" autocomplete="new-password"></label></p>' +
+        '<p><label id="weixin-model-credential-label">API Key </label></p>' +
         '<p id="weixin-model-key" class="muted"></p>' +
         '<button id="weixin-model-save" class="act primary" type="submit">测试并保存</button>' +
         '<p id="weixin-model-result" role="status"></p></form>');
@@ -2000,7 +2000,12 @@ function mountWeixin(sequence) {
     var form = $("weixin-model-form");
     var provider = $("weixin-model-provider");
     var model = $("weixin-model-id");
-    var key = $("weixin-model-credential");
+    var key = document.createElement("input");
+    key.id = "weixin-model-credential";
+    key.type = "password";
+    key.maxLength = 2048;
+    key.autocomplete = "new-password";
+    $("weixin-model-credential-label").appendChild(key);
     var save = $("weixin-model-save");
     var result = $("weixin-model-result");
     function updateProviderFields() {
