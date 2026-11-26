@@ -47,8 +47,8 @@ function fakeElement(): Element {
   };
 }
 
-function pageScript(weixinChannel: boolean): string {
-  const html = renderMerchantManagementPage({ productAuthority: "file", weixinChannel });
+function pageScript(weixinChannel: boolean, weixinOnly: boolean): string {
+  const html = renderMerchantManagementPage({ productAuthority: "file", weixinChannel, weixinOnly });
   return [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi)]
     .map((match) => match[1] ?? "")
     .join("\n");
@@ -86,7 +86,7 @@ function createPageContext(
     clearTimeout,
     document: {
       querySelectorAll: () => [],
-      createElement: () => fakeElement(),
+      createElement: (tag: string) => tag === "input" ? { ...fakeElement(), placeholder: "" } : fakeElement(),
       getElementById: (id: string) => (elements[id] ??= {
         ...fakeElement(),
         appendChild(child: Element) { if (child.id) elements[child.id] = child; },
@@ -95,8 +95,8 @@ function createPageContext(
   });
 }
 
-async function loadPage(context: ReturnType<typeof createContext>, weixinChannel = false): Promise<void> {
-  await runInContext(pageScript(weixinChannel), context);
+async function loadPage(context: ReturnType<typeof createContext>, weixinChannel = false, weixinOnly = false): Promise<void> {
+  await runInContext(pageScript(weixinChannel, weixinOnly), context);
   // 等页面加载时的 /merchant/api/session 调用落定。
   await tick();
 }
@@ -160,7 +160,7 @@ describe("merchant workbench view lifecycle", () => {
     expect(elements["alipay-form"]).toHaveProperty("onsubmit", expect.any(Function));
   });
 
-  it("loads and saves the selected owner model from the Weixin view", async () => {
+  it.each([false, true])("loads and saves the selected owner model from the Weixin view (saved=%s)", async (saved) => {
     expect(renderMerchantManagementPage({ productAuthority: "file", weixinChannel: true }))
       .not.toMatch(/(?:type|name)=["']password/);
     const elements: Record<string, Element> = {};
@@ -169,6 +169,7 @@ describe("merchant workbench view lifecycle", () => {
       { id: "deepseek", label: "DeepSeek", endpoint: "https://api.deepseek.com/v1" },
       { id: "dashscope", label: "通义千问", endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1" },
     ];
+    const savedSettings = { editable: true, active: true, credential_saved: true, provider: "dashscope", model: "qwen-plus", providers };
     const context = createPageContext(elements, async (path, init) => {
       switch (path) {
         case "/merchant/api/session":
@@ -180,9 +181,9 @@ describe("merchant workbench view lifecycle", () => {
         case "/merchant/api/v1/channels/weixin/model":
           if (init?.body) {
             calls.push({ body: init.body, csrf: init.headers?.["x-csrf-token"] });
-            return Response.json({ editable: true, active: true, credential_saved: true, provider: "dashscope", model: "qwen-plus", providers });
+            return Response.json(savedSettings);
           }
-          return Response.json({ editable: true, active: false, providers });
+          return Response.json(saved ? savedSettings : { editable: true, active: false, providers });
         default:
           throw new Error(`unexpected request ${path}`);
       }
@@ -194,16 +195,78 @@ describe("merchant workbench view lifecycle", () => {
     expect(elements["weixin-model-credential"]).toHaveProperty("type", "password");
     runInContext(`$("weixin-model-provider").value = "deepseek"; $("weixin-model-provider").onchange();`, context);
     expect(elements["weixin-model-endpoint"]?.textContent).toBe(providers[0]!.endpoint);
+    expect(elements["weixin-model-credential"]).toHaveProperty("placeholder", "");
+    expect(elements["weixin-model-credential"]).toHaveProperty("required", true);
     runInContext(`$("weixin-model-provider").value = "dashscope";
       $("weixin-model-provider").onchange();`, context);
     expect(elements["weixin-model-endpoint"]?.textContent).toBe(providers[1]!.endpoint);
-    runInContext(`$("weixin-model-id").value = "qwen-plus";
-      $("weixin-model-credential").value = "merchant-fixture-secret";
-      $("weixin-model-form").onsubmit({ preventDefault: function () {} });`, context);
-    await eventually(() => elements["weixin-model-result"]?.textContent.includes("配置已保存") === true);
-    expect(calls).toEqual([{ csrf: "fixture-csrf", body: JSON.stringify({ provider: "dashscope", model: "qwen-plus", credential: "merchant-fixture-secret" }) }]);
+    expect(elements["weixin-model-credential"]).toHaveProperty("placeholder", saved ? "*****" : "");
+    expect(elements["weixin-model-credential"]).toHaveProperty("required", !saved);
     expect(elements["weixin-model-credential"]?.value).toBe("");
+    if (!saved) {
+      runInContext(`$("weixin-model-id").value = "qwen-plus";
+        $("weixin-model-credential").value = "merchant-fixture-secret";`, context);
+    }
+    runInContext(`$("weixin-model-form").onsubmit({ preventDefault: function () {} });`, context);
+    await eventually(() => elements["weixin-model-result"]?.textContent.includes("配置已保存") === true);
+    expect(calls).toEqual([{ csrf: "fixture-csrf", body: JSON.stringify({
+      provider: "dashscope", model: "qwen-plus", ...(!saved ? { credential: "merchant-fixture-secret" } : {}),
+    }) }]);
+    expect(elements["weixin-model-credential"]?.value).toBe("");
+    expect(elements["weixin-model-credential"]).toHaveProperty("placeholder", "*****");
     expect(elements["weixin-model-form-area"]?.innerHTML).not.toContain("merchant-fixture-secret");
+  });
+
+  it.each([false, true])("shows model consent inline and submits once without a dialog (mobile=%s)", async (mobile) => {
+    const elements: Record<string, Element> = {};
+    const posts: Array<{ body: unknown; csrf: string | undefined }> = [];
+    const consent = "a".repeat(64);
+    let authorized = false;
+    let resolvePost!: (response: Response) => void;
+    const pendingPost = new Promise<Response>((resolve) => { resolvePost = resolve; });
+    const context = createPageContext(elements, async (path, init) => {
+      switch (path) {
+        case "/merchant/api/session":
+          return Response.json({ role: "owner", csrf_token: "fixture-csrf" });
+        case "/merchant/api/v1/runtime/status":
+          return Response.json({ capabilities: {} });
+        case "/merchant/api/v1/channels/weixin":
+          return Response.json({ configured: true, status: "connected", conversation: {
+            enabled: true, authorized: true, delivery: "paired_owner", model_authorized: authorized,
+            agent: { state: "configured", provider: "deepseek", model: "deepseek-flash", endpoint: "https://api.deepseek.com/v1", consent },
+          } });
+        case "/merchant/api/v1/channels/weixin/model":
+          return Response.json({ editable: false });
+        case "/merchant/api/v1/channels/weixin/followup-preference":
+          return Response.json({ version: 0, style: null });
+        case "/merchant/api/v1/channels/weixin/reply-drafts":
+          return Response.json({ items: [] });
+        case "/merchant/api/v1/channels/weixin/confirm-conversation":
+          posts.push({ body: init?.body, csrf: init?.headers?.["x-csrf-token"] });
+          return pendingPost;
+        default:
+          throw new Error(`unexpected request ${path}`);
+      }
+    });
+    runInContext('window.confirm = function () { throw new Error("no dialog expected"); };', context);
+    await loadPage(context, true, mobile);
+    if (!mobile) runInContext('current = "weixin"; refresh();', context);
+    await eventually(() => Boolean(elements["weixin-model-consent-notice"]));
+    const notice = elements["weixin-model-consent-notice"]!.textContent;
+    expect(notice).toContain("微信私聊正文");
+    expect(notice).toContain("最近最多 4 轮");
+    expect(notice).toContain("deepseek / deepseek-flash（https://api.deepseek.com/v1）");
+    expect(notice).toContain("不会自动附上买家原文、身份或商家查询明细");
+    expect(posts).toEqual([]);
+
+    const button = elements["weixin-model-consent-submit"];
+    expect(button?.textContent).toBe("同意并开启 Kiwi 模型对话");
+    runInContext('$("weixin-model-consent-submit").onclick(); $("weixin-model-consent-submit").onclick();', context);
+    expect(button).toHaveProperty("disabled", true);
+    expect(posts).toEqual([{ csrf: "fixture-csrf", body: JSON.stringify({ model_consent: consent }) }]);
+    authorized = true;
+    resolvePost(Response.json({ ok: true }));
+    await eventually(() => elements["weixin-conversation-title"]?.textContent === "店主微信对话 · Kiwi 智能体");
   });
 
   it("ignores a stale view after a 401 and can render again when requests succeed", async () => {
