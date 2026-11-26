@@ -8,6 +8,7 @@ import { IlinkClient } from "../weixin/ilink-client.js";
 import { encodeQrMatrix } from "../weixin/qr.js";
 import { WeixinError, type BotCredentials } from "../weixin/types.js";
 import { bindingFingerprint, OwnerConversationError, WeixinOwnerConversation, type FollowupStyle, type WeixinOwnerConversationOptions } from "./weixin-owner-conversation.js";
+import type { WeixinOwnerModelSettings } from "./weixin-owner-model-settings.js";
 
 function fingerprint(credentials: BotCredentials): string {
   return bindingFingerprint(credentials.ilink_user_id ?? "", credentials.ilink_bot_id, credentials.bot_token, credentials.saved_at);
@@ -56,6 +57,7 @@ export class MerchantWeixinChannel {
   private readonly lockFile: string;
   private readonly conversationFile: string;
   private readonly conversationOptions: WeixinOwnerConversationOptions | undefined;
+  private readonly modelSettings: WeixinOwnerModelSettings | undefined;
   private conversation?: WeixinOwnerConversation;
   private readonly now: () => number;
   private readonly client: (baseUrl?: string) => Client;
@@ -67,7 +69,8 @@ export class MerchantWeixinChannel {
   private worker?: { abort: AbortController; done: Promise<void> };
   private closed = false;
 
-  constructor(options: { dataDir: string; merchantId: string; client?: (baseUrl?: string) => Client; now?: () => number; conversation?: WeixinOwnerConversationOptions }) {
+  constructor(options: { dataDir: string; merchantId: string; client?: (baseUrl?: string) => Client; now?: () => number;
+    conversation?: WeixinOwnerConversationOptions; modelSettings?: WeixinOwnerModelSettings }) {
     const merchantKey = createHash("sha256").update(options.merchantId).digest("hex");
     this.directory = path.join(options.dataDir, "weixin-workbench", merchantKey);
     this.credentialsFile = path.join(this.directory, "credentials.json");
@@ -75,8 +78,28 @@ export class MerchantWeixinChannel {
     this.lockFile = path.join(this.directory, "owner.sqlite");
     this.conversationFile = path.join(this.directory, "owner-conversation.v1.sqlite");
     this.conversationOptions = options.conversation;
+    this.modelSettings = options.modelSettings;
     this.client = options.client ?? ((baseUrl) => new IlinkClient({ baseUrl }));
     this.now = options.now ?? Date.now;
+  }
+
+  private ownerModelSettings(owner: WeixinBindingOwner): WeixinOwnerModelSettings {
+    this.assertOwner(owner);
+    if (!owner.principalId || !this.conversationOptions?.ownerRevision(owner.principalId)) {
+      throw new OwnerConversationError("forbidden", "仅当前店主可以配置对话模型。");
+    }
+    if (this.modelSettings === undefined) throw new OwnerConversationError("not_found", "此实例未装配模型设置。");
+    return this.modelSettings;
+  }
+
+  modelStatus(owner: WeixinBindingOwner) {
+    return this.ownerModelSettings(owner).status();
+  }
+
+  async setModel(owner: WeixinBindingOwner, input: { provider: unknown; model: unknown; apiKey: unknown }) {
+    const settings = this.ownerModelSettings(owner);
+    this.lock();
+    return settings.save(input, () => { this.ownerModelSettings(owner); }, () => { this.conversation?.modelChanged(); });
   }
 
   private openConversation(): WeixinOwnerConversation | undefined {
@@ -371,9 +394,8 @@ export class MerchantWeixinChannel {
     let cursor = loadSyncState(this.cursorFile).get_updates_buf;
     const account = credentials.ilink_user_id;
     const key = fingerprint(credentials);
-    const replyToOwner = this.conversationOptions?.replyToOwner === true;
     const runOwnerTurn = async (conversation: WeixinOwnerConversation): Promise<void> => {
-      if (!replyToOwner || !account) {
+      if (this.conversationOptions?.replyToOwner !== true || !account) {
         await conversation.prepare(key, signal);
         return;
       }

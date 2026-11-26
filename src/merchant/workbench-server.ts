@@ -22,7 +22,7 @@ import { ShoppingCliCommerceDataSource } from "../commerce/shopping-cli-source.j
 import { createMerchantManagementApiHandler } from "../http/merchant-management/api.js";
 import { MerchantWeixinChannel } from "./weixin-channel.js";
 import { createWorkbenchWeixinOwnerOptions } from "./weixin-owner-source.js";
-import { configuredWeixinOwnerAgent } from "./weixin-owner-agent-profile.js";
+import { WeixinOwnerModelSettings } from "./weixin-owner-model-settings.js";
 import { MerchantImportDraftStore } from "../http/merchant-management/draft-store.js";
 import { MerchantManagementOperationStore } from "../http/merchant-management/operation-store.js";
 import { renderMerchantManagementPage } from "../http/merchant-management/page.js";
@@ -421,14 +421,14 @@ export async function startStandaloneMerchantWorkbench(
     port,
     options.publicOrigin ?? profile.merchant_mcp?.public_url,
   );
-  const weixinOwnerAgent = configuredWeixinOwnerAgent(profile, process.env, dataDir);
+  const modelSettings = new WeixinOwnerModelSettings(profile, dataDir, process.env);
   const weixinChannel = new MerchantWeixinChannel({
     dataDir,
     merchantId: profile.owner_id,
+    modelSettings,
     conversation: createWorkbenchWeixinOwnerOptions({
       flag: process.env.KIWI_WEIXIN_OWNER_PREVIEW,
-      replyFlag: process.env.KIWI_WEIXIN_OWNER_REPLIES,
-      ...(weixinOwnerAgent === undefined ? {} : { agent: weixinOwnerAgent }),
+      modelSettings,
       dataDir,
       adminDir: admin.adminDir,
       merchantId: profile.owner_id,

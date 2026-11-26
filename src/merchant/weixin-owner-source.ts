@@ -13,6 +13,7 @@ import { OwnerConversationError, type OwnerInquiry, type OwnerInquirySource, typ
 import type { ExactMerchantProduct } from "../agent/merchant/types.js";
 import { createOwnerInventoryReader } from "./weixin-owner-inventory.js";
 import type { WeixinOwnerAgent } from "./weixin-owner-agent.js";
+import type { WeixinOwnerModelSettings } from "./weixin-owner-model-settings.js";
 
 const INBOUND_ACTIONS = new Set(["inquiry", "rfq", "offer", "counter_offer", "clarification"]);
 const MAX_LEDGER_CHAINS = 1000;
@@ -97,6 +98,7 @@ export function createWorkbenchWeixinOwnerOptions(input: {
   /** 单独启用私聊回信；工作台预览开关绝不会打开微信回信。 */
   replyFlag?: string;
   agent?: WeixinOwnerAgent;
+  modelSettings?: Pick<WeixinOwnerModelSettings, "agent" | "replyToOwner">;
   dataDir: string;
   adminDir: string;
   merchantId: string;
@@ -109,11 +111,10 @@ export function createWorkbenchWeixinOwnerOptions(input: {
     const url = new URL(input.origin ?? "");
     if (url.protocol === "https:" && url.username === "" && url.password === "") origin = url.origin;
   } catch { /* 未装配可信 origin 时不启用 */ }
-  const replyToOwner = input.replyFlag === "1";
   return {
-    enabled: replyToOwner || input.flag === "1" && origin !== undefined,
-    replyToOwner,
-    ...(replyToOwner && input.agent !== undefined ? { agent: input.agent } : {}),
+    get enabled() { return this.replyToOwner === true || input.flag === "1" && origin !== undefined; },
+    get replyToOwner() { return input.modelSettings?.replyToOwner ?? (input.replyFlag === "1"); },
+    get agent() { return this.replyToOwner ? input.modelSettings?.agent ?? input.agent : undefined; },
     workbenchOrigin: origin ?? "https://invalid.invalid",
     source: createOwnerA2aInquirySource(input.dataDir, input.agentId),
     ...(input.readExactProduct !== undefined ? { inventory: createOwnerInventoryReader(input.merchantId, input.readExactProduct) } : {}),

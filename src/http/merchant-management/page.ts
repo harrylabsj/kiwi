@@ -1148,6 +1148,8 @@ var views = {
       '<p class="muted">扫码确认后，只有配对的店主可以与 Kiwi 对话。微信不发送买家消息，也不批准正式操作。</p>' +
       (WEIXIN_ONLY ? '' : '<p><a href="/merchant/weixin">打开手机配对与授权页</a></p>') +
       '<div id="weixin-panel"><p role="status">正在读取连接状态…</p></div></div>' +
+      (WEIXIN_ONLY ? '' : '<section class="card" id="weixin-model-settings"><h2>店主微信对话模型</h2>' +
+        '<div id="weixin-model-form-area"><p role="status">正在读取模型配置…</p></div></section>') +
       (WEIXIN_ONLY ? '<section class="card" id="weixin-mobile-drafts" hidden><h2>草稿</h2>' +
         '<p>只有登录后的店主能在本页查看草稿。保存或放弃都不会向买家发送消息。</p>' +
         '<button type="button" class="act" id="weixin-draft-refresh">刷新草稿</button>' +
@@ -1975,6 +1977,71 @@ function mountWeixin(sequence) {
   var rulesLoaded = false;
   function active() { return current === "weixin" && sequence === viewSequence; }
   function problem(e) { if (active()) bar(e.message, true); }
+  function renderModelSettings(settings) {
+    if (!active()) return;
+    var area = $("weixin-model-form-area");
+    if (!area) return;
+    area.innerHTML = '<p>通过 Pi 调用所选服务商。测试使用两条合成消息，可能消耗模型额度。</p>' +
+      (settings.provider ? '<p>当前模型：' + esc(settings.provider) + ' / ' + esc(settings.model) +
+        (settings.active ? '（已装配）' : '（未启用或缺少密钥）') + '</p>' : '<p>当前未配置模型。</p>') +
+      (!settings.editable ? '<p>部署设置已停用此功能。</p>' : '<form id="weixin-model-form">' +
+        '<p><label>服务商 <select id="weixin-model-provider" required>' + settings.providers.map(function (p) {
+          return '<option value="' + esc(p.id) + '"' + (p.id === settings.provider ? ' selected' : '') +
+            '>' + esc(p.label) + '</option>';
+        }).join("") + '</select></label></p>' +
+        '<p><label>模型 ID <input id="weixin-model-id" type="text" required maxlength="128" value="' +
+        esc(settings.model || "") + '"></label></p>' +
+        '<p><label>API Key <input id="weixin-model-credential" type="password" maxlength="2048" autocomplete="new-password"></label></p>' +
+        '<p id="weixin-model-key" class="muted"></p>' +
+        '<button id="weixin-model-save" class="act primary" type="submit">测试并保存</button>' +
+        '<p id="weixin-model-result" role="status"></p></form>');
+    if (!settings.editable) return;
+    var form = $("weixin-model-form");
+    var provider = $("weixin-model-provider");
+    var model = $("weixin-model-id");
+    var key = $("weixin-model-credential");
+    var save = $("weixin-model-save");
+    var result = $("weixin-model-result");
+    function updateCredential() {
+      var alreadySaved = settings.credential_saved && provider.value === settings.provider;
+      key.required = !alreadySaved;
+      $("weixin-model-key").textContent = alreadySaved ? "已保存本商家的密钥，留空可继续使用。" :
+        "请填写本商家在所选服务商申请的密钥。密钥将加密保存在当前实例。";
+    }
+    provider.onchange = function () {
+      model.value = provider.value === settings.provider ? settings.model || "" : "";
+      key.value = "";
+      updateCredential();
+    };
+    updateCredential();
+    form.onsubmit = function (event) {
+      event.preventDefault();
+      if (save.disabled) return;
+      var input = { provider: provider.value, model: model.value.trim() };
+      if (!input.model || (key.required && !key.value.trim())) return;
+      if (key.value.trim()) input.credential = key.value.trim();
+      key.value = "";
+      save.disabled = true;
+      provider.disabled = true;
+      model.disabled = true;
+      key.disabled = true;
+      result.textContent = "正在通过 Pi 测试模型…";
+      call("POST", endpoint + "/model", input).then(function (next) {
+        if (!active()) return;
+        renderModelSettings(next);
+        $("weixin-model-result").textContent = "测试通过，配置已保存。可在上方核对微信模型授权。";
+        if (!qr && !busy) reset();
+      }).catch(function (error) {
+        if (!active()) return;
+        result.textContent = error.message;
+        provider.disabled = false;
+        model.disabled = false;
+        key.disabled = false;
+        save.disabled = false;
+        updateCredential();
+      });
+    };
+  }
   function ownerAction(action, prompt, fields) {
     if (prompt && !window.confirm(prompt)) return;
     call("POST", endpoint + "/" + action, fields || {}).then(function () {
@@ -2225,8 +2292,9 @@ function mountWeixin(sequence) {
       if (!active() || qr || busy) return;
       var state = connection.status;
       var conversation = connection.conversation;
-      if (state !== previousState) {
-        previousState = state;
+      var displayState = state + ":" + Boolean(conversation && conversation.enabled);
+      if (displayState !== previousState) {
+        previousState = displayState;
         var labels = {
           disconnected: "未连接", checking: "扫码已确认，正在检查微信连接…",
           connected: "已连接。可以在微信里向机器人发送 /ping 验证收发。",
@@ -2368,6 +2436,11 @@ function mountWeixin(sequence) {
       problem(e);
       if (body.verify_code) $("weixin-submit-code").disabled = false;
       else reset();
+    });
+  }
+  if (!WEIXIN_ONLY) {
+    call("GET", endpoint + "/model").then(renderModelSettings).catch(function (error) {
+      if (active()) $("weixin-model-form-area").textContent = error.message;
     });
   }
   updateStatus();

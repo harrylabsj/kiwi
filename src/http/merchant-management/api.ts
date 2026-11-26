@@ -856,6 +856,19 @@ export function createMerchantManagementApiHandler(
         writeJson(res, 200, channel.followupPreference(owner));
         return;
       }
+      if (action === "model") {
+        const headers = { "cache-control": "no-store" };
+        if (method === "GET") {
+          writeJson(res, 200, channel.modelStatus(owner), headers);
+          return;
+        }
+        if (method !== "POST") throw new ManagementError("not_found", "微信通道路由不存在。");
+        assertWriteGuards(req, auth.sessionId);
+        const body = objectFields(await readJsonBody(req, 8192), ["provider", "model", "credential"]);
+        const result = await channel.setModel(owner, { provider: body.provider, model: body.model, apiKey: body.credential });
+        writeJson(res, 200, result, headers);
+        return;
+      }
       if (method === "GET" && action === "reply-drafts") {
         writeJson(res, 200, { items: channel.replyDrafts(owner) });
         return;

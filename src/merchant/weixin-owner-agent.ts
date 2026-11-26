@@ -130,3 +130,21 @@ export function createWeixinOwnerDecider(input: { model: Model<Api>; streamFn: S
     }
   };
 }
+
+/** 两次有界合成探测；不读账本、不读微信、不执行返回的工具。 */
+export async function probeWeixinOwnerAgent(agent: Extract<WeixinOwnerAgent, { state: "configured" }>): Promise<string | undefined> {
+  const signal = AbortSignal.timeout(55_000);
+  try {
+    const text = await agent.decide({ text: "这是合成测试。只用文本回一句你好。", history: [] }, signal);
+    if (text.kind !== "reply") return "text_reply_missing";
+    const tool = await agent.decide({ text: "这是合成测试。请查询当前待跟进的询价清单。", history: [] }, signal);
+    return tool.kind === "list" ? undefined : "tool_call_missing";
+  } catch (error) {
+    // 不向终端反射上游返回的内容、认证头或未脱敏错误。
+    const code = (error as { code?: string } | null)?.code;
+    if (code === "deadline" || signal.aborted) return "timeout";
+    if (code === "unavailable") return "missing_credential";
+    if (code === "invalid_response" || code === "quota_exhausted" || code === "rate_limited" || code === "outcome_unknown") return code;
+    return "provider_error";
+  }
+}

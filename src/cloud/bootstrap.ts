@@ -53,7 +53,7 @@ import { loadProfile, ProfileError } from "../config/profile.js";
 import { createMerchantManagementApiHandler } from "../http/merchant-management/api.js";
 import { MerchantWeixinChannel } from "../merchant/weixin-channel.js";
 import { createWorkbenchWeixinOwnerOptions } from "../merchant/weixin-owner-source.js";
-import { configuredWeixinOwnerAgent } from "../merchant/weixin-owner-agent-profile.js";
+import { WeixinOwnerModelSettings } from "../merchant/weixin-owner-model-settings.js";
 import { createMerchantFeedApiHandler } from "../http/merchant-feed-api.js";
 import { createMerchantFollowApiHandler } from "../http/merchant-follow-api.js";
 import { createMerchantEngagementApiHandler } from "../http/merchant-engagement-api.js";
@@ -808,14 +808,14 @@ export async function bootstrapCloudRuntime(
   const productsFilePath = config.productsFile;
   const applyPolicyOverride = assembly.service.policyApplier;
   const weixinEnv = options.env ?? process.env;
-  const weixinOwnerAgent = adminOptions === undefined ? undefined : configuredWeixinOwnerAgent(profile, weixinEnv, config.dataDir);
+  const modelSettings = new WeixinOwnerModelSettings(profile, config.dataDir, weixinEnv);
   const weixinChannel = adminOptions === undefined ? undefined : new MerchantWeixinChannel({
     dataDir: config.dataDir,
     merchantId: profile.owner_id,
+    modelSettings,
     conversation: createWorkbenchWeixinOwnerOptions({
       flag: weixinEnv.KIWI_WEIXIN_OWNER_PREVIEW,
-      replyFlag: weixinEnv.KIWI_WEIXIN_OWNER_REPLIES,
-      ...(weixinOwnerAgent === undefined ? {} : { agent: weixinOwnerAgent }),
+      modelSettings,
       dataDir: config.dataDir,
       adminDir: adminOptions.adminDir,
       merchantId: profile.owner_id,
