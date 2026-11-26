@@ -76,7 +76,15 @@ export interface ApprovalPage {
 
 /** BD §13.2 的最小公开商品投影（成本/底价在私有策略区，绝不经此通道）。 */
 export interface MerchantProductProjection {
+  /** Authenticated workbench facts, never copied into public listings. */
+  category?: string | null;
+  stock?: number | null;
+  supply_note?: string | null;
+  public_details?: Record<string, string>;
+  test?: boolean;
+
   /** Public marketplace product page; never evidence of payment or negotiated price. */
+  trade_platform_label?: string;
   trade_platform?: MarketplaceTradePlatform;
   platform_product_id?: string;
   platform_product_url?: string;

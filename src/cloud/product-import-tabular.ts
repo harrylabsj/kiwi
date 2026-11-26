@@ -1149,6 +1149,8 @@ export interface TabularImportResult {
 }
 
 export interface TabularImportOptions {
+  /** Workbench imports require explicit inventory; legacy source readers may retain unknown stock. */
+  requireStock?: boolean;
   /** 运行实例租户 id（写入 runtime_owner_id；Catalog 确认后的 merchant_id 由
    *  import-drafts 的服务端 prepareTable 注入，转换层不猜、不采信上传方）。 */
   merchantId: string;
@@ -1270,7 +1272,8 @@ export function convertTabularImport(
   // 必需列检查（缺价格单独点名，其余列出一并报）。
   const present = new Set(columnField.filter((field): field is TabularField => field !== undefined));
   for (const spec of TABULAR_FIELDS) {
-    if (spec.required && !present.has(spec.field)) {
+    const required = spec.required || (spec.field === "stock" && options.requireStock === true);
+    if (required && !present.has(spec.field)) {
       const label = spec.field === "price" ? "单价/价格" : `${spec.zh}（${spec.field}）`;
       errors.push({
         field: spec.field,
@@ -1278,7 +1281,7 @@ export function convertTabularImport(
         message: `表头缺少必需列：${label}。请按导入模板补齐后再导入（模板可在工作台「商品与导入」页下载）。`,
       });
     }
-    if (!spec.required && !present.has(spec.field)) {
+    if (!required && !present.has(spec.field)) {
       report.defaulted_fields.push(spec.field);
     }
   }
@@ -1447,14 +1450,16 @@ export function convertTabularImport(
 
     const stockRaw = cellOf(row, "stock");
     let stock: number | undefined;
-    if (stockRaw !== "") {
+    if (stockRaw === "" && options.requireStock === true) {
+      errors.push({ row: rowNumber, field: "stock", code: "MISSING_VALUE", message: `第 ${rowNumber} 行缺少必填信息：库存，请填写真实可供数量（0 表示无库存）` });
+    } else if (stockRaw !== "") {
       const parsed = parseCellNumber(stockRaw);
       if (Number.isNaN(parsed) || !Number.isInteger(parsed) || parsed < 0) {
         errors.push({
           row: rowNumber,
           field: "stock",
           code: "BAD_NUMBER",
-          message: `第 ${rowNumber} 行库存必须是非负整数（收到「${stockRaw}」）；不确定就留空，不要填 0 冒充`,
+          message: `第 ${rowNumber} 行库存必须是非负整数（收到「${stockRaw}」）；请填写真实可供数量，0 表示无库存`,
         });
       } else {
         stock = parsed;

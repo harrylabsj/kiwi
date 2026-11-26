@@ -55,6 +55,7 @@ import {
   FileListingPublicationError,
   type createFileListingPublicationService,
 } from "../../cloud/file-listing-publication.js";
+import { toMinorUnits } from "../../protocol/legacy-shopping-negotiation/money.js";
 import {
   parseProductTable,
   ProductTableError,
@@ -1226,6 +1227,10 @@ export function createMerchantManagementApiHandler(
         merchant_name: options.merchantName ?? null,
         merchant_name_needs_update: options.merchantNameNeedsUpdate === true,
       }, { "x-request-id": requestId });
+      return;
+    }
+    if (rest === "/products/edit-state") {
+      await getProductEditState(req, res, url);
       return;
     }
     if (rest === "/products") {
@@ -3594,6 +3599,10 @@ export function createMerchantManagementApiHandler(
       writeJson(res, 200, await readService.getStatus(auth.ctx));
       return;
     }
+    if (rest === "/products/edit-state") {
+      await getProductEditState(req, res, url);
+      return;
+    }
     if (rest === "/products") {
       const auth = requireActor(req);
       // 列表里的成交链接要按运营当前规则生成；catalog 不可达时保留上次快照。
@@ -4661,6 +4670,24 @@ export function createMerchantManagementApiHandler(
     }
   }
 
+  /** A tenant-bound editable snapshot. Imports reuse its CAS digest and original SKU. */
+  async function getProductEditState(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    const auth = requireActor(req);
+    authorizeOrThrow(auth.ctx, "products:import");
+    const channel = options.productsImport;
+    if (channel === undefined) throw new ManagementError("unavailable", "product import storage is not configured");
+    const sku = requireString(url.searchParams.get("sku"), "sku");
+    const snapshot = channel.currentTable();
+    const record = snapshot.records.find((item) => item.sku === sku);
+    if (record === undefined) throw new ManagementError("not_found", "商品不存在，请刷新列表");
+    writeJson(res, 200, {
+      base_digest: snapshot.digest,
+      platforms: (await resolvePlatformRules(options)).map(({ id, label }) => ({ id, label })),
+      table: { schema_version: "0.1.2", runtime_owner_id: options.merchantId,
+        source: "merchant_upload", generated_at: now().toISOString(), products: [record] },
+    });
+  }
+
   // ── 商品导入（BD §10.1：校验预览 → 确认提交；全批成功或全批不变）────────
 
   /**
@@ -4684,7 +4711,30 @@ export function createMerchantManagementApiHandler(
       // 导入预览/提交都用运营规则校验平台与链接；规则来自 TTL 缓存（成功后最多
       // 30s 陈旧、失败后 10s 不重试），不是进程启动快照，也不保证每次实时。
       const platformRules = await options.marketplacePlatforms?.();
+      const rawTable = fields["table"] as { products?: unknown[] } | undefined;
+      if (Array.isArray(rawTable?.products)) {
+        const missing = rawTable.products.flatMap((item, index) => {
+          const record = item as Record<string, unknown> | null;
+          if (record === null || typeof record !== "object") return [];
+          const fields = [
+            ...(typeof record["title"] !== "string" || !record["title"].trim() ? ["商品名"] : []),
+            ...(record["price"] === undefined || record["price"] === null || record["price"] === "" ? ["价格"] : []),
+            ...(record["stock"] === undefined || record["stock"] === null || record["stock"] === "" ? ["库存"] : []),
+          ];
+          return fields.length ? [`第 ${index + 1} 行缺少必填信息：${fields.join("、")}`] : [];
+        });
+        if (missing.length) throw new ProductTableError("PRODUCT_TABLE_INVALID", missing.join("；"));
+      }
       table = parseProductTable(fields["table"], "request body", platformRules);
+      for (const [index, record] of table.products.entries()) {
+        const price = toMinorUnits(record.price, 2);
+        if (!price.lossless || !Number.isSafeInteger(price.amount_minor)) {
+          throw new ProductTableError("PRODUCT_TABLE_INVALID", `第 ${index + 1} 行价格须为可精确表示的两位小数，不能自动舍入`);
+        }
+        if (!Number.isSafeInteger(record.stock)) {
+          throw new ProductTableError("PRODUCT_TABLE_INVALID", `第 ${index + 1} 行库存须为安全范围内的非负整数`);
+        }
+      }
       table = await importChannel.prepareTable?.(table) ?? table;
     } catch (err) {
       if (err instanceof ProductTableError) {
@@ -4728,6 +4778,7 @@ export function createMerchantManagementApiHandler(
         : previousRevision;
       incomingBySku.set(record.sku, {
         ...product,
+        ...(product.category === undefined && previous?.category !== undefined ? { category: previous.category } : {}),
         ...(details === undefined ? {} : { public_details: details }),
         ...(revision === undefined ? {} : { public_details_revision: revision }),
       });
@@ -4815,6 +4866,7 @@ export function createMerchantManagementApiHandler(
         : { kind: "xlsx", bytes: new Uint8Array(buffer) },
       {
         merchantId: options.merchantId,
+        requireStock: true,
         platformRules: await resolvePlatformRules(options),
         now: () => now(),
       },
@@ -5355,6 +5407,7 @@ function isKnownPath(rest: string): boolean {
     rest === "/confirmations" ||
     rest === "/service/pause" ||
     rest === "/service/resume" ||
+    rest === "/products/edit-state" ||
     rest === "/products/import-drafts" ||
     rest === "/products/import-parse" ||
     rest === "/products/import-template" ||

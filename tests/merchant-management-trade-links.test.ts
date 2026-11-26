@@ -51,12 +51,12 @@ it("actual file authority → bootstrap management API projection → working pa
   try {
     const file = path.join(dir, "products.json");
     fs.writeFileSync(file, JSON.stringify({schema_version:"0.1.2",runtime_owner_id:"ui-owner",source:"merchant_upload",generated_at:"2026-10-12T00:00:00Z",products:[{
-      sku:"T-1",title:"Projection sample",currency:"CNY",unit:"piece",price:1,updated_at:"2026-10-12T00:00:00Z",valid_until:"2099-01-01T00:00:00Z",status:"active",trade_platform:"京东",platform_product_id:"100301440825",supply_note:"PRIVATE-NOTE-NOT-FOR-PROJECTION",
+      sku:"T-1",title:"Projection sample",currency:"CNY",unit:"piece",price:1,updated_at:"2026-10-12T00:00:00Z",valid_until:"2099-01-01T00:00:00Z",status:"active",trade_platform:"京东",platform_product_id:"100301440825",supply_note:"商家供货说明",
     }]}), {mode:0o600});
     const record = createFileProductSource({file,merchantId:"ui-owner"}).list()[0]!;
     const item = projectFileProductRecord(record, Date.parse("2026-10-12T00:00:00Z"));
     expect(item).toMatchObject({trade_platform:"jd",platform_product_id:"100301440825",platform_product_url:"https://item.jd.com/100301440825.html"});
-    expect(JSON.stringify(item)).not.toContain("PRIVATE-NOTE");
+    expect(item).toMatchObject({ stock: null, supply_note: "商家供货说明", public_details: {}, test: false });
     const html = await productView([item as unknown as Record<string,unknown>]);
     expect(html).toContain('href="https://item.jd.com/100301440825.html"');
     expect(html).toContain("京东");

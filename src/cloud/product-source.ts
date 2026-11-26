@@ -47,6 +47,8 @@ export const PRODUCT_TABLE_SCHEMA_VERSION = "0.1.2";
 
 export interface CloudProductRecord {
   sku: string;
+  /** Workbench category retained locally for explicit gateway publication. */
+  category?: string;
   /** 公开名称。 */
   title: string;
   currency: string;
@@ -213,6 +215,9 @@ export function parseProductTable(
       }
       throw error;
     }
+    if (record["category"] !== undefined && (typeof record["category"] !== "string" || record["category"].length > 120 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(record["category"]))) {
+      throw new ProductTableError("PRODUCT_TABLE_INVALID", `products[${index}].category 须为不超过120字的单行类目`);
+    }
     const details = Object.hasOwn(record, "public_details")
       ? parsePublicDetails(record["public_details"], `products[${index}].public_details`) : undefined;
     const detailsRevision = record["public_details_revision"];
@@ -222,6 +227,7 @@ export function parseProductTable(
     return {
       sku: requireString(record["sku"], `products[${index}].sku`),
       title: requireString(record["title"], `products[${index}].title`),
+      ...(typeof record["category"] === "string" ? { category: record["category"].trim() } : {}),
       currency: requireString(record["currency"], `products[${index}].currency`),
       unit: requireString(record["unit"], `products[${index}].unit`),
       price,
