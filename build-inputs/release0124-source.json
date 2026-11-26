@@ -246,7 +246,7 @@
     },
     {
       "path": "build-inputs/release-acceptance.json",
-      "sha256": "sha256:d9603362bbd18981356d16aaf864a98d8b5458a3f7eeebe9c91a6615991d8f7b"
+      "sha256": "sha256:bab7050551bcf4e2b3b5757be156751c0dd273eb16ade0ee61c7f6456e33afcd"
     },
     {
       "path": "build-inputs/release0124-npm12-payload.json",
