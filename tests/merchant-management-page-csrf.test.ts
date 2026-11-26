@@ -157,7 +157,10 @@ describe("merchant workbench view lifecycle", () => {
   it("loads and saves the selected owner model from the Weixin view", async () => {
     const elements: Record<string, Element> = {};
     const calls: unknown[] = [];
-    const providers = [{ id: "dashscope", label: "通义千问" }];
+    const providers = [
+      { id: "deepseek", label: "DeepSeek", endpoint: "https://api.deepseek.com/v1" },
+      { id: "dashscope", label: "通义千问", endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1" },
+    ];
     const context = createPageContext(elements, async (path, init) => {
       switch (path) {
         case "/merchant/api/session":
@@ -180,9 +183,12 @@ describe("merchant workbench view lifecycle", () => {
     runInContext('current = "weixin"; refresh();', context);
     await eventually(() => elements["weixin-model-form-area"]?.innerHTML.includes("测试并保存") === true);
     expect(elements["weixin-model-form-area"]!.innerHTML).toContain("通义千问");
+    runInContext(`$("weixin-model-provider").value = "deepseek"; $("weixin-model-provider").onchange();`, context);
+    expect(elements["weixin-model-endpoint"]?.textContent).toBe(providers[0]!.endpoint);
     runInContext(`$("weixin-model-provider").value = "dashscope";
-      $("weixin-model-provider").onchange();
-      $("weixin-model-id").value = "qwen-plus";
+      $("weixin-model-provider").onchange();`, context);
+    expect(elements["weixin-model-endpoint"]?.textContent).toBe(providers[1]!.endpoint);
+    runInContext(`$("weixin-model-id").value = "qwen-plus";
       $("weixin-model-credential").value = "merchant-fixture-secret";
       $("weixin-model-form").onsubmit({ preventDefault: function () {} });`, context);
     await eventually(() => elements["weixin-model-result"]?.textContent.includes("配置已保存") === true);

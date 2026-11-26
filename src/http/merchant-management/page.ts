@@ -1989,6 +1989,7 @@ function mountWeixin(sequence) {
           return '<option value="' + esc(p.id) + '"' + (p.id === settings.provider ? ' selected' : '') +
             '>' + esc(p.label) + '</option>';
         }).join("") + '</select></label></p>' +
+        '<p>访问地址（Base URL）：<code id="weixin-model-endpoint"></code></p>' +
         '<p><label>模型 ID <input id="weixin-model-id" type="text" required maxlength="128" value="' +
         esc(settings.model || "") + '"></label></p>' +
         '<p><label>API Key <input id="weixin-model-credential" type="password" maxlength="2048" autocomplete="new-password"></label></p>' +
@@ -2002,7 +2003,9 @@ function mountWeixin(sequence) {
     var key = $("weixin-model-credential");
     var save = $("weixin-model-save");
     var result = $("weixin-model-result");
-    function updateCredential() {
+    function updateProviderFields() {
+      var service = settings.providers.find(function (p) { return p.id === provider.value; });
+      $("weixin-model-endpoint").textContent = service ? service.endpoint : "—";
       var alreadySaved = settings.credential_saved && provider.value === settings.provider;
       key.required = !alreadySaved;
       $("weixin-model-key").textContent = alreadySaved ? "已保存本商家的密钥，留空可继续使用。" :
@@ -2011,9 +2014,9 @@ function mountWeixin(sequence) {
     provider.onchange = function () {
       model.value = provider.value === settings.provider ? settings.model || "" : "";
       key.value = "";
-      updateCredential();
+      updateProviderFields();
     };
-    updateCredential();
+    updateProviderFields();
     form.onsubmit = function (event) {
       event.preventDefault();
       if (save.disabled) return;
@@ -2038,7 +2041,7 @@ function mountWeixin(sequence) {
         model.disabled = false;
         key.disabled = false;
         save.disabled = false;
-        updateCredential();
+        updateProviderFields();
       });
     };
   }
