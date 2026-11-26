@@ -179,6 +179,17 @@ describe("persisted owner follow-up", () => {
     expect(send2.mock.calls[0]?.[0].text).toContain("未接入按时间的咨询统计来源");
   });
 
+  it("answers unsupported requests with an explicit scope statement instead of a substituted query", async () => {
+    const c = open(undefined, undefined, { replyToOwner: true });
+    c.bind(principal, scope);
+    const send = vi.fn(async (_input: { text: string; context: string }) => {});
+    admit(c, message("u1", "帮我看看上个月的销售趋势怎么样"));
+    await c.process(scope, signal, send);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]?.[0].text).toContain("超出了我目前能核实的范围");
+    expect(send.mock.calls[0]?.[0].text).not.toMatch(/\d+ 笔/);
+  });
+
   it("reports the pending count but lists only the top three and can repeat it in natural language", async () => {
     data.push({ id: "inquiry-d", version: "v1", receivedAt: now - 100 });
     const c = open(undefined, undefined, { replyToOwner: true });
