@@ -6,13 +6,24 @@
 
 | 平台 | 产品 | 已确认版本 | 证据与限制 |
 |---|---|---:|---|
-| npm | `@harrylabsj/kiwi` | 0.12.38 | 2026-11-26 portfolio run [45747373686](https://github.com/harrylabsj/kiwi/actions/runs/45747373686) 发布；发布后下载 tarball 核验 SHA-1（`f517b7d4…`）与发布日志、registry 元数据三方一致，且与 dry-run 候选制品逐字节相同。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi/v/0.12.38)。 |
-| npm | `@harrylabsj/kiwi-merchant-cloud` | 0.12.38 | 2026-11-26 同一 portfolio run 发布；下载 tarball 核验 SHA-1（`427f343f…`）与发布日志一致。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-merchant-cloud/v/0.12.38)。 |
+| npm | `@harrylabsj/kiwi` | 0.12.39 | 2026-11-26 portfolio run [45757093506](https://github.com/harrylabsj/kiwi/actions/runs/45757093506) 发布；下载 tarball 核验 SHA-1（`fe54c260…`）与发布日志、registry 元数据三方一致，与 dry-run 候选制品逐字节相同。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi/v/0.12.39)。 |
+| npm | `@harrylabsj/kiwi-merchant-cloud` | 0.12.39 | 2026-11-26 同一 portfolio run 发布；下载 tarball 核验 SHA-1（`08de0e69…`）与发布日志一致。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-merchant-cloud/v/0.12.39)。 |
 | npm | `@harrylabsj/kiwi-dsh-plugin` | 0.1.4 | 2026-11-11 portfolio run 发布并回读核验；npm 可查 0.1.4。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-dsh-plugin/v/0.1.4)。 |
 | PyPI | `kiwi-catalog` | 0.5.30 | 2026-11-25 portfolio run [45617840510](https://github.com/harrylabsj/kiwi/actions/runs/45617840510) 发布，手工回读 PyPI latest=0.5.30 并干净安装核验；**生产 kiwi-hk 已于同日部署 0.5.30 + admin 0.2.28（whl sha256 与 PyPI 逐字节一致），schema user_version=60 无变更**。[PyPI 版本页](https://pypi.org/project/kiwi-catalog/0.5.30/)。 |
 | PyPI | `shopping-cli` | 3.2.12 | 2026-11-25 回读 PyPI latest=3.2.12（发布链路见当日晚间其他会话记录，本台账只确认 registry 状态）。[PyPI 版本页](https://pypi.org/project/shopping-cli/3.2.12/)。 |
 
-上表确认指定版本可查，不声称它们必然仍是 registry 当前 latest（2026-11-26 已确认 `@harrylabsj/kiwi` latest=0.12.38、`@harrylabsj/kiwi-merchant-cloud` latest=0.12.38、`kiwi-catalog` latest=0.5.30、`shopping-cli` latest=3.2.12）。`kiwi-catalog-admin` 0.2.18 已推送私有 tag `v0.2.18`，并作为生产 catalog 的扩展安装；它不是公开 registry 制品。
+上表确认指定版本可查，不声称它们必然仍是 registry 当前 latest（2026-11-26 已确认 `@harrylabsj/kiwi` latest=0.12.39、`@harrylabsj/kiwi-merchant-cloud` latest=0.12.39、`kiwi-catalog` latest=0.5.30、`shopping-cli` latest=3.2.12）。`kiwi-catalog-admin` 0.2.18 已推送私有 tag `v0.2.18`，并作为生产 catalog 的扩展安装；它不是公开 registry 制品。
+
+## 2026-11-26 kiwi 0.12.39 发布与生产部署（店主对话区间统计 + 范围诚实声明）
+
+- 动因：0.12.38 线上实测暴露两点——「过去 7 天有没有来咨询的客户」无数据源（被模型套进 today 桶答非所问）；店主确立产品原则「意图理解必须精确，能力达不到要明确告知」。
+- 内容：#239 店主对话区间/今日统计（`OwnerInquirySource.rangeStats(since)` 计数数据源，A2A 账本按链路计：区间内最后买家入站落进范围数 + 其中待回复数；模型仍只做意图分类，计数本机渲染、不进模型上下文；「今天」按对话时区本地零点；days 1-30 必须店主明确给出）；#242 范围诚实声明（模型 SYSTEM 禁止套用不相干动作顶替，规则兜底回复先明示「超出能核实的范围、未执行查询」再列能力）。
+- 发布源：main `e5c492cb`（#239、#242、#241 候选、#243 合同刷新、#244 验收回执）；catalog `11c12bd`、shopping-cli 3.2.12 未变、未重发。
+- GitHub run：dry-run [45753388729](https://github.com/harrylabsj/kiwi/actions/runs/45753388729)（候选）、复核 dry-run [45755840702](https://github.com/harrylabsj/kiwi/actions/runs/45755840702)、发布 [45757093506](https://github.com/harrylabsj/kiwi/actions/runs/45757093506)（channels=`npm,merchant-cloud`，经 `kiwi-release` 保护环境人工审批）。
+- registry 回读（2026-11-26，手工）：npm kiwi/merchant-cloud latest=0.12.39；下载 tarball 复算 SHA-1 与发布日志、registry 元数据三方一致（kiwi `fe54c260…`、merchant-cloud `08de0e69…`）；dry-run 候选与正式制品逐字节相同。`verify-registry` job 仍 skipped（已知缺陷未修）。
+- 候选验证（kiwi-hk，2026-11-26 12:22 北京时间）：候选 `f5e426b2`（sha1 `fe54c260…`）部署 runtime+workbench；端到端验收通过（非约束 `agreement-01a2161a-c754-7322-aefe-5b732c17f998`）。部署前快照 `backups/pre-0.12.39-candidate-20261126-122250.tgz`。
+- 正式部署（kiwi-hk，2026-11-26 13:06 北京时间）：官方 tarball 建 `releases/kiwi-0.12.39-20261126-130654` 与 `kiwi-0.12.39-workbench-20261126-130654`，drop-in 由 candidate 改指正式目录（旧 conf `.disabled-20261126-130654` 可回滚）；部署前快照 `backups/pre-0.12.39-final-20261126-130654.tgz`。验证：两服务 active、agent-card 200、`/merchant/` 200、重启后日志零错误。微信区间统计实测待店主确认。
+- 未做：`verify-registry` needs/`always()` 缺陷未修；冻源前置进 PR CI 未做；模型默认开启产品化未排期；`PROVIDER_BASE_URL[deepseek]` 与门禁端点不一致未修（profile 层 `/v1` 规避在位）。
 
 ## 2026-11-26 kiwi 0.12.38 发布与生产部署（微信「只回第一条」修复）
 
