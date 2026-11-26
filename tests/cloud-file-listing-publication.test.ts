@@ -26,6 +26,8 @@ import { publicKeyThumbprint, jwkThumbprint } from "../src/trust/binding/thumbpr
 import {
   createFileListingPublicationService,
 } from "../src/cloud/file-listing-publication.js";
+import { createFileProductSource } from "../src/cloud/product-source.js";
+import { findFileProductQaSku, readPublishedCloudProduct } from "../src/cloud/public-product-qa.js";
 import type { AgentProfile } from "../src/config/profile.js";
 import { testProfile, testBuyerProfile } from "./helpers.js";
 import { DatabaseSync } from "node:sqlite";
@@ -308,6 +310,90 @@ function newService(
 const SEL = (sku: string, category = "widgets") => ({ sku, category });
 
 describe("file listing publication core", () => {
+  it("previews and publishes only the merchant's reviewed QA fields for the selected SKU", async () => {
+    const fixture = createFixture();
+    const table = productTable(OWNER);
+    const qa = { overview: "Reusable test cup", features: "Double wall", capacity: "450 mL" };
+    writeFileSync(fixture.productsFile, JSON.stringify({ ...table, products: table.products.map((record) =>
+      record.sku === "SKU-A" ? { ...record, public_details: qa } : record) }));
+    const service = newService(fixture);
+    const preview = await service.preview([SEL("SKU-A"), SEL("SKU-B")]);
+    expect(fixture.stub.publishCalls).toHaveLength(0);
+    expect(preview.items[0]?.listing).toMatchObject({ source_product_ref: "SKU-A", summary: qa.overview,
+      attributes: { features: qa.features, capacity: qa.capacity } });
+    expect(preview.items[1]?.listing).not.toHaveProperty("attributes");
+    expect(JSON.stringify(preview)).not.toContain(NOTE_MARKER);
+    await expect(service.commit(preview.draft_id, preview.digest)).resolves.toMatchObject({ status: "succeeded" });
+    expect(fixture.stub.publishCalls[0]?.body).toEqual(preview.items[0]?.listing);
+    const again = await service.preview([SEL("SKU-A")]);
+    expect(again.items[0]?.listing).toMatchObject({ summary: qa.overview, attributes: { features: qa.features, capacity: qa.capacity } });
+    const setDetails = (value: object, revision?: string) => writeFileSync(fixture.productsFile, JSON.stringify({
+      ...table, products: table.products.map((record) => record.sku === "SKU-A" ? {
+        ...record, public_details: value, ...(revision === undefined ? {} : { public_details_revision: revision }),
+      } : record),
+    }));
+    setDetails({}, `sha256:${"a".repeat(64)}`);
+    await expect(service.commit(again.draft_id, again.digest)).rejects.toMatchObject({ code: "PRODUCTS_CHANGED" });
+    const cleared = await service.preview([SEL("SKU-A")]);
+    expect(cleared.items[0]?.listing).toMatchObject({ summary: "", attributes: {} });
+    expect(fixture.stub.publishCalls).toHaveLength(2);
+    await expect(service.commit(cleared.draft_id, cleared.digest)).resolves.toMatchObject({ status: "succeeded" });
+    expect(fixture.stub.publishCalls[2]?.body).toEqual(cleared.items[0]?.listing);
+    setDetails(qa, `sha256:${"b".repeat(64)}`);
+    const restored = await service.preview([SEL("SKU-A")]);
+    expect(restored.items[0]?.idempotency_key).not.toBe(preview.items[0]?.idempotency_key);
+    expect(restored.items[0]?.listing).toMatchObject({ summary: qa.overview, attributes: { capacity: qa.capacity } });
+    setDetails({ ...qa, stock: 120 });
+    await expect(service.preview([SEL("SKU-A")])).rejects.toMatchObject({ code: "PRODUCT_TABLE_INVALID" });
+  });
+
+  it("reads product QA only from an exact, active and fresh public listing of the signed runtime", async () => {
+    const fixture = createFixture();
+    writeFileSync(fixture.productsFile, JSON.stringify({ ...productTable(OWNER), merchant_id: MERCHANT }));
+    const source = createFileProductSource({ file: fixture.productsFile, merchantId: OWNER });
+    expect(findFileProductQaSku(source, "Widget Alpha 的材质是什么？")).toBe("SKU-A");
+    expect(findFileProductQaSku(source, "Widget Alpha 和 Widget Beta 的材质是什么？")).toBeUndefined();
+    expect(findFileProductQaSku(source, "Widget Paused 的材质是什么？")).toBeUndefined();
+    const listing = {
+      listing_id: "lst_qa_1", listing_type: "product", source_product_ref: "SKU-A",
+      owner_agent_id: CATALOG_AGENT, merchant_id: MERCHANT, title: "Published Alpha", category: "widgets",
+      summary: "Published introduction", attributes: { material: "Aluminum", private_note: NOTE_MARKER },
+      listing_digest: "fixture-digest", publication_state: "ACTIVE", listing_freshness_state: "FRESH",
+      published_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-01T00:00:00Z", fresh_until: "2030-01-01T00:00:00Z",
+    };
+    const row = (patch: Record<string, unknown> = {}) => ({
+      listing: { ...listing, ...patch },
+      merchant: { merchant_id: MERCHANT, display_name: "Fixture Merchant" },
+      agent: { catalog_agent_id: CATALOG_AGENT, verification_level: "commerce_verified", freshness_state: "fresh", administrative_state: "active" },
+      listing_freshness_state: "FRESH", authority: "discovery_projection", requires_direct_confirmation: true,
+    });
+    let results = [row()];
+    const read = readPublishedCloudProduct({
+      profile: fixture.profile, dataDir: fixture.dataDir, publicOrigin: ORIGIN, catalogUrl: CATALOG, source,
+      fetchImpl: async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname !== "/v1/listings/search") return fixture.fetchImpl(input, init);
+        expect(url.searchParams.get("q")).toBe("SKU-A");
+        expect(url.searchParams.get("merchant_id")).toBe(MERCHANT);
+        expect(url.searchParams.get("owner_agent_id")).toBe(CATALOG_AGENT);
+        expect(new Headers(init?.headers).has("authorization")).toBe(false);
+        return Response.json({ results, next_cursor: "" });
+      },
+    });
+    expect(await read("SKU-A")).toEqual({ merchant_id: OWNER, sku: "SKU-A", revision: listing.listing_digest, valid_until: listing.fresh_until,
+      fields: { title: "Published Alpha", overview: "Published introduction", material: "Aluminum" } });
+    for (const unrelated of [
+      row({ source_product_ref: "SKU-AB" }), row({ merchant_id: "other-merchant" }), row({ owner_agent_id: "other-agent" }),
+      row({ publication_state: "SUSPENDED" }), row({ listing_freshness_state: "STALE" }),
+    ]) {
+      results = [unrelated];
+      expect(await read("SKU-A")).toBeUndefined();
+    }
+    results = [];
+    expect(await read("SKU-A")).toBeUndefined();
+    expect(await read("SKU-PAUSED")).toBeUndefined();
+  });
+
   it("价格泄露断言区分 ISO 时间与数值或文本中的价格", () => {
     expect(() => expectNoPriceLeak({ created_at: "2026-11-18T01:57:29.961Z" })).not.toThrow();
     expect(() => expectNoPriceLeak({ nested: [29.9] })).toThrow();

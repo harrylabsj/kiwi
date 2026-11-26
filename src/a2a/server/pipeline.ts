@@ -53,6 +53,7 @@ import {
   schemaInvalid,
 } from "./errors.js";
 import { A2AServerThrottle, domainFromUcpProfile, type ThrottleRequest } from "./throttle.js";
+import { hasBuyerFollowupQuery } from "../../merchant-core/support/buyer-followups.js";
 import { isQuoteHistoryRecall, parseHistoryQueryExtension } from "../../merchant-core/customer-memory/quote-history.js";
 import type { TrustLevel } from "../../trust/identity/trust-policy.js";
 import { isKnownTaskState, newArtifactId, newTaskId, TaskRegistry, type TaskOwner } from "./task-registry.js";
@@ -451,7 +452,8 @@ export class InboundPipeline {
           : contentDigest({ envelope: envelope.digest, metadata: message.metadata } as never);
 
       const privateHistoryRead = envelope.action === "inquiry" &&
-        (parseHistoryQueryExtension((envelope.payload as { subject?: unknown }).subject) !== undefined ||
+        (hasBuyerFollowupQuery((envelope.payload as { subject?: unknown }).subject) ||
+          parseHistoryQueryExtension((envelope.payload as { subject?: unknown }).subject) !== undefined ||
           isQuoteHistoryRecall(envelope.public_message ?? ""));
       const contextFor = (taskId: string): InboundNegotiationContext => ({
         envelope, message, taskId, contextId, senderIdentity,
@@ -636,7 +638,7 @@ export class InboundPipeline {
         // 商家运营统计（可选接缝，仅 merchant 节点注入）：message_received 落账
         // 成功即恰好一次（幂等重放/恢复路径都到不了这里）。统计是本地旁路——
         // 记录失败绝不阻断消息处理，只进服务端日志。
-        if (this.stats !== undefined) {
+        if (this.stats !== undefined && !hasBuyerFollowupQuery((envelope.payload as { subject?: unknown }).subject)) {
           try {
             this.stats.recordBuyerContact({
               message_id: envelope.message_id,

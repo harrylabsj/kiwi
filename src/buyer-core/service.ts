@@ -52,6 +52,8 @@ import type {
   BuyerFollowUpdateGroup,
 } from "../discovery/catalog-source/buyer-follows.js";
 import { McpError } from "./errors.js";
+import type { MerchantReplyExtensions } from "./a2a-merchant-extensions.js";
+import type { BuyerFollowupView } from "./a2a-buyer-followups.js";
 import { assertGenericA2AAcceptTerms, assertGenericA2AAgreement, assertNoAlipayAccept } from "./a2a-accept-terms.js";
 import {
   failedSearchDiagnostics,
@@ -298,11 +300,14 @@ export interface NegotiationStep {
   target_unit_price_minor?: number;
   /** 商家对本次还价的回复（真实文本），供 kiwi_get_task 展示。 */
   reply?: string;
+  /** 非绑定建议与商家事实的历史快照，不参与报价和接受。 */
+  merchant_extensions?: MerchantReplyExtensions & { candidate_id: string };
   /** 商家回复中的最新 offer-like 事实；用于刷新候选条款与 accept 绑定。 */
   merchant_offer?: MerchantOffer;
 }
 
 export interface Negotiator {
+  readFollowup?(candidate: Record<string, unknown>, caseRef: string): Promise<BuyerFollowupView | undefined>;
   recoverNegotiation?(
     intent: Record<string, unknown>, step: NegotiationStep, candidate: Record<string, unknown>, context: ProtocolTaskContext,
   ): Promise<NegotiationStep | undefined>;
@@ -1371,6 +1376,22 @@ export class KiwiBuyerService {
       throw new McpError("task_expired", `task ${taskId} expired at ${task.expires_at}`);
     }
     return { task: this.decodeTask(task) };
+  }
+
+  /** 只查询当前买家已有任务、候选和商家返回的回执；不接受 URL 或新商家。 */
+  async readMerchantFollowup(input: { task_id: string; candidate_id: string; case_ref: string }) {
+    const unavailable = { status: "unavailable" as const };
+    const task = this.taskFor(input.task_id);
+    if (task === undefined || this.negotiator?.readFollowup === undefined || this.policy.actions.clarification?.mode === "never") return unavailable;
+    const candidate = this.store.listCandidates(input.task_id).find((item) => item.candidate_id === input.candidate_id);
+    const allowed = this.policy.limits?.allowed_merchants;
+    if (candidate === undefined || (allowed !== undefined && !allowed.includes(String(candidate.merchant_id)))) return unavailable;
+    const body = this.decodeTask(task);
+    const steps = Array.isArray(body.steps) ? body.steps as NegotiationStep[] : [];
+    const known = steps.some((step) => step.action === "clarification" && step.merchant_extensions?.candidate_id === input.candidate_id &&
+      step.merchant_extensions.product_answers?.some((answer) => answer.followup?.case_ref === input.case_ref));
+    if (!known) return unavailable;
+    return await this.negotiator.readFollowup(candidate as unknown as Record<string, unknown>, input.case_ref) ?? unavailable;
   }
 
   // ---- Northbound：kiwi_negotiate -------------------------------------------

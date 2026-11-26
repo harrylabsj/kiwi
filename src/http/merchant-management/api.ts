@@ -45,6 +45,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { WriteApprovalCandidate } from "../../agent/merchant/action-candidate.js";
 import { MerchantWeixinError, type MerchantWeixinChannel } from "../../merchant/weixin-channel.js";
 import { OwnerConversationError } from "../../merchant/weixin-owner-conversation.js";
+import { BuyerFollowupError, type BuyerFollowups } from "../../merchant-core/support/buyer-followups.js";
 import { ManualSupportError, type ManualSupportService } from "../../merchant-core/support/manual-service.js";
 import type { MerchantPolicy } from "../../config/profile.js";
 import { contentHash } from "../../agent/merchant/action-candidate.js";
@@ -382,6 +383,7 @@ export interface MerchantManagementApiOptions {
   operationsSchedulerAvailable?: () => boolean;
   /** 私有 M0 验收装配显式提供；默认不注册客服路由。 */
   manualSupport?: ManualSupportService;
+  buyerFollowups?: BuyerFollowups;
   /** M6-3 收件人绑定/订阅（P1 管理面；无则路由不存在）。 */
   deliveryConsent?: import("../../merchant-core/customer-delivery/consent-repository.js").DeliveryConsentRepository;
   /** M6 投递记录（UNKNOWN 核对路径；无则路由不存在）。 */
@@ -666,6 +668,10 @@ export function createMerchantManagementApiHandler(
       const rest =
         pathname === WORKBENCH_API_PREFIX ? "/" : pathname.slice(WORKBENCH_API_PREFIX.length);
       try {
+        if (rest === "/buyer-followups" || rest.startsWith("/buyer-followups/")) {
+          await routeBuyerFollowups(req, res, method, rest);
+          return;
+        }
         if (options.manualSupport !== undefined && (rest === "/support" || rest.startsWith("/support/"))) {
           await routeManualSupport(options.manualSupport, req, res, method, rest);
           return;
@@ -771,6 +777,47 @@ export function createMerchantManagementApiHandler(
       throw error;
     }
     throw new ManagementError("not_found", "工单路由不存在。");
+  }
+
+  async function routeBuyerFollowups(req: IncomingMessage, res: ServerResponse, method: string, rest: string): Promise<void> {
+    const service = options.buyerFollowups;
+    if (service === undefined) throw new ManagementError("not_found", "买家确认待办未启用。");
+    const auth = requireActor(req);
+    const requireOwner = (context: typeof auth.ctx) => {
+      const actor = assertVerifiedActor(context, now());
+      if (actor.merchantId !== options.merchantId) throw new ManagementError("not_found", "确认待办不存在。");
+      if (actor.role !== "owner") throw new ManagementError("forbidden", "仅店主可处理买家确认待办。");
+      return actor;
+    };
+    const actor = requireOwner(auth.ctx);
+    try {
+      if (method === "GET" && rest === "/buyer-followups") {
+        writeJson(res, 200, { cases: service.listOwner() }, { "cache-control": "no-store" });
+        return;
+      }
+      const match = /^\/buyer-followups\/(qa_[0-9a-f]{32})\/(claim|answer|close)$/u.exec(rest);
+      if (method !== "POST" || match?.[1] === undefined) throw new ManagementError("not_found", "确认待办不存在。");
+      assertWriteGuards(req, auth.sessionId);
+      const kind = match[2];
+      const body = objectFields(await readJsonBody(req, 4_096), kind === "answer" ? ["version", "answer"] : ["version"]);
+      if (typeof body.version !== "number" || !Number.isSafeInteger(body.version) || (kind === "answer" && typeof body.answer !== "string")) {
+        throw new ManagementError("invalid_input", "确认待办版本或答复无效。");
+      }
+      const fresh = requireActor(req);
+      const current = requireOwner(fresh.ctx);
+      if (current.generation !== actor.generation || current.actorId !== actor.actorId || fresh.sessionId !== auth.sessionId) {
+        throw new ManagementError("forbidden", "管理会话已变化。");
+      }
+      if (kind === "claim" || kind === "close") service.changeOwner(current.actorId, match[1], body.version, { kind });
+      if (kind === "answer" && typeof body.answer === "string") service.changeOwner(current.actorId, match[1], body.version, { kind, answer: body.answer });
+      writeJson(res, 200, { ok: true }, { "cache-control": "no-store" });
+    } catch (error) {
+      if (error instanceof ManagementError || error instanceof BodyTooLarge) throw error;
+      if (error instanceof BuyerFollowupError) {
+        throw new ManagementError(error.code === "conflict" ? "precondition_changed" : error.code, "未提交更改，请刷新确认待办后检查。");
+      }
+      throw new ManagementError("unavailable", "确认待办暂不可用，请刷新后核对状态。");
+    }
   }
 
   async function routeWeixin(req: IncomingMessage, res: ServerResponse, method: string, rest: string): Promise<void> {
@@ -4607,7 +4654,7 @@ export function createMerchantManagementApiHandler(
    * POST /products/import-drafts —— 严格校验上传表（任何行错误 → 整批拒绝并报
    * 行号）+ 当前表 CAS（base_digest）+ 增/改/留预览；只存草稿，不动商品表。
    * 语义是**按 SKU 合并追加**：文件里的 SKU 新增或覆盖同 SKU 的本机记录，
-   * 未出现在文件中的现有商品保持不变（removed 恒为 0）。
+   * 未出现在文件中的现有商品保持不变（removed 恒为 0）；省略 public_details 保留原资料。
    */
   async function postProductsImportDraft(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const auth = requireActor(req);
@@ -4657,12 +4704,25 @@ export function createMerchantManagementApiHandler(
       if (incomingBySku.has(record.sku)) {
         throw new ManagementError("invalid_input", `商品表存在重复 SKU：${record.sku}`);
       }
-      incomingBySku.set(record.sku, record);
+      const previous = currentBySku.get(record.sku);
+      const { public_details: providedDetails, public_details_revision: _untrustedRevision, ...product } = record;
+      // 省略时保留本机资料；显式空对象才清除。用前一修订派生新修订，恢复旧内容
+      // 也不会在 Catalog 命中更早的发布回执。同一基准的重复预览仍然稳定。
+      const details = providedDetails ?? previous?.public_details;
+      const previousRevision = previous?.public_details_revision;
+      const revision = providedDetails !== undefined && JSON.stringify(providedDetails) !== JSON.stringify(previous?.public_details)
+        ? managementRequestDigest({ sku: record.sku, previous_revision: previousRevision, public_details: providedDetails })
+        : previousRevision;
+      incomingBySku.set(record.sku, {
+        ...product,
+        ...(details === undefined ? {} : { public_details: details }),
+        ...(revision === undefined ? {} : { public_details_revision: revision }),
+      });
     }
     let added = 0;
     let updated = 0;
     let unchanged = 0;
-    for (const record of table.products) {
+    for (const record of incomingBySku.values()) {
       const previous = currentBySku.get(record.sku);
       if (previous === undefined) added += 1;
       else if (JSON.stringify(previous) === JSON.stringify(record)) unchanged += 1;

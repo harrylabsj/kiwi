@@ -15,6 +15,7 @@ import { createCustomerIdentityReceiver } from "../a2a/server/customer-identity-
 import { startMemoryProposalServer } from "../merchant-core/customer-memory/private-transport.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { DatabaseSync } from "node:sqlite";
+import path from "node:path";
 import type { AgentProfile } from "../config/profile.js";
 import { resolveSecret } from "../config/profile.js";
 import { ShoppingCliCommerceDataSource } from "../commerce/shopping-cli-source.js";
@@ -26,6 +27,7 @@ import { MerchantImportDraftStore } from "../http/merchant-management/draft-stor
 import { MerchantManagementOperationStore } from "../http/merchant-management/operation-store.js";
 import { renderMerchantManagementPage } from "../http/merchant-management/page.js";
 import { startLocalManualSupportBuyer, type ManualSupportPreviewOptions } from "../http/customer-support-buyer.js";
+import { BuyerFollowups } from "../merchant-core/support/buyer-followups.js";
 import { ManualSupportError, type ManualSupportService } from "../merchant-core/support/manual-service.js";
 import { MutableServiceState } from "../http/merchant-management/service-state.js";
 import { createTrustedWorkbenchPageHandler } from "../http/merchant-management/trusted-page.js";
@@ -435,8 +437,10 @@ export async function startStandaloneMerchantWorkbench(
       ...(admin.surface.getExactProduct !== undefined ? { readExactProduct: admin.surface.getExactProduct } : {}),
     }),
   });
+  const buyerFollowups = process.env.KIWI_BUYER_FOLLOWUPS === "1" ? new BuyerFollowups(path.join(dataDir, "a2a"), profile.owner_id, now) : undefined;
   const api = createMerchantManagementApiHandler({
     weixinChannel,
+    ...(buyerFollowups === undefined ? {} : { buyerFollowups }),
     ...(manualSupport === undefined ? {} : { manualSupport }),
     receiveCustomerIdentity: createCustomerIdentityReceiver({
       db, now, merchantId: profile.owner_id, assertOwner: assembly.assertGovernanceOwner,
@@ -479,6 +483,7 @@ export async function startStandaloneMerchantWorkbench(
     workbuddyAccess: false,
     weixinChannel: true,
     manualSupport: manualSupport !== undefined,
+    buyerFollowups: buyerFollowups !== undefined,
   });
   const weixinPage = renderMerchantManagementPage({ productAuthority: "exact", weixinOnly: true });
   const route = routeRequest({ page, weixinPage, api, admin: adminHandle.handler, trusted: trustedPage, version: PRODUCT_VERSION });

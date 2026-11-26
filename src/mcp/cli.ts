@@ -230,7 +230,7 @@ export async function runMcpServe(args: string[], { targetedNegotiation = false 
     process.stderr.write(`${String(error)}\n`);
     return 2;
   }
-  const tools = buildKiwiTools(service, profile, { targetedNegotiation, captureRoot: process.env.KIWI_PROCUREMENT_CAPTURE_DIRECTORY,
+  const tools = buildKiwiTools(service, profile, { targetedNegotiation, merchantFollowups: process.env.KIWI_MCP_MERCHANT_FOLLOWUPS === "1", captureRoot: process.env.KIWI_PROCUREMENT_CAPTURE_DIRECTORY,
     confirm: message => server.confirm(message) });
   const server: McpServer = new McpServer({
     tools,

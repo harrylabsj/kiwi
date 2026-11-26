@@ -29,7 +29,8 @@
  *   - 权威语义 UPSTREAM_PROXY（数据权威在 shopping-cli 侧，Kiwi 只读）。
  */
 
-import { CommerceError, type CommerceDataSource, type CommerceField, type ProductFact, type ProductSearchQuery } from "./data-source.js";
+import { CommerceError, type CommerceDataSource, type CommerceField, type ProductFact, type ProductSearchQuery, type PublicProductFacts } from "./data-source.js";
+import { contentDigest } from "../negotiation/jcs.js";
 import { isRedirectResponse, readJsonBody, SafeHttpError } from "../net/safe-http.js";
 import { toMinorUnits as losslessToMinorUnits } from "../protocol/legacy-shopping-negotiation/money.js";
 import type { CommerceHealth } from "./types.js";
@@ -39,6 +40,8 @@ export interface ShoppingCliCommerceDataSourceDeps {
   baseUrl: string;
   /** 可选的 bearer 凭证（merchants 角色只读 token）。 */
   authToken?: string;
+  /** 公开问答必须绑定此商家；独立请求永不发送 authToken。 */
+  publicMerchantId?: string;
   /** 拉取超时 ms（默认 15000）。 */
   timeoutMs?: number;
   /** 注入 fetch（测试）。 */
@@ -149,7 +152,7 @@ export class ShoppingCliCommerceDataSource implements CommerceDataSource {
     this.deps = deps;
   }
 
-  private async getJson(requestPath: string): Promise<unknown> {
+  private async getJson(requestPath: string, publicOnly = false): Promise<unknown> {
     const fetchImpl = this.deps.fetchImpl ?? globalThis.fetch;
     const timeoutMs = this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const url = `${this.baseUrl}${requestPath}`;
@@ -164,7 +167,7 @@ export class ShoppingCliCommerceDataSource implements CommerceDataSource {
           signal: controller.signal,
           headers: {
             accept: "application/json",
-            ...(this.deps.authToken !== undefined
+            ...(!publicOnly && this.deps.authToken !== undefined
               ? { authorization: `Bearer ${this.deps.authToken}` }
               : {}),
           },
@@ -232,6 +235,21 @@ export class ShoppingCliCommerceDataSource implements CommerceDataSource {
       throw new CommerceError("request_failed", 'shopping-cli get product response is missing field "product"');
     }
     return parseProduct(body.product, `/products/${sku}`);
+  }
+
+  async getPublicProductFacts(sku: string): Promise<PublicProductFacts | undefined> {
+    const merchantId = this.deps.publicMerchantId;
+    if (merchantId === undefined || sku.trim() === "" || sku.length > 128 || sku === "." || sku === "..") return undefined;
+    const raw = await this.getJson(`/products/${encodeURIComponent(sku)}`, true);
+    const product = (raw as { product?: Record<string, unknown> } | null)?.product;
+    if (!product || product.sku !== sku || product.merchant_id !== merchantId || product.listing_paused === true || product.paused === true) return undefined;
+    const fields = {
+      ...(typeof product.title === "string" ? { title: product.title } : {}),
+      ...(typeof product.description === "string" ? { overview: product.description } : {}),
+    };
+    const validUntil = typeof product.valid_until === "string" ? product.valid_until : undefined;
+    return { merchant_id: merchantId, sku, fields, revision: contentDigest({ sku, fields, valid_until: validUntil ?? null }),
+      ...(validUntil === undefined ? {} : { valid_until: validUntil }) };
   }
 
   async getProducts(query: ProductSearchQuery = {}): Promise<ProductFact[]> {

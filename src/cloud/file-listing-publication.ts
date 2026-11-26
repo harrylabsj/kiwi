@@ -24,8 +24,8 @@
  *   - 输入是**文件商品权威表**（products_file，A1 导入链路的同一事实源）；
  *   - 只发布**显式选定**的 SKU + 用户在预览里逐行填写的非空 category；
  *     绝不隐式全表发布，绝不编造分类；
- *   - 公开投影严格复用 `canonicalizeCatalogListing` 白名单：name-only 公开
- *     元数据，**不含价格/库存/底价/私有规则/联系方式/owner token**，也不把
+ *   - 公开投影严格复用 `canonicalizeCatalogListing` 白名单：名称与商家明确提供的
+ *     公开问答资料，**不含价格/库存/底价/私有规则/联系方式/owner token**，也不把
  *     major-unit Number 伪装成 exact 金额；
  *   - preview 只读（唯一网络动作是 Catalog 公开绑定状态 GET），冻结 payload、
  *     产品快照 digest、已验证绑定身份与期限后落盘不可变草稿（0600，原子写）；
@@ -369,13 +369,16 @@ export function createFileListingPublicationService(options: FileListingPublicat
         record.platform_product_id,
         currentRules(),
       );
+      const { overview, ...attributes } = record.public_details ?? {};
       const listing = canonicalizeCatalogListing(
         {
           listing_type: "product",
           source_product_ref: sku,
           title: record.title,
+          ...(record.public_details === undefined ? {} : { summary: overview ?? "", attributes }),
           category,
-          source_revision: `file:${record.updated_at}`,
+          source_revision: record.public_details_revision === undefined ? `file:${record.updated_at}`
+            : `file:${record.updated_at}:qa:${record.public_details_revision}`,
           ...(productLink === undefined ? {} : {
             handoff_destination_types: ["external_checkout_url"],
             handoff_destination_ref: productLink,

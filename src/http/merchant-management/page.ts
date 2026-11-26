@@ -27,6 +27,13 @@
  * 适用于本页（壳内嵌确认流程的中间态不留缓存）。
  */
 
+import type { PublicProductField } from "../../commerce/data-source.js";
+
+const PUBLIC_DETAIL_LABELS = {
+  features: "特点", capacity: "容量", material: "材质", dimensions: "尺寸",
+  weight: "重量", color: "颜色", customization: "定制说明",
+} satisfies Record<Exclude<PublicProductField, "title" | "overview">, string>;
+
 /** 页面按 owner 视角展示管理动作；角色由服务端权限逐次裁决，前端只是提示。 */
 export function renderMerchantManagementPage(options: {
   productAuthority?: "file" | "exact";
@@ -35,6 +42,7 @@ export function renderMerchantManagementPage(options: {
   weixinChannel?: boolean;
   weixinOnly?: boolean;
   manualSupport?: boolean;
+  buyerFollowups?: boolean;
 } = {}): string {
   return `<!doctype html>
 <html lang="zh-CN">
@@ -167,6 +175,7 @@ ${options.weixinOnly ? "" : `<nav id="tabs" aria-label="工作台导航">
   <button data-v="products">商品与导入</button>
   <button data-v="approvals">待审批</button>
   <button data-v="negotiations">会话旁观</button>
+  ${options.buyerFollowups ? '<button data-v="buyerFollowups" id="buyer-followups-tab" hidden>买家待确认</button>' : ""}
   <button data-v="reports">运营报告</button>
   <button data-v="policy">报价规则</button>
   <button data-v="collection" id="collection-tab" hidden>收款方式</button>
@@ -739,7 +748,16 @@ function publicLink(value) {
 /** 其余公开字段白名单（不渲染 owner/merchant 等内部标识）。 */
 function publicFieldText(listing) {
   var parts = [];
-  if (listing.summary) parts.push("摘要：" + listing.summary);
+  if (typeof listing.summary === "string") parts.push(listing.summary ? "摘要：" + listing.summary : "摘要：未提供");
+  var attributes = listing.attributes;
+  if (attributes && typeof attributes === "object" && !Array.isArray(attributes)) {
+    var labels = ${JSON.stringify(PUBLIC_DETAIL_LABELS)};
+    var fields = Object.keys(labels).filter(function (field) {
+      return Object.hasOwn(attributes, field) && typeof attributes[field] === "string" && attributes[field].trim();
+    });
+    fields.forEach(function (field) { parts.push(labels[field] + "：" + attributes[field]); });
+    if (!fields.length) parts.push("问答规格：未提供");
+  }
   if (listing.brand) parts.push("品牌：" + listing.brand);
   if (Array.isArray(listing.regions) && listing.regions.length) parts.push("区域：" + listing.regions.join("、"));
   if (Array.isArray(listing.tags) && listing.tags.length) parts.push("标签：" + listing.tags.join("、"));
@@ -851,6 +869,9 @@ function renderProducts(items, publication) {
     '<div class="card"><h2>导入商品表（按 SKU 追加/更新）</h2>' +
     '<p class="muted">交易链接仅为平台商品页；是否成交、实际价格与付款结果由交易平台确认。</p>' +
     '<p class="muted">支持 CSV、Excel（.xlsx）与商品表 JSON：先转换校验、预览新增/更新/保留，确认后整批生效（不成功的批次不改动现有商品）。文件里没有的商品会保留，只有同 SKU 会被更新；导入不会撤回已发布到Kiwi网关的商品。</p>' +
+    (FILE_PRODUCTS ? '<p class="muted">要提供买家可查的商品介绍和规格，可在商品表 JSON 的对应商品行中添加 <code>"public_details": {"overview": "商品简介", "capacity": "450 mL"}</code>。' +
+      '支持 overview、${Object.keys(PUBLIC_DETAIL_LABELS).join("、")}；每项为不超过 360 字的单行文本。' +
+      '不填此对象（含 CSV、Excel 导入）会保留同 SKU 的已有资料；填写会替换整组，<code>{}</code> 会清空本机资料。导入后还需预览并确认发布，公开目录才会更新。</p>' : '') +
     '<p class="muted">模板：<a href="/merchant/api/v1/products/import-template?format=csv" download="kiwi-product-import-template.csv">下载 CSV 模板</a> · <a href="/merchant/api/v1/products/import-template?format=xlsx" download="kiwi-product-import-template.xlsx">下载 Excel 模板</a>（中文表头与示例行；中英文常见列名会自动识别）。</p>' +
     '<div class="row"><input type="file" id="pfile" aria-label="选择商品导入文件" accept=".json,.csv,.xlsx">' +
     '<button class="act" onclick="previewImport()">校验预览</button></div><div id="presult"></div></div>';
@@ -1072,7 +1093,52 @@ function mountSupport(sequence) {
   load();
 }
 
+function mountBuyerFollowups(sequence) {
+  var root = $("buyer-followups-content");
+  if (!root) return;
+  call("GET", "/buyer-followups").then(function (data) {
+    if (sequence !== viewSequence) return;
+    root.textContent = "";
+    var cases = data.cases || [];
+    if (!cases.length) { root.textContent = "暂无待确认事项。"; return; }
+    cases.forEach(function (item) {
+      var section = document.createElement("section"); section.className = "card";
+      var title = document.createElement("p");
+      var topics = { customization: "定制", capacity: "容量", features: "特点", overview: "简介", material: "材质", dimensions: "尺寸", weight: "重量", color: "颜色", delivery: "交期", stock: "备货", title: "名称" };
+      var states = { pending: "待认领", in_progress: "处理中", answered: "已确认", closed_without_answer: "已关闭" };
+      title.textContent = item.sku + " · " + (topics[item.topic] || item.topic) + " · " + (states[item.status] || item.status) + (item.quantity == null ? "" : " · 数量 " + item.quantity);
+      section.appendChild(title);
+      var ref = document.createElement("p"); ref.className = "muted";
+      ref.textContent = item.case_ref + " · " + item.negotiation_id; section.appendChild(ref);
+      var draft;
+      function act(kind, label) {
+        var button = document.createElement("button"); button.type = "button"; button.className = "act"; button.textContent = label;
+        button.onclick = function () {
+          var body = { version: item.version };
+          if (kind === "answer") { body.answer = draft.value.trim(); if (!body.answer) { bar("请输入确认内容", true); return; } }
+          button.disabled = true;
+          call("POST", "/buyer-followups/" + encodeURIComponent(item.case_ref) + "/" + kind, body)
+            .then(function () { if (sequence === viewSequence) mountBuyerFollowups(sequence); })
+            .catch(function (e) { if (sequence === viewSequence) { bar(e.message, true); button.disabled = false; } });
+        };
+        section.appendChild(button);
+      }
+      if (item.status === "pending") act("claim", "认领");
+      if (item.status === "in_progress") {
+        draft = document.createElement("textarea"); draft.maxLength = 600;
+        draft.setAttribute("aria-label", "对买家的事实答复"); draft.placeholder = "仅填写本问题的事实答复，不要填写报价、隐私或内部条款。";
+        section.appendChild(draft); act("answer", "确认供原买家查阅");
+      }
+      if (item.status === "pending" || item.status === "in_progress") act("close", "关闭（无答案）");
+      if (item.status === "answered") act("close", "撤回已确认答案");
+      root.appendChild(section);
+    });
+  }).catch(function (e) { if (sequence === viewSequence) root.textContent = e.message; });
+}
 var views = {
+  buyerFollowups: function () {
+    return Promise.resolve('<section class="card"><h2>买家待确认</h2><p>确认后只供原买家主动查询，不发微信、不改变报价。</p><div id="buyer-followups-content">加载中…</div></section>');
+  },
   support: function () {
     return Promise.resolve('<section class="card"><h2>人工售后</h2><p>仅本地预览：不验证订单，不代表外部平台处理。</p>' +
       '<button class="act" type="button" id="support-refresh">刷新待办</button><div id="support-content"></div><div id="support-detail"></div></section>');
@@ -2311,6 +2377,7 @@ var VIEW_COPY = {
   status: ["服务状态", "掌握接待状态，管理店铺与名片发布。"],
   products: ["商品与导入", "维护商品资料，先预览，再确认变更。"],
   approvals: ["待审批", "核对每一项变更，重要决定由你确认。"],
+  buyerFollowups: ["买家待确认", "处理商品问题，买家凭原身份查询答复。"],
   negotiations: ["会话旁观", "查看询价与磋商进展，掌握需要关注的会话。"],
   reports: ["运营报告", "了解买家触达与接待表现。"],
   policy: ["报价规则", "管理自动报价边界，规则确认后生效。"],
@@ -2369,6 +2436,7 @@ function refresh() {
     if (current === "weixin") mountWeixin(sequence);
     if (current === "collection") { bindAlipayCollection(); bindAlipayApprovals(); }
     if (current === "support") mountSupport(sequence);
+    if (current === "buyerFollowups") mountBuyerFollowups(sequence);
     if (current === "status" && CATALOG_CONNECT && ROLE === "owner") {
       if (catalogConnectionState && waitingForCatalogConfirmation(catalogConnectionState)) showCatalogPairing(sequence);
       if (catalogConnectionState && catalogConnectionState.bindingId) {
@@ -2408,6 +2476,7 @@ fetch("/merchant/api/session", { credentials: "same-origin" }).then(function (re
   }
   $("collection-tab").hidden = session.can_manage_alipay_collection !== true;
   if (MANUAL_SUPPORT && ROLE === "owner") $("support-tab").hidden = false;
+  if ($("buyer-followups-tab")) $("buyer-followups-tab").hidden = ROLE !== "owner";
   if (WEIXIN_CHANNEL && ROLE === "owner") {
     $("weixin-tab").hidden = false;
     if (new URLSearchParams(window.location.search).has("weixin_draft")) {

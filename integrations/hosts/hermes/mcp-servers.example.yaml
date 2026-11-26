@@ -1,8 +1,7 @@
 # Hermes MCP 配置（追加到 ~/.hermes/config.yaml 的 mcp_servers 下）
 #
-# kiwi-buyer-mcp：Hermes 自动发现并注册 9 个 Kiwi Sourcing Tools
-# （search/request_quotes/get_task/negotiate/accept_agreement/get_agreement/handoff
-#  + approve/reject 审批面）。
+# kiwi-buyer-mcp：Hermes 自动发现 Kiwi 工具。默认 13 个（询报价、确认审批、
+# 交接和商家关注）；下方可选开关另加商家回执查询。
 # 持久 store 在 <KIWI_ROOT>/.kiwi/mcp/state.sqlite；principal 建议按 Hermes 用户区分。
 # 每个 Hermes 客户端实例必须由宿主提供稳定的 KIWI_CLIENT_ID（并持久化），
 # 作为任务归属；不要把 PID 或共享默认值当客户端身份。
@@ -37,6 +36,18 @@
 #       #         --a2a-allow-private-ranges true（本地/私网 merchant 直连）
 #       #         --a2a-skip-dns-check true（Clash fake-IP 等代理环境需跳过 DNS 复查）
 #       #         --a2a-timeout-ms 20000
+#       # 可选：允许买家主动查商家待确认回执。仍需原 A2A 签名身份；沿用原会话
+#       # 已配置的签名方式与密钥目录，不要为查旧回执临时更换身份。
+#     env:
+#       KIWI_CLIENT_ID: "hermes:<stable-client-id>"
+#       KIWI_MCP_MERCHANT_FOLLOWUPS: "1"
+#
+# 先对 Kiwi 任务使用 kiwi_negotiate(action=clarification) 提问。若
+# step.merchant_extensions.product_answers 中有 followup.case_ref，只有在买家
+# 主动询问进展时，才把原 task_id、merchant_extensions.candidate_id 和这个
+# case_ref 交给 kiwi_get_merchant_followup。不要把待办当成已答，也不要定时轮询。
+# merchant_extensions.next_step 若有 new_rfq，只展示建议；须经买家确认后才
+# 另发 kiwi_request_quotes，不更改现有数量、报价或接受动作。
 
 # B) marketplace 直连（试点兼容；需本地/隧道可达 shopping-cli）
 # mcp_servers:

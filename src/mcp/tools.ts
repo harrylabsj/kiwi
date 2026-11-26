@@ -92,7 +92,7 @@ function approvalRequiredOrErr(error: unknown, extra: Record<string, unknown>): 
 }
 
 /** 构造全部高层工具。任意 handler 抛出的 McpError 都会被转成 isError 结果。 */
-export function buildKiwiTools(service: KiwiBuyerService, profile: BuyerToolProfile = "legacy13", options: ProcurementToolOptions & { targetedNegotiation?: boolean } = {}): KiwiToolDefinition[] {
+export function buildKiwiTools(service: KiwiBuyerService, profile: BuyerToolProfile = "legacy13", options: ProcurementToolOptions & { targetedNegotiation?: boolean; merchantFollowups?: boolean } = {}): KiwiToolDefinition[] {
   const targetedNegotiation = profile === "legacy13" && options.targetedNegotiation === true;
   const tools: Array<KiwiToolDefinition & { raw?: boolean }> = [
     {
@@ -551,5 +551,25 @@ export function buildKiwiTools(service: KiwiBuyerService, profile: BuyerToolProf
     },
   ];
   const legacy = tools.map(({ raw: _raw, ...t }) => t);
-  return profile === "company-procurement-v1" ? installProcurementTools(legacy, service, options) : legacy;
+  const selected = profile === "company-procurement-v1" ? installProcurementTools(legacy, service, options) : legacy;
+  if (!options.merchantFollowups) return selected;
+  return [...selected, {
+    name: "kiwi_get_merchant_followup",
+    description: tr(
+      "Check a merchant follow-up only when the buyer asks. Use the existing task, candidate and case_ref returned in kiwi_negotiate.merchant_extensions. Does not send a message to a person or create a quote. Do not treat a confirmed answer as a binding term.",
+      "仅在买家主动询问时查询商家待确认事项。使用 kiwi_negotiate 的 merchant_extensions 中原任务、候选和 case_ref。不会发人际消息或报价；商家事实答复不是约束性条款。",
+    ),
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object", additionalProperties: false, required: ["task_id", "candidate_id", "case_ref"],
+      properties: { task_id: { type: "string", minLength: 1, maxLength: 240 }, candidate_id: { type: "string", minLength: 1, maxLength: 240 },
+        case_ref: { type: "string", pattern: "^qa_[a-f0-9]{32}$" } },
+    },
+    async handle(args) {
+      try {
+        return ok(JSON.stringify(await service.readMerchantFollowup({ task_id: requiredString(args, "task_id"),
+          candidate_id: requiredString(args, "candidate_id"), case_ref: requiredString(args, "case_ref") })));
+      } catch (error) { return err(error); }
+    },
+  }];
 }

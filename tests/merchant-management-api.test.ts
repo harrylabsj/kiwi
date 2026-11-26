@@ -999,6 +999,47 @@ describe("merchant management api — 商品导入（BD-03）", () => {
     expect(skus).toContain("SKU-2");
   });
 
+  it("保留普通导入未提供的问答资料，显式替换与清空产生新发布版本", async () => {
+    const auth = await login("owner");
+    const endpoint = "/merchant/api/v1/products/import-drafts";
+    const importTable = async (table: unknown, key: string, updated: number) => {
+      const draft = await call("POST", endpoint, { ...auth, body: { table, idempotency_key: key } });
+      expect(draft.status).toBe(200);
+      expect(draft.json["preview"]).toMatchObject({ updated });
+      const committed = await call("POST", `${endpoint}/${String(draft.json["draft_id"])}/commit`, {
+        ...auth,
+        body: { expected_draft_digest: String(draft.json["digest"]), idempotency_key: `${key}-commit` },
+      });
+      expect(committed.status).toBe(200);
+      return loadProductTableSnapshot(productsFile, MERCHANT).records.find((row) => row.sku === "SKU-QA")!;
+    };
+    const [baseRow] = productTable()["products"] as Array<Record<string, unknown>>;
+    const record = { ...baseRow, sku: "SKU-QA" };
+    const withDetails = (details: unknown) => productTable({ products: [{ ...record, public_details: details }] });
+    const details = { overview: "双层测试杯", capacity: "450 mL" };
+    const first = await importTable(withDetails(details), "qa-first", 0);
+    expect(first.public_details).toEqual(details);
+    const legacy = await importTable(productTable({ products: [record] }), "qa-legacy", 0);
+    expect(legacy).toEqual(first);
+
+    const parsed = await fetch(`${base}/merchant/api/v1/products/import-parse?format=csv`, {
+      method: "POST",
+      headers: { cookie: auth.cookie, origin: ORIGIN, "content-type": "text/csv", "x-csrf-token": auth.csrf },
+      body: "sku,title,currency,unit,price,valid_until\nSKU-QA,更新商品,CNY,个,88,2027-12-31",
+    });
+    expect(parsed.status).toBe(200);
+    const { table: fromCsv } = await parsed.json() as { table: unknown };
+    const updated = await importTable(fromCsv, "qa-csv", 1);
+    expect(updated).toMatchObject({ title: "更新商品", price: 88, public_details: details });
+    expect(updated.public_details_revision).toBe(first.public_details_revision);
+
+    const cleared = await importTable(withDetails({}), "qa-clear", 1);
+    expect(cleared.public_details).toEqual({});
+    const restored = await importTable(withDetails(details), "qa-restore", 1);
+    expect(restored.public_details).toEqual(details);
+    expect(new Set([first, cleared, restored].map((row) => row.public_details_revision)).size).toBe(3);
+  });
+
   it("仅凭运营人员自报不能重发结果未知的通知", async () => {
     const { DeliveryConsentRepository } = await import("../src/merchant-core/customer-delivery/consent-repository.js");
     const { CustomerDeliveryRepository } = await import("../src/merchant-core/customer-delivery/repository.js");
