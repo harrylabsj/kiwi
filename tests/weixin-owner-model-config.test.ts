@@ -97,7 +97,8 @@ describe("owner conversation model configuration", () => {
       expect(saved.status).toBe(200);
       expect(saved.headers["cache-control"]).toBe("no-store");
       expect(saved.text).not.toContain("fixture-secret");
-      expect(JSON.parse((await call(route, owner)).text)).toMatchObject({ ...model, active: true, credential_saved: true });
+      expect(JSON.parse((await call(route, owner)).text)).toMatchObject({ ...model, active: true, credential_saved: true,
+        providers: expect.arrayContaining([expect.objectContaining({ id: "anthropic", endpoint: "https://api.anthropic.com" })]) });
       const stored = readOwnerModelConfig(dir, profile.owner_id);
       if (stored === undefined || !("credential" in stored)) throw new Error("expected stored credential");
       expect(openOwnerModelKey(dir, profile.owner_id, stored)).toBe("merchant-fixture-secret");

@@ -58,7 +58,9 @@ export class WeixinOwnerModelSettings {
       active: this.agent?.state === "configured",
       credential_saved: this.config !== undefined && "credential" in this.config && this.selected.state === "configured",
       ...(current === undefined ? {} : { provider: current.provider, model: current.model }),
-      providers: OWNER_MODEL_PROVIDERS.map((id) => ({ id, label: OWNER_MODEL_SERVICES[id].label })),
+      providers: OWNER_MODEL_PROVIDERS.map((id) => ({
+        id, label: OWNER_MODEL_SERVICES[id].label, endpoint: OWNER_MODEL_SERVICES[id].endpoint,
+      })),
     };
   }
 
