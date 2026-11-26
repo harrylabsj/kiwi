@@ -6,13 +6,25 @@
 
 | 平台 | 产品 | 已确认版本 | 证据与限制 |
 |---|---|---:|---|
-| npm | `@harrylabsj/kiwi` | 0.12.39 | 2026-11-26 portfolio run [45757093506](https://github.com/harrylabsj/kiwi/actions/runs/45757093506) 发布；下载 tarball 核验 SHA-1（`fe54c260…`）与发布日志、registry 元数据三方一致，与 dry-run 候选制品逐字节相同。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi/v/0.12.39)。 |
-| npm | `@harrylabsj/kiwi-merchant-cloud` | 0.12.39 | 2026-11-26 同一 portfolio run 发布；下载 tarball 核验 SHA-1（`08de0e69…`）与发布日志一致。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-merchant-cloud/v/0.12.39)。 |
+| npm | `@harrylabsj/kiwi` | 0.12.40 | 2026-11-26 portfolio run [45815046350](https://github.com/harrylabsj/kiwi/actions/runs/45815046350) 发布；下载 tarball 复算 SHA-1（`ff60b617…`）与发布日志、registry 元数据三方一致，干净安装通过。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi/v/0.12.40)。 |
+| npm | `@harrylabsj/kiwi-merchant-cloud` | 0.12.40 | 2026-11-26 同一 portfolio run 发布；下载 tarball 复算 SHA-1（`a45abf8e…`）与发布日志、registry 元数据一致。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-merchant-cloud/v/0.12.40)。 |
 | npm | `@harrylabsj/kiwi-dsh-plugin` | 0.1.4 | 2026-11-11 portfolio run 发布并回读核验；npm 可查 0.1.4。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-dsh-plugin/v/0.1.4)。 |
 | PyPI | `kiwi-catalog` | 0.5.30 | 2026-11-25 portfolio run [45617840510](https://github.com/harrylabsj/kiwi/actions/runs/45617840510) 发布，手工回读 PyPI latest=0.5.30 并干净安装核验；**生产 kiwi-hk 已于同日部署 0.5.30 + admin 0.2.28（whl sha256 与 PyPI 逐字节一致），schema user_version=60 无变更**。[PyPI 版本页](https://pypi.org/project/kiwi-catalog/0.5.30/)。 |
 | PyPI | `shopping-cli` | 3.2.12 | 2026-11-25 回读 PyPI latest=3.2.12（发布链路见当日晚间其他会话记录，本台账只确认 registry 状态）。[PyPI 版本页](https://pypi.org/project/shopping-cli/3.2.12/)。 |
 
 上表确认指定版本可查，不声称它们必然仍是 registry 当前 latest（2026-11-26 已确认 `@harrylabsj/kiwi` latest=0.12.39、`@harrylabsj/kiwi-merchant-cloud` latest=0.12.39、`kiwi-catalog` latest=0.5.30、`shopping-cli` latest=3.2.12）。`kiwi-catalog-admin` 0.2.18 已推送私有 tag `v0.2.18`，并作为生产 catalog 的扩展安装；它不是公开 registry 制品。
+
+## 2026-11-26 kiwi 0.12.40 发布与生产部署（商品事实应答 + RFQ 回执恢复 + 微信自有模型配置）
+
+- 内容：商家基于已发布商品事实回答买家问题（a6348290）；买家 RFQ 回执丢失恢复、不重发询价（7380280c）；工作台支持配置商家自有微信模型（e8939bde）、显示模型服务端点（5e02a800）、修复授权后凭据字段挂载（82a9a133）。
+- 发布源：main `33b94e42`（候选准备 `5249eeef`、验收回执 `ae7b4e24`、冻源刷新 `33b94e42`）；catalog `11c12bd`、shopping-cli 3.2.12 未变、未重发。
+- 真实端到端验收：2026-11-26T11:40Z 对生产目录 `https://catalog.kiwi.harrylabsj.com` 与真实商家 Veyquo（`mkt_veyquo_A0UPvj7XuYk` / `VQ-001` / 2 个）跑通 search → quote → negotiation → preaccept → agreement → handoff，非约束 agreement `agreement-01a217a7-fe74-718e-b50b-b0a3feb73826`；不下单、不付款、不锁库存。
+- GitHub run：dry-run [45812833415](https://github.com/harrylabsj/kiwi/actions/runs/45812833415) 成功；首次 publish 调度 [45814725408](https://github.com/harrylabsj/kiwi/actions/runs/45814725408) 被 fail-closed 拒绝（publish=true 要求 `ref` 输入为完整 40 位 SHA，误传命名引用 `main`）；以完整 SHA 重新调度，发布 [45815046350](https://github.com/harrylabsj/kiwi/actions/runs/45815046350) 成功，channels=`npm,merchant-cloud`，经 `kiwi-release` 保护环境人工审批。`verify-registry` job 仍 skipped（已知缺陷），以下为发布后手工回读。
+- registry 回读（2026-11-26 北京时间，手工）：npm `@harrylabsj/kiwi` latest=0.12.40（下载 tarball SHA-1：`ff60b617f054ca2d6430523bfc7f96f2356ed52f`，与发布日志一致）；`@harrylabsj/kiwi-merchant-cloud` latest=0.12.40（SHA-1：`a45abf8e014e56954105920db1a1af3c483a4076`）。干净安装 `@harrylabsj/kiwi@0.12.40` 通过（`cli.js --version` 输出 0.12.40）。
+- 候选验证（kiwi-hk，2026-11-26 19:37 北京时间）：候选 `5249eeef` 部署 runtime+workbench（`releases/kiwi-0.12.40-candidate-5249eeef`），验收通过后停用候选 drop-in。
+- 正式部署（kiwi-hk，2026-11-26 20:20–20:30 北京时间）：官方 registry tarball（SHA-1 复核一致）建 `releases/kiwi-0.12.40-20261126-202048` 与 `kiwi-0.12.40-workbench-20261126-202048`；部署前快照 `backups/pre-0.12.40-final-20261126-202048.tgz`；drop-in 由候选改指正式目录（旧 conf `.disabled-20261126-202048` 可回滚）。网关 `/opt/kiwi-gateway/app` 升级到 0.12.40，旧版保留 `app.prev-20261126-202048`。注意：npm tarball 内文件 mtime 统一为 1985-10-26，rsync 同步必须加 `--checksum`/`-I`，否则同尺寸文件被静默跳过（本次网关首次同步即因此未生效，复核版本号时发现并重同步）。验证：kiwi-gateway、kiwi-merchant-v2、kiwi-workbench、kiwi-catalog 均 active；gateway `/health` 与 OAuth metadata 200；Veyquo agent-card 200、`/a2a` 405（预期）、`/merchant/` 200；三服务近 3 分钟 error 日志为空。
+- 部署后端到端复验：对生产目录 + Veyquo 重新跑通 search → quote → negotiation → preaccept → agreement → handoff（非约束，新 agreement `agreement-01a217d2-4b64-72be-81cb-ae9be250e400`），未下单/未付款/未锁库存。
+- 未做：`verify-registry` needs/`always()` 缺陷未修；WorkBuddy / 商城平台资产未随本次发布更新或审核。
 
 ## 2026-11-26 kiwi 0.12.39 发布与生产部署（店主对话区间统计 + 范围诚实声明）
 
