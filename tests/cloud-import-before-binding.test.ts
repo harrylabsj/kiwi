@@ -41,9 +41,9 @@ const ORIGIN = "https://merchant.example";
 const FIXED_NOW = new Date("2026-09-28T12:00:00Z");
 
 const IMPORT_CSV = [
-  "商品编号/sku,名称/title,币种/currency,计价单位/unit,单价/price,有效期至/valid_until",
-  "BIND-001,绑定链路测试商品,CNY,piece,29.90,2030-12-31",
-  "BIND-002,绑定链路测试商品 二,CNY,box,3.50,2030-12-31",
+  "商品编号/sku,名称/title,币种/currency,计价单位/unit,单价/price,库存/stock,有效期至/valid_until",
+  "BIND-001,绑定链路测试商品,CNY,piece,29.90,5,2030-12-31",
+  "BIND-002,绑定链路测试商品 二,CNY,box,3.50,0,2030-12-31",
 ].join("\r\n");
 
 const sessionsDb = new DatabaseSync(":memory:");
@@ -248,13 +248,13 @@ describe("WP17 语义统一：绑定前导入 → 绑定 → 可报价", () => {
       return await runInContext("views.products()", context) as string;
     }
     const imported = await renderProducts("file");
-    expect(imported).toContain("当前商品（2）");
+    expect(imported).toContain("商品列表（2）");
     expect(imported).toContain("BIND-001");
     expect(imported).toContain("BIND-002");
     expect(imported).toContain("CNY 29.9 / piece");
     expect(paths).toContain("/merchant/api/products?limit=100");
     const exact = await renderProducts("exact");
-    expect(exact).toContain("当前商品（0）");
+    expect(exact).toContain("商品列表（0）");
     expect(exact).not.toContain("BIND-001");
     expect(paths).toContain("/merchant/api/v1/products?limit=100");
     expect(createFileProductSource({ file: productsFile, merchantId: OWNER }).describeSku("BIND-001"))
@@ -282,9 +282,9 @@ describe("WP17 语义统一：绑定前导入 → 绑定 → 可报价", () => {
     catalogMerchantId = CATALOG_MERCHANT;
     const auth = await login();
     const nextCsv = [
-      "商品编号/sku,名称/title,币种/currency,计价单位/unit,单价/price,有效期至/valid_until",
-      "BIND-001,绑定链路测试商品,CNY,piece,29.90,2031-12-31",
-      "BIND-003,绑定后新商品,CNY,piece,15.00,2030-12-31",
+      "商品编号/sku,名称/title,币种/currency,计价单位/unit,单价/price,库存/stock,有效期至/valid_until",
+      "BIND-001,绑定链路测试商品,CNY,piece,29.90,5,2031-12-31",
+      "BIND-003,绑定后新商品,CNY,piece,15.00,8,2030-12-31",
     ].join("\r\n");
     await importCsv(auth, nextCsv, "wp17-bound");
 
