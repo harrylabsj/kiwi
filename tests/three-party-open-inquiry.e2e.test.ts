@@ -103,11 +103,11 @@ function redactSubprocessText(text: string): string {
     .split(SHARE_SECRET).join(DIAGNOSTIC_REDACTED)
     .replace(/(https?:\/\/)([^/\s:@]+):([^/\s@]+)@/gi, `$1${DIAGNOSTIC_REDACTED}@`)
     .replace(/([?&](?:token|access_token|refresh_token|id_token|api_key|apikey|secret|password|signature|sig)=)[^&\s]+/gi, `$1${DIAGNOSTIC_REDACTED}`)
-    .replace(/\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|APIKEY)[A-Z0-9_]*)=([^\s]+)/g, `$1=${DIAGNOSTIC_REDACTED}`)
+    .replace(/\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|APIKEY)[A-Z0-9_]*)=([^\s]+)/gi, `$1=${DIAGNOSTIC_REDACTED}`)
     .replace(/("(?:token|access_token|refresh_token|secret|password|api_key|apikey)"\s*:\s*")[^"]*(")/gi, `$1${DIAGNOSTIC_REDACTED}$2`)
     .replace(/\b(Authorization|Proxy-Authorization|Cookie|Set-Cookie)\s*:\s*[^\r\n]*/gi, `$1: ${DIAGNOSTIC_REDACTED}`)
     .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, `$1 ${DIAGNOSTIC_REDACTED}`)
-    .replace(/(--?(?:token|secret|password|api-key|apikey)\s+)(\S+)/gi, `$1${DIAGNOSTIC_REDACTED}`)
+    .replace(/(--?(?:token|secret|password|api-key|apikey)(?:=|\s+)\s*)(\S+)/gi, `$1${DIAGNOSTIC_REDACTED}`)
     .replace(/\b(?:ghp|gho|ghu|ghs|ghr|npm|sk|pk)_[A-Za-z0-9_-]{8,}\b/g, DIAGNOSTIC_REDACTED)
     .replace(/\bscrypt\$\d+\$[A-Za-z0-9_-]+\$[A-Za-z0-9_-]+\b/g, "scrypt$[REDACTED]");
 }
@@ -722,7 +722,8 @@ describe("subprocess failure diagnostics", () => {
     const text = subprocessFailureMessage(
       "uv",
       error,
-      "Authorization: Bearer abc123\nhttps://user:pass@example.test/x?token=abc123\nKIWI_CATALOG_OWNER_TOKEN_SECRET=e2e-owner-secret-not-real\nstderr tail",
+      "Authorization: Bearer abc123\nhttps://user:pass@example.test/x?token=abc123\nKIWI_CATALOG_OWNER_TOKEN_SECRET=e2e-owner-secret-not-real\n" +
+        "kiwi_owner_token=lowercase-fixture --token=equals-fixture\nstderr tail",
     );
     expect(text).toContain("code=1");
     expect(text).toContain("signal=SIGTERM");
@@ -733,6 +734,7 @@ describe("subprocess failure diagnostics", () => {
     expect(text).not.toContain("abc123");
     expect(text).not.toContain("user:pass");
     expect(text).not.toContain("e2e-owner-secret-not-real");
+    expect(text).toContain("kiwi_owner_token=[REDACTED] --token=[REDACTED]");
   });
 
   it("formats an actual non-zero child exit", async () => {

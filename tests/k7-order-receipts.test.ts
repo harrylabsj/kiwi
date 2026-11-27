@@ -70,7 +70,8 @@ describe("K7 渠道订单事实 → 回执上报（B3）", () => {
   it.each([405, 410, 422])("bounds long legacy IDs and stops retrying HTTP %i", async (status) => {
     const channel = "a".repeat(24), ref = "b".repeat(110);
     const stamp = { value: NOW };
-    const outbox = new ReceiptOutbox({ now: () => stamp.value });
+    const dbPath = join(dir, "outbox.sqlite");
+    let outbox = new ReceiptOutbox({ dbPath, now: () => stamp.value });
     const legacy = `merchant-order:${channel}:${ref}`;
     const event: OrderReceipt = { event_id: legacy, event_type: "merchant_order_created",
       merchant_id: MERCHANT, occurred_at: NOW, order_channel: channel, order_ref: ref,
@@ -88,6 +89,21 @@ describe("K7 渠道订单事实 → 回执上报（B3）", () => {
       await dispatcher.drain();
       expect(calls).toBe(1);
       expect(outbox.due()).toEqual([]);
+      expect(outbox.pendingCount()).toBe(0);
+      expect(outbox.blockedEventIds()).toEqual([legacy]);
+      expect(outbox.blockedCount()).toBe(1);
+      outbox.close();
+      outbox = new ReceiptOutbox({ dbPath, now: () => stamp.value });
+      expect(outbox.retryBlocked(legacy)).toBe(true);
+      expect(outbox.retryBlocked(legacy)).toBe(false);
+      expect(outbox.pendingCount()).toBe(1);
+      const received: CommerceReceipt[] = [];
+      const recovered = new ReceiptDispatcher({ outbox, submitter: { async submit(receipt) { received.push(receipt); } } });
+      expect(await recovered.drain()).toBe(1);
+      expect(received).toEqual([{ ...event, event_id: orderReceiptId(channel, ref) }]);
+      expect(outbox.retryBlocked(legacy)).toBe(false);
+      expect(outbox.pendingCount()).toBe(0);
+      expect(outbox.blockedCount()).toBe(0);
     } finally { outbox.close(); }
   });
 

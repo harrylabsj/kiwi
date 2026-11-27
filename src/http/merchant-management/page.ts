@@ -28,6 +28,7 @@
  */
 
 import type { PublicProductField } from "../../commerce/data-source.js";
+import { MERCHANT_DISPLAY_NAME_PLACEHOLDER } from "../../cloud/merchant-display-name.js";
 
 const PUBLIC_DETAIL_LABELS = {
   features: "特点", capacity: "容量", material: "材质", dimensions: "尺寸",
@@ -1251,7 +1252,7 @@ var views = {
           '<form id="merchant-name-form" hidden>' +
           '<label for="merchant-name-input">商家显示名</label> ' +
           '<input type="text" id="merchant-name-input" required maxlength="80" value="' +
-          esc(s.merchant_name === "待设置商家名称" ? "" : s.merchant_name || "") + '">' +
+          esc(s.merchant_name === ${JSON.stringify(MERCHANT_DISPLAY_NAME_PLACEHOLDER)} ? "" : s.merchant_name || "") + '">' +
           '<div class="row"><button id="merchant-name-save" class="act primary" type="submit">保存</button>' +
           '<button id="merchant-name-cancel" class="act" type="button">取消</button></div>' +
           '<p class="muted">' + (s.merchant_name_needs_update
@@ -2117,6 +2118,7 @@ function mountWeixin(sequence) {
     $("weixin-model-credential-label").appendChild(key);
     var save = $("weixin-model-save");
     var result = $("weixin-model-result");
+    if (settings.config_problem) { result.textContent = settings.config_problem; save.disabled = true; }
     function updateProviderFields() {
       var service = settings.providers.find(function (p) { return p.id === provider.value; });
       $("weixin-model-endpoint").textContent = service ? service.endpoint : "—";

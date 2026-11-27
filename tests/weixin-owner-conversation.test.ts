@@ -179,6 +179,47 @@ describe("persisted owner follow-up", () => {
     expect(send2.mock.calls[0]?.[0].text).toContain("未接入按时间的咨询统计来源");
   });
 
+  it.each([["十五", 15], ["二十", 20], ["二十一", 21], ["三十", 30], ["１２", 12]] as const)(
+    "uses all of %s to select a %i-day ledger interval", async (phrase, days) => {
+      const stats = vi.fn((_since: number): OwnerRangeStats => ({ inquiries: 3, pending: 2 }));
+      const c = open(undefined, undefined, { replyToOwner: true }, stats);
+      c.bind(principal, scope);
+      const send = vi.fn(async (_input: { text: string; context: string }) => {});
+      admit(c, message("range", `过去${phrase}天有哪些询价？`));
+      await c.process(scope, signal, send);
+      expect(stats.mock.calls).toEqual([[now - days * 86_400_000]]);
+      expect(send.mock.calls[0]?.[0].text).toContain(`过去 ${days} 天有 3 笔`);
+    });
+
+  it.each(["过去三十一天", "过去0天", "过去1.5天", "过去半天", "过去 -2 天", "过去 5 到 10 天", "最近 5 天和过去 10 天"])(
+    "asks about the interval in %s without querying the ledger", async (phrase) => {
+      const stats = vi.fn((_since: number): OwnerRangeStats => ({ inquiries: 3, pending: 2 }));
+      const c = open(undefined, undefined, { replyToOwner: true }, stats);
+      c.bind(principal, scope);
+      const send = vi.fn(async (_input: { text: string; context: string }) => {});
+      admit(c, message("range", `${phrase}有几笔买家咨询？`));
+      await c.process(scope, signal, send);
+      expect(stats).not.toHaveBeenCalled();
+      expect(send.mock.calls[0]?.[0].text).toContain("本次没有查询");
+    });
+
+  it("does not send explicit or ambiguous intervals to an authorized model", async () => {
+    const decide = vi.fn<Extract<WeixinOwnerAgent, { state: "configured" }>["decide"]>()
+      .mockResolvedValue({ kind: "range", days: 5 });
+    const agent = { state: "configured" as const, provider: "fixture", model: "fixture", endpoint: "https://model.example", consent: "a".repeat(64), decide };
+    const stats = vi.fn((_since: number): OwnerRangeStats => ({ inquiries: 3, pending: 2 }));
+    const c = open(undefined, undefined, { replyToOwner: true, agent }, stats);
+    c.bind(principal, scope, agent.consent);
+    const send = vi.fn(async (_input: { text: string; context: string }) => {});
+    admit(c, message("valid", "过去十五天有几笔咨询？"), message("ambiguous", "过去 15 到 20 天有几笔咨询？"));
+    await c.process(scope, signal, send);
+    expect(decide).not.toHaveBeenCalled();
+    expect(stats.mock.calls).toEqual([[now - 15 * 86_400_000]]);
+    expect(send.mock.calls.map(([input]) => input.text)).toEqual([
+      expect.stringContaining("过去 15 天有 3 笔"), expect.stringContaining("本次没有查询"),
+    ]);
+  });
+
   it("answers unsupported requests with an explicit scope statement instead of a substituted query", async () => {
     const c = open(undefined, undefined, { replyToOwner: true });
     c.bind(principal, scope);

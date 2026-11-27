@@ -2,13 +2,13 @@
  * Copyright 2026 harrylabsj
  * SPDX-License-Identifier: Apache-2.0
  */
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { AgentProfile } from "../src/config/profile.js";
 import { ADMIN_SESSION_COOKIE, MerchantAdminSessions } from "../src/auth/merchant-sessions.js";
@@ -181,6 +181,28 @@ describe("owner conversation model configuration", () => {
     expect(configuredWeixinOwnerAgent(profile, { ...flags, TEST_KEY: "fixture" }, dir)).toMatchObject({ state: "configured", model: "gpt-test", endpoint: "https://api.openai.com/v1" });
     expect(configuredWeixinOwnerAgent(profile, { TEST_KEY: "fixture" }, dir)).toBeUndefined();
     expect(profile.model.provider).toBe("fake");
+  });
+
+  it.each([
+    ["damaged", /备份损坏的配置/],
+    ["another merchant", /另一商家/],
+    ["unsafe file mode", /权限/],
+  ] as const)("reports %s configuration without probing or replacing it", async (kind, hint) => {
+    const dir = dataDir();
+    const file = path.join(dir, "owner-conversation-model.json");
+    if (kind === "another merchant") writeOwnerModelConfig(dir, "other-merchant", modelConfig);
+    else writeFileSync(file, '{"fixture-sensitive-detail":', { mode: kind === "damaged" ? 0o600 : 0o644 });
+    const original = readFileSync(file);
+    const streamFn = vi.fn(createScriptedFakeStreamFn([]).streamFn);
+    const settings = new WeixinOwnerModelSettings(profile, dir, flags, streamFn);
+    const { active, config_problem } = settings.status();
+    expect(active).toBe(false);
+    expect(config_problem).toMatch(hint);
+    expect(config_problem).not.toContain("fixture-sensitive-detail");
+    await expect(settings.save({ provider: "openai", model: "gpt-test", apiKey: "fixture" }, () => {}, () => {}))
+      .rejects.toThrow(config_problem);
+    expect(streamFn).not.toHaveBeenCalled();
+    expect(readFileSync(file)).toEqual(original);
   });
 
   it.each([

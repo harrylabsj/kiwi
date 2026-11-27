@@ -53,6 +53,10 @@ test('shared downloads are copied into per-install verification evidence without
     assert.deepEqual(await readFile(copied),data);
     await symlink(copied,archive);
     await assert.rejects(()=>snapshotInstallTarballs(stage,shared),/CACHE_TARBALL_INVALID/);
+    await rm(archive);
+    await rm(copied);
+    await writeFile(archive,Buffer.alloc(data.length,0x78));
+    await assert.rejects(()=>snapshotInstallTarballs(stage,shared),/CACHE_TARBALL_INVALID/);
   } finally {
     await rm(root,{recursive:true,force:true});
   }

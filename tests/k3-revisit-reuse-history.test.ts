@@ -68,6 +68,9 @@ describe("K3 沿用上次规格真实回访（A5）", () => {
       idempotency_key: "quote-replay-key",
       reuse_history: true,
     };
+    await expect(service.requestQuotes({ ...input, merchant_ids: [] }))
+      .rejects.toMatchObject({ code: "clarification_needed", detail: { reason: "merchant_required" } });
+    expect(history).not.toHaveBeenCalled();
     const first = await service.requestQuotes(input);
     expect(first.created).toBe(true);
     if (legacyTask) {

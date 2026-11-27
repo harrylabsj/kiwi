@@ -11,8 +11,9 @@
  *   （kiwi / shopping_cli / kiwi_catalog；D0 最小版）；
  * - 旧命令保留：`kiwi chat --help` / `kiwi agent serve --help` 仍走全局帮助。
  */
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { readAdminCredentials, verifyAdminPassword } from "../src/auth/merchant-sessions.js";
+import { ReceiptOutbox, type OrderReceipt } from "../src/commerce/receipt/receipts.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -94,6 +95,38 @@ describe("product CLI command tree (D0)", () => {
     expect(stdout).toContain("kiwi merchant");
     expect(stdout).toContain("merchant start");
     expect(stdout).toContain("merchant publish");
+  });
+
+  it("inspects an existing merchant outbox and only requeues one blocked receipt in its scope", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "kiwi-outbox-cli-"));
+    const dbPath = path.join(dir, "a2a", "commerce-receipt-outbox.sqlite");
+    const cmd = ["merchant", "receipt-outbox", "--data-dir", dir];
+    const now = () => "2026-11-08T04:00:00.000Z";
+    try {
+      mkdirSync(path.dirname(dbPath));
+      expect((await run([...cmd, "status"])).code).toBe(EXIT.CONFIG);
+      expect((await run([...cmd, "retry", "event-a"])).code).toBe(EXIT.CONFIG);
+      expect(existsSync(dbPath)).toBe(false);
+      const receipt: OrderReceipt = { event_id: "event-a", event_type: "merchant_order_created",
+        merchant_id: "merchant-a", occurred_at: now(), order_channel: "fixture", order_ref: "unprinted-fixture-order",
+        order_evidence: { checkout_session_ref: "fixture" } };
+      for (const [reporterScope, eventId] of [["", "event-a"], ["other", "event-b"]] as const) {
+        const outbox = new ReceiptOutbox({ dbPath, now, reporterScope });
+        try {
+          outbox.enqueue({ ...receipt, event_id: eventId });
+          outbox.markBlocked(eventId, "unprinted-fixture-error");
+        } finally { outbox.close(); }
+      }
+      const status = await run([...cmd, "status"]);
+      expect(status.code).toBe(EXIT.OK);
+      expect(JSON.parse(status.stdout)).toEqual({ ok: true, pending: 0, blocked: 1, blocked_event_ids: ["event-a"] });
+      expect((await run([...cmd, "retry", "event-b"])).code).toBe(EXIT.CONFIG);
+      expect((await run([...cmd, "retry", "event-a"])).code).toBe(EXIT.OK);
+      expect((await run([...cmd, "retry", "event-a"])).code).toBe(EXIT.CONFIG);
+      expect(JSON.parse((await run([...cmd, "status"])).stdout)).toEqual({ ok: true, pending: 1, blocked: 0, blocked_event_ids: [] });
+      const other = new ReceiptOutbox({ dbPath, now, reporterScope: "other" });
+      try { expect(other.blockedEventIds()).toEqual(["event-b"]); } finally { other.close(); }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   it("kiwi network --help prints the network tree", async () => {

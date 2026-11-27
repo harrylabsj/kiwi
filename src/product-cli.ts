@@ -184,6 +184,11 @@ Usage:
                                           （F28：listings/status/doctor 占位命令已
                                           从帮助移除——未实现的能力不宣传，见
                                           docs/merchant-buddy-v2-dev-plan.md）
+  kiwi merchant receipt-outbox status --data-dir <dir>
+                                          查看本地待投递、阻塞计数和最多 100 个阻塞 ID
+  kiwi merchant receipt-outbox retry <event-id> --data-dir <dir>
+                                          修复拒收原因后将单条阻塞回据重新入队
+                                          （命令不发送，由运行中的实例投递）
 
 Merchant = Kiwi Runtime + shopping-cli（Commerce Data Engine）。
 `;
