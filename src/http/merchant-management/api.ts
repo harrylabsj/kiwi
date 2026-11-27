@@ -2343,21 +2343,22 @@ export function createMerchantManagementApiHandler(
           const result = await channel.commit(publicationCommitMatch[1]!, requireString(fields["expected_digest"], "expected_digest"));
           writeJson(res, result.status === "pending" ? 202 : 200, result, { "x-request-id": requestId });
         } else {
-          const fields = objectFields(await readJsonBody(req), ["selections"]);
+          const fields = objectFields(await readJsonBody(req), ["selections", "changes_only"]);
           const selections = fields["selections"];
-          if (!Array.isArray(selections) || selections.length === 0 || selections.length > 100) {
+          const changesOnly = fields["changes_only"] === true;
+          if (!Array.isArray(selections) || (changesOnly ? selections.length > 5100 : selections.length === 0 || selections.length > 100)) {
             throw new ManagementError("invalid_input", "select between 1 and 100 products");
           }
           const selected = selections.map((item: unknown) => {
             const entry = objectFields(item, ["sku", "category"]);
             return { sku: requireString(entry["sku"], "sku"), category: requireString(entry["category"], "category") };
           });
-          writeJson(res, 200, await channel.preview(selected), { "x-request-id": requestId });
+          writeJson(res, 200, await (changesOnly ? channel.previewChanges(selected) : channel.preview(selected)), { "x-request-id": requestId });
         }
       } catch (err) {
         if (err instanceof FileListingPublicationError) {
           // Never reflect remote errors or credential-bearing URLs to the page.
-          throw new ManagementError("precondition_changed", "商品发布条件已变化或Kiwi网关暂不可用，请检查连接状态并重新预览。");
+          throw new ManagementError("precondition_changed", "商品发布条件已变化或Kiwi网关暂不可用，请检查连接状态后重试。");
         }
         if (err instanceof ManagementError) throw err;
         throw new ManagementError("unavailable", "商品发布结果暂无法确认，请查看原草稿回执后决定是否续办。");
@@ -4776,12 +4777,20 @@ export function createMerchantManagementApiHandler(
       const revision = providedDetails !== undefined && JSON.stringify(providedDetails) !== JSON.stringify(previous?.public_details)
         ? managementRequestDigest({ sku: record.sku, previous_revision: previousRevision, public_details: providedDetails })
         : previousRevision;
-      incomingBySku.set(record.sku, {
+      const incoming: CloudProductRecord = {
         ...product,
         ...(product.category === undefined && previous?.category !== undefined ? { category: previous.category } : {}),
         ...(details === undefined ? {} : { public_details: details }),
         ...(revision === undefined ? {} : { public_details_revision: revision }),
-      });
+      };
+      if (previous !== undefined) {
+        const sameData = managementRequestDigest({ ...previous, updated_at: incoming.updated_at }) === managementRequestDigest({ ...incoming });
+        if (sameData && Date.parse(previous.updated_at) > Date.parse(incoming.updated_at)) incoming.updated_at = previous.updated_at;
+        if (!sameData && previous.updated_at === incoming.updated_at) {
+          incoming.updated_at = new Date(Math.max(now().getTime(), Date.parse(previous.updated_at) + 1)).toISOString();
+        }
+      }
+      incomingBySku.set(record.sku, incoming);
     }
     let added = 0;
     let updated = 0;

@@ -135,7 +135,7 @@ async function loadConnectPage(options: {
     return Response.json({});
   };
   const context = createContext({
-    URL, Date, Math, Response, fetch: fetchImpl, setTimeout,
+    URL, Date, Math, Response, fetch: fetchImpl, setTimeout, clearTimeout,
     sessionStorage: storage,
     window: { confirm: options.windowConfirm ?? (() => true) },
     document: {

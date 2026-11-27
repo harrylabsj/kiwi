@@ -242,7 +242,7 @@ function createFixture(options: { ownerId?: string; enrollmentStatus?: string } 
       return Response.json({
         ok: true,
         results: [
-          { listing_type: "product", source_product_ref: "SKU-A", publication_state: "ACTIVE", listing_id: "lst_a", owner_agent_id: CATALOG_AGENT, merchant_id: MERCHANT },
+          { listing_type: "product", source_product_ref: "SKU-A", publication_state: "ACTIVE", listing_id: "lst_a", category: "tools", title: "Widget Alpha", source_revision: "file:2026-09-01T00:00:00.000Z", owner_agent_id: CATALOG_AGENT, merchant_id: MERCHANT },
           { listing_type: "product", source_product_ref: "SKU-B", publication_state: "PAUSED", listing_id: "lst_b", owner_agent_id: CATALOG_AGENT, merchant_id: MERCHANT },
           { listing_type: "product", source_product_ref: "SKU-C", publication_state: "WITHDRAWN", listing_id: "lst_c", owner_agent_id: CATALOG_AGENT, merchant_id: MERCHANT },
         ],
@@ -449,8 +449,28 @@ describe("file listing publication core", () => {
     const service = newService(fixture);
     const result = await service.listPublished();
     expect(result.results).toEqual([
-      { sku: "SKU-A", listing_id: "lst_a", publication_state: "ACTIVE" },
+      { sku: "SKU-A", listing_id: "lst_a", publication_state: "ACTIVE", category: "tools" },
       { sku: "SKU-B", listing_id: "lst_b", publication_state: "PAUSED" },
+    ]);
+    expect(fixture.stub.publishCalls).toHaveLength(0);
+  });
+
+  it("自动发布跳过未变更及暂停、撤回商品，只选新增或已修改的 SKU", async () => {
+    const fixture = createFixture();
+    const service = newService(fixture);
+    expect(await service.previewChanges([])).toEqual({ draft: null, missing_categories: [] });
+
+    const table = productTable(OWNER);
+    const updated = { ...table.products[0]!, title: "Updated Alpha" };
+    table.products[0] = updated;
+    table.products.push({ ...updated, sku: "SKU-NEW" });
+    writeFileSync(fixture.productsFile, JSON.stringify(table));
+    expect(await service.previewChanges([])).toEqual({ draft: null, missing_categories: ["SKU-NEW"] });
+
+    const plan = await service.previewChanges([SEL("SKU-NEW", "new tools")]);
+    expect(plan.draft?.items.map(({ sku, category }) => ({ sku, category }))).toEqual([
+      { sku: "SKU-A", category: "tools" },
+      { sku: "SKU-NEW", category: "new tools" },
     ]);
     expect(fixture.stub.publishCalls).toHaveLength(0);
   });

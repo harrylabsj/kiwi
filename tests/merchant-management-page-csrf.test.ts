@@ -331,7 +331,7 @@ describe("merchant workbench CSRF recovery", () => {
       'submitImportTable({ products: [{ sku: "SKU1", title: "商品", price: 10 }] })',
       context,
     );
-    await eventually(() => (elements["presult"]?.innerHTML ?? "").includes("draft-1"));
+    await eventually(() => (elements["presult"]?.innerHTML ?? "").includes("确认导入"));
 
     expect(sentTokens).toEqual(["stale-token", "fresh-token"]);
     expect(sessionCalls).toBe(2);

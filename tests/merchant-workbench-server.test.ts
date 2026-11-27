@@ -137,7 +137,7 @@ describe("standalone merchant workbench", () => {
     const bound = ownerState === "rules" || ownerState === "model";
     const context = createContext({
       document: { getElementById: (id: string) => elements.get(id) ?? null, querySelectorAll: () => [] },
-      setTimeout: () => 0,
+      setTimeout: () => 0, clearTimeout: () => {},
       fetch: (url: string) => {
         requests.push(url);
         if (url === "/merchant/api/session") {
