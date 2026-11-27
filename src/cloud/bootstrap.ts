@@ -59,7 +59,7 @@ import { createMerchantFollowApiHandler } from "../http/merchant-follow-api.js";
 import { createMerchantEngagementApiHandler } from "../http/merchant-engagement-api.js";
 import { createMerchantPrivacyApiHandler } from "../http/merchant-privacy-api.js";
 import { MerchantImportDraftStore } from "../http/merchant-management/draft-store.js";
-import { renderMerchantManagementPage } from "../http/merchant-management/page.js";
+import { MERCHANT_PRODUCT_HELP_HTML, renderMerchantManagementPage } from "../http/merchant-management/page.js";
 import { createTrustedWorkbenchPageHandler } from "../http/merchant-management/trusted-page.js";
 import { MerchantManagementOperationStore } from "../http/merchant-management/operation-store.js";
 import { WorkbenchConfirmationStore } from "../http/merchant-management/webauthn-confirmation.js";
@@ -1689,7 +1689,17 @@ export async function bootstrapCloudRuntime(
   }
 
   // 4.6) 商家工作台首页（/merchant/ 静态壳；数据经 /merchant/api/* 认证获取）。
-  const merchantHomePage: CloudRequestListener = (_req, res) => {
+  const merchantHomePage: CloudRequestListener = (req, res) => {
+    if (new URL(req.url ?? "/", config.publicOrigin).pathname === "/merchant/product-help.html") {
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        res.writeHead(405, { allow: "GET, HEAD" });
+        res.end();
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+      res.end(req.method === "HEAD" ? undefined : MERCHANT_PRODUCT_HELP_HTML);
+      return;
+    }
     res.writeHead(200, {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",

@@ -75,9 +75,6 @@ export class FileListingPublicationError extends Error {
 }
 
 export interface FileListingPublicationOptions {
-  /** Workbench discovery metadata: only name/category/platform/status/listed are business fields. */
-  discoveryOnly?: boolean;
-
   /** Runtime dataDir（enrollment/私钥所在；草稿与回执同存此目录下，0700/0600）。 */
   dataDir: string;
   /**
@@ -87,6 +84,8 @@ export interface FileListingPublicationOptions {
   profile: AgentProfile;
   /** 文件商品权威表路径（products_file）。 */
   productsFile: string;
+  /** WorkBuddy publishes discovery fields only. */
+  discoveryOnly?: boolean;
   /** Catalog base URL。 */
   catalogUrl: string;
   /** 运营配置的交易平台规则；缺省使用内置 jd/taobao/tmall。 */
@@ -281,10 +280,12 @@ export interface FileListingPublishedItem {
   listing_id: string;
   /** Catalog 当前发布态（已排除 WITHDRAWN）。 */
   publication_state: string;
+  category?: string;
 }
 
 export function createFileListingPublicationService(options: FileListingPublicationOptions): {
   preview: (selections: readonly FileListingSelection[]) => Promise<FileListingPreview>;
+  previewChanges: (categories: readonly FileListingSelection[]) => Promise<{ draft: FileListingPreview | null; missing_categories: string[] }>;
   commit: (draftId: string, expectedDigest: string) => Promise<FileListingCommitResult>;
   getDraft: (draftId: string) => Promise<FileListingDraftView>;
   /** 目录中当前仍公开（非 WITHDRAWN）的商品 SKU，供管理页标注发布状态。 */
@@ -367,43 +368,52 @@ export function createFileListingPublicationService(options: FileListingPublicat
       if (!options.discoveryOnly && Date.parse(record.valid_until) <= nowMs) {
         throw new FileListingPublicationError("PRODUCT_EXPIRED", `SKU 有效期已过，不可发布：${sku}`);
       }
-      const productLink = options.discoveryOnly ? undefined : buildMarketplaceProductLink(
-        record.trade_platform,
-        record.platform_product_id,
-        currentRules(),
-      );
-      const { overview, ...attributes } = record.public_details ?? {};
-      const listing = canonicalizeCatalogListing(
-        {
-          listing_type: "product",
-          source_product_ref: sku,
-          title: record.title,
-          ...(options.discoveryOnly
-            ? { attributes: { trade_platform: record.trade_platform ?? "", status: record.status, listed: true } }
-            : record.public_details === undefined ? {} : { summary: overview ?? "", attributes }),
-          category,
-          source_revision: options.discoveryOnly || record.public_details_revision === undefined ? `file:${record.updated_at}`
-            : `file:${record.updated_at}:qa:${record.public_details_revision}`,
-          ...(productLink === undefined ? {} : {
-            handoff_destination_types: ["external_checkout_url"],
-            handoff_destination_ref: productLink,
-          }),
-          ...(options.discoveryOnly ? {} : { fresh_until: computeFreshUntil(nowMs, record.valid_until, freshDays) }),
-        },
-        binding.agentId,
-        binding.merchantId,
-      );
-      const listingDigest = signedListingDigest(listing);
-      return {
-        sku,
-        category,
-        status: "ready" as const,
-        listing,
-        listing_digest: listingDigest,
-        idempotency_key: listingIdempotencyKey(binding.bindingId, listingDigest),
-      };
+      return publicationItem(record, category, binding, nowMs);
     });
+    return storeDraft(items, snapshot.digest, binding, nowMs);
+  }
 
+  type ActiveBinding = Awaited<ReturnType<typeof requireActiveBinding>>;
+  function publicationItem(record: CloudProductRecord, category: string, binding: ActiveBinding, nowMs: number): FileListingPreviewItem {
+    const sku = record.sku;
+    const productLink = options.discoveryOnly ? undefined : buildMarketplaceProductLink(
+      record.trade_platform,
+      record.platform_product_id,
+      currentRules(),
+    );
+    const { overview, ...attributes } = record.public_details ?? {};
+    const listing = canonicalizeCatalogListing(
+      {
+        listing_type: "product",
+        source_product_ref: sku,
+        title: record.title,
+        ...(options.discoveryOnly
+          ? { attributes: { trade_platform: record.trade_platform ?? "", status: record.status, listed: true } }
+          : record.public_details === undefined ? {} : { summary: overview ?? "", attributes }),
+        category,
+        source_revision: options.discoveryOnly || record.public_details_revision === undefined ? `file:${record.updated_at}`
+          : `file:${record.updated_at}:qa:${record.public_details_revision}`,
+        ...(productLink === undefined ? {} : {
+          handoff_destination_types: ["external_checkout_url"],
+          handoff_destination_ref: productLink,
+        }),
+        ...(options.discoveryOnly ? {} : { fresh_until: computeFreshUntil(nowMs, record.valid_until, freshDays) }),
+      },
+      binding.agentId,
+      binding.merchantId,
+    );
+    const listingDigest = signedListingDigest(listing);
+    return {
+      sku,
+      category,
+      status: "ready" as const,
+      listing,
+      listing_digest: listingDigest,
+      idempotency_key: listingIdempotencyKey(binding.bindingId, listingDigest),
+    };
+  }
+
+  function storeDraft(items: FileListingPreviewItem[], productsDigest: string, binding: ActiveBinding, nowMs: number): FileListingPreview {
     const stamp = new Date(nowMs).toISOString();
     const draftId = `flp_${nowMs.toString(36)}_${randomBytes(6).toString("hex")}`;
     const base: Omit<StoredDraft, "digest"> = {
@@ -412,7 +422,7 @@ export function createFileListingPublicationService(options: FileListingPublicat
       draft_id: draftId,
       created_at: stamp,
       expires_at: new Date(nowMs + previewTtlMs).toISOString(),
-      products_digest: snapshot.digest,
+      products_digest: productsDigest,
       binding: {
         agent_id: binding.agentId,
         merchant_id: binding.merchantId,
@@ -457,7 +467,7 @@ export function createFileListingPublicationService(options: FileListingPublicat
         if (Object.keys(item.listing).some((key) => !keys.has(key)) || !attributes ||
             Object.keys(attributes).some((key) => !["trade_platform", "status", "listed"].includes(key)) ||
             typeof attributes["trade_platform"] !== "string" || !["active", "paused"].includes(String(attributes["status"])) || attributes["listed"] !== true) {
-          throw new FileListingPublicationError("DRAFT_CORRUPTED", "网关发布范围已调整；请重新预览商品名称、类目、交易平台、状态与上架信息");
+          throw new FileListingPublicationError("DRAFT_CORRUPTED", "网关发布范围已调整；请从商品页重新发起发布");
         }
       }
       if (signedListingDigest(item.listing) !== item.listing_digest ||
@@ -636,9 +646,44 @@ export function createFileListingPublicationService(options: FileListingPublicat
       if (draftCommitTails.get(file) === tail) draftCommitTails.delete(file);
     }
   }
-  async function listPublished(): Promise<{ results: FileListingPublishedItem[] }> {
+  async function previewChanges(categories: readonly FileListingSelection[]): Promise<{ draft: FileListingPreview | null; missing_categories: string[] }> {
     const binding = await requireActiveBinding();
-    const results: FileListingPublishedItem[] = [];
+    const published = new Map<string, Record<string, unknown>>();
+    for (const record of await readPublished(binding)) {
+      const sku = String(record["source_product_ref"]);
+      if (!published.has(sku) || record["publication_state"] === "ACTIVE") published.set(sku, record);
+    }
+    const overrides = new Map(categories.map(({ sku, category }) => [sku, category]));
+    const snapshot = loadTable();
+    const nowMs = now().getTime();
+    const items: FileListingPreviewItem[] = [];
+    const missing_categories: string[] = [];
+    const comparable = (record: Record<string, unknown>) => signedListingDigest({
+      title: record["title"] ?? "",
+      category: record["category"] ?? "",
+      source_revision: record["source_revision"] ?? "",
+      summary: record["summary"] ?? "",
+      attributes: record["attributes"] ?? {},
+      handoff_destination_ref: record["handoff_destination_ref"] ?? "",
+    });
+    for (const record of snapshot.records) {
+      if (!options.discoveryOnly && (record.status !== "active" || Date.parse(record.valid_until) <= nowMs)) continue;
+      const previous = published.get(record.sku);
+      // 暂停中的公开条目保留原暂停状态。
+      if (previous !== undefined && previous["publication_state"] !== "ACTIVE") continue;
+      const category = (overrides.get(record.sku) ?? record.category ?? String(previous?.["category"] ?? "")).trim();
+      if (!category) { missing_categories.push(record.sku); continue; }
+      const item = publicationItem(record, category, binding, nowMs);
+      if (previous === undefined || comparable(previous) !== comparable(item.listing)) items.push(item);
+    }
+    return {
+      draft: missing_categories.length === 0 && items.length > 0 ? storeDraft(items, snapshot.digest, binding, nowMs) : null,
+      missing_categories,
+    };
+  }
+
+  async function readPublished(binding: ActiveBinding): Promise<Record<string, unknown>[]> {
+    const results: Record<string, unknown>[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < 50; page += 1) {
       const listed = await client.listSignedListings(
@@ -653,20 +698,27 @@ export function createFileListingPublicationService(options: FileListingPublicat
       );
       for (const record of listed.results) {
         if (String(record["listing_type"] ?? "") !== "product") continue;
-        const state = String(record["publication_state"] ?? "");
         const sku = String(record["source_product_ref"] ?? "");
-        if (state === "WITHDRAWN" || sku === "") continue;
-        results.push({
-          sku,
-          listing_id: String(record["listing_id"] ?? ""),
-          publication_state: state,
-        });
+        if (sku === "") continue;
+        results.push(record);
       }
       cursor = listed.nextCursor;
       if (cursor === undefined || cursor === "") break;
     }
-    return { results };
+    if (cursor) throw new FileListingPublicationError("INVALID_SELECTION", "目录商品记录过多，无法完整核对发布状态");
+    return results;
   }
 
-  return { preview, commit: serializedCommit, getDraft, listPublished };
+  async function listPublished(): Promise<{ results: FileListingPublishedItem[] }> {
+    const binding = await requireActiveBinding();
+    const records = await readPublished(binding);
+    return { results: records.filter((record) => record["publication_state"] !== "WITHDRAWN").map((record) => ({
+      sku: String(record["source_product_ref"]),
+      listing_id: String(record["listing_id"] ?? ""),
+      publication_state: String(record["publication_state"] ?? ""),
+      ...(typeof record["category"] === "string" ? { category: record["category"] } : {}),
+    })) };
+  }
+
+  return { preview, previewChanges, commit: serializedCommit, getDraft, listPublished };
 }

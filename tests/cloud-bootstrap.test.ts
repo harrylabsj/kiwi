@@ -711,6 +711,9 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
       const cookie = (login.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
       const workbench = await fetch(`${base}/merchant/`, { headers: { cookie } });
       expect(await workbench.text()).toContain("var WEIXIN_CHANNEL = true");
+      const productHelp = await fetch(`${base}/merchant/product-help.html`);
+      expect(productHelp.status).toBe(200);
+      expect(await productHelp.text()).toContain("商品导入与发布使用说明");
       const pairingPage = await fetch(`${base}/merchant/weixin`);
       expect(pairingPage.status).toBe(200);
       expect(pairingPage.headers.get("cache-control")).toBe("no-store");
