@@ -669,7 +669,7 @@ export function createFileListingPublicationService(options: FileListingPublicat
     for (const record of snapshot.records) {
       if (!options.discoveryOnly && (record.status !== "active" || Date.parse(record.valid_until) <= nowMs)) continue;
       const previous = published.get(record.sku);
-      // 暂停中的公开条目保留原暂停状态。
+      // 保留商家撤回与平台暂停，批量更新不会重新激活这些条目。
       if (previous !== undefined && previous["publication_state"] !== "ACTIVE") continue;
       const category = (overrides.get(record.sku) ?? record.category ?? String(previous?.["category"] ?? "")).trim();
       if (!category) { missing_categories.push(record.sku); continue; }
@@ -677,15 +677,16 @@ export function createFileListingPublicationService(options: FileListingPublicat
       if (previous === undefined || comparable(previous) !== comparable(item.listing)) items.push(item);
     }
     return {
-      draft: missing_categories.length === 0 && items.length > 0 ? storeDraft(items, snapshot.digest, binding, nowMs) : null,
+      draft: items.length > 0 ? storeDraft(items, snapshot.digest, binding, nowMs) : null,
       missing_categories,
     };
   }
 
   async function readPublished(binding: ActiveBinding): Promise<Record<string, unknown>[]> {
     const results: Record<string, unknown>[] = [];
+    const seenCursors = new Set<string>();
     let cursor: string | undefined;
-    for (let page = 0; page < 50; page += 1) {
+    for (let page = 0; page < 100; page += 1) {
       const listed = await client.listSignedListings(
         {
           catalogAgentId: binding.agentId,
@@ -703,16 +704,19 @@ export function createFileListingPublicationService(options: FileListingPublicat
         results.push(record);
       }
       cursor = listed.nextCursor;
-      if (cursor === undefined || cursor === "") break;
+      if (cursor === undefined || cursor === "") return results;
+      if (seenCursors.has(cursor)) {
+        throw new FileListingPublicationError("CATALOG_LISTINGS_INCOMPLETE", "Kiwi网关商品列表分页重复，无法完整核对发布状态");
+      }
+      seenCursors.add(cursor);
     }
-    if (cursor) throw new FileListingPublicationError("INVALID_SELECTION", "目录商品记录过多，无法完整核对发布状态");
-    return results;
+    throw new FileListingPublicationError("CATALOG_LISTINGS_INCOMPLETE", "Kiwi网关商品记录超过 100 页，无法完整核对发布状态");
   }
 
   async function listPublished(): Promise<{ results: FileListingPublishedItem[] }> {
     const binding = await requireActiveBinding();
     const records = await readPublished(binding);
-    return { results: records.filter((record) => record["publication_state"] !== "WITHDRAWN").map((record) => ({
+    return { results: records.map((record) => ({
       sku: String(record["source_product_ref"]),
       listing_id: String(record["listing_id"] ?? ""),
       publication_state: String(record["publication_state"] ?? ""),

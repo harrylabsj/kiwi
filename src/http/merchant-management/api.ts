@@ -2383,6 +2383,9 @@ export function createMerchantManagementApiHandler(
         }
       } catch (err) {
         if (err instanceof FileListingPublicationError) {
+          if (err.code === "CATALOG_LISTINGS_INCOMPLETE") {
+            throw new ManagementError("precondition_changed", "未能完整核对 Kiwi 网关商品清单，未尝试发布。请联系管理员检查目录分页后重试。");
+          }
           // Never reflect remote errors or credential-bearing URLs to the page.
           throw new ManagementError("precondition_changed", "商品发布条件已变化或Kiwi网关暂不可用，请检查连接状态后重试。");
         }
@@ -4739,20 +4742,24 @@ export function createMerchantManagementApiHandler(
       // 30s 陈旧、失败后 10s 不重试），不是进程启动快照，也不保证每次实时。
       const platformRules = await options.marketplacePlatforms?.();
       const rawTable = fields["table"] as { products?: unknown[] } | undefined;
+      let inputTable = fields["table"];
       if (Array.isArray(rawTable?.products)) {
-        const missing = rawTable.products.flatMap((item, index) => {
-          const record = item as Record<string, unknown> | null;
-          if (record === null || typeof record !== "object") return [];
-          const fields = [
+        const missing: string[] = [];
+        const products = rawTable.products.map((item, index) => {
+          if (item === null || typeof item !== "object" || Array.isArray(item)) return item;
+          const record = item as Record<string, unknown>;
+          const required = [
             ...(typeof record["title"] !== "string" || !record["title"].trim() ? ["商品名"] : []),
             ...(record["price"] === undefined || record["price"] === null || record["price"] === "" ? ["价格"] : []),
-            ...(record["stock"] === undefined || record["stock"] === null || record["stock"] === "" ? ["库存"] : []),
           ];
-          return fields.length ? [`第 ${index + 1} 行缺少必填信息：${fields.join("、")}`] : [];
+          if (required.length) missing.push(`第 ${index + 1} 行缺少必填信息：${required.join("、")}`);
+          const stock = record["stock"];
+          return stock == null || (typeof stock === "string" && !stock.trim()) ? { ...record, stock: 0 } : record;
         });
         if (missing.length) throw new ProductTableError("PRODUCT_TABLE_INVALID", missing.join("；"));
+        inputTable = { ...rawTable, products };
       }
-      table = parseProductTable(fields["table"], "request body", platformRules);
+      table = parseProductTable(inputTable, "request body", platformRules);
       for (const [index, record] of table.products.entries()) {
         const price = toMinorUnits(record.price, 2);
         if (!price.lossless || !Number.isSafeInteger(price.amount_minor)) {
@@ -4901,7 +4908,7 @@ export function createMerchantManagementApiHandler(
         : { kind: "xlsx", bytes: new Uint8Array(buffer) },
       {
         merchantId: options.merchantId,
-        requireStock: true,
+        defaultMissingStock: true,
         platformRules: await resolvePlatformRules(options),
         now: () => now(),
       },

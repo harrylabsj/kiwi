@@ -110,6 +110,7 @@ type MountOptions = {
   saveConflictOnce?: boolean;
   platforms?: Array<{ id: string; label: string }>;
   published?: Array<{ sku: string; listing_id?: string; publication_state: string }>;
+  missingCategories?: string[];
 };
 
 async function mount(options: MountOptions = {}) {
@@ -156,7 +157,7 @@ async function mount(options: MountOptions = {}) {
     }
     if (path === "/merchant/api/v1/products/publication-drafts" && init?.method === "POST") {
       posts.push({ path, body: JSON.parse(String(init.body)) as Record<string, unknown> });
-      return Response.json({ draft: DRAFT, missing_categories: [] });
+      return Response.json({ draft: DRAFT, missing_categories: options.missingCategories ?? [] });
     }
     if (path.endsWith("/commit") && init?.method === "POST") {
       commitCalls += 1;
@@ -196,7 +197,7 @@ describe("商品发布体验（自动识别变更）", () => {
     expect(html).not.toContain('class="pub-pick"');
     expect(html).not.toContain('id="pub-select-all"');
     expect((html.match(/onclick="publishProducts\(\)"/g) ?? []).length).toBe(1);
-    expect(html).toContain("发布商品");
+    expect(html).toContain("预览待发布商品");
     expect(html).not.toContain("预览公开内容");
     expect(html).toContain('href="/merchant/product-help.html"');
     expect(html.indexOf("导入文件</button>")).toBeLessThan(html.indexOf('id="pub-rows"'));
@@ -269,9 +270,11 @@ describe("商品发布体验（自动识别变更）", () => {
     expect(html).not.toContain('class="act pub-row"');
   });
 
-  it("有自动重试入口时保留同一发布草稿", async () => {
+  it("提交失败后保留同一发布草稿以便续办", async () => {
     const m = await mount({ commitFailsOnCall: 1 });
     await runInContext("publishProducts()", m.context);
+    expect(m.posts).toHaveLength(1);
+    await runInContext("commitPublication()", m.context);
     expect(m.elements["publication-result"]?.innerHTML).toContain("继续本次发布");
     await runInContext("commitPublication()", m.context);
     expect(m.posts[1]).toEqual(m.posts[2]);
@@ -295,14 +298,17 @@ async function startProductEdit(mounted: Awaited<ReturnType<typeof mount>>) {
 }
 
 describe("商品直接编辑与发布", () => {
-  it("未填字段保持显示；缺失库存显示0；规格完整展示并转义", async () => {
+  it("未填写和明确为 0 的库存均显示 0；规格完整展示并转义", async () => {
     const { context } = await mount();
     const html = runInContext(`renderProducts([
       {sku:'A',title:'<商品>',stock:null,public_details:{}},
-      {sku:'B',title:'其他',stock:0,price_unit:'件',public_details:{overview:'<简介>'}}
+      {sku:'B',title:'其他',stock:0,price_unit:'件',public_details:{overview:'<简介>'}},
+      {sku:'C',title:'有货',stock:5,price_unit:'件'},
+      {sku:'D',title:'未填写库存'}
     ],{canPublish:true,known:true,published:{}})`, context) as string;
-    expect(html).toContain('<th>库存</th>'); expect(html).not.toContain('库存未知');
-    expect((html.match(/<td>0<\/td>/g) ?? []).length).toBe(2); expect(html).toContain('未填写');
+    expect(html).toContain('<th>库存</th>');
+    expect(html.match(/<td>0<\/td>/g)).toHaveLength(3);
+    expect(html).toContain('<td>5 件</td>');
     expect(html).toContain('商品简介'); expect(html).toContain('供货说明'); expect(html).toContain('更新时间');
     expect(html).toContain('&lt;简介&gt;'); expect(html).toContain('修改</button>');
     expect(html).toContain('发布商品');
@@ -314,13 +320,15 @@ describe("商品直接编辑与发布", () => {
     expect(html).toContain('<option value="custom">配置的平台</option>');
     expect(html).not.toContain('<input type="platform"');
     expect(html).toContain('id="product-detail-overview"');
-    expect(html).toContain('id="product-edit-stock" required');
+    expect(html).toContain('id="product-edit-stock" min="0" step="1"');
+    expect(runInContext('delete productEdit.table.products[0].stock; renderProductEditor()', m.context))
+      .toContain('id="product-edit-stock" min="0" step="1" value="0"');
     await runInContext('cancelProductEdit()', m.context);
     expect(m.posts).toEqual([]); expect(runInContext('productEdit',m.context)).toBeNull();
   });
-  it("任一必填项为空阻止保存，0价格与0库存有效；保存不自动发布", async () => {
+  it("名称和价格为空阻止保存，库存留空按 0 保存；保存不自动发布", async () => {
     const m = await mount(); await startProductEdit(m);
-    for (const key of ['title','price','stock']) {
+    for (const key of ['title','price']) {
       const value = m.elements['product-edit-'+key]!.value;
       m.elements['product-edit-'+key]!.value = '';
       await runInContext('saveProduct()',m.context);
@@ -328,7 +336,14 @@ describe("商品直接编辑与发布", () => {
       expect(m.elements['product-edit-message']!.textContent).toContain('不能为空');
       m.elements['product-edit-'+key]!.value = value;
     }
-    m.elements['product-edit-stock']!.value='0'; m.elements['product-edit-price']!.value='0';
+    const stock = m.elements['product-edit-stock']!;
+    stock.value = '';
+    Object.assign(stock, { validity: { badInput: true } });
+    await runInContext('saveProduct()', m.context);
+    expect(m.posts).toEqual([]);
+    expect(m.elements['product-edit-message']!.textContent).toContain('库存格式不正确');
+    Object.assign(stock, { validity: { badInput: false } });
+    m.elements['product-edit-price']!.value = '0';
     await runInContext('saveProduct()',m.context);
     expect(m.posts).toHaveLength(2);
     const body=m.posts[0]!.body;
@@ -372,13 +387,42 @@ describe("商品直接编辑与发布", () => {
     expect(runInContext('productEdit !== null',m.context)).toBe(true);
     expect(m.posts.every(p=>!p.path.includes('publication'))).toBe(true);
   });
-  it("点击发布创建草稿并确认公开；编辑中禁止发布", async () => {
-    const m=await mount({rows:[row('SKU-1',true,'工具')]});
-    await runInContext('publishProducts()',m.context);
+  it("显示冻结预览而不直接发布；只在确认后提交原摘要", async () => {
+    const m = await mount({ rows: [row("SKU-1", true, "工具")], missingCategories: ["SKU-HIDDEN"] });
+    await runInContext('publishProducts()', m.context);
+    expect(m.posts.map((post) => post.body)).toEqual([{changes_only:true,selections:[]}]);
+    const preview = m.elements["publication-result"]!.innerHTML;
+    expect(preview).toContain("手工陶瓷杯");
+    expect(preview).toContain("SKU-HIDDEN");
+    expect(preview).toContain("确认发布这批商品");
+    expect(preview).not.toContain("https://shop.example");
+    expect(preview).not.toContain("private-note");
+    await runInContext('commitPublication()', m.context);
     expect(m.posts).toHaveLength(2);
-    expect(m.posts[0]!.body).toEqual({changes_only:true,selections:[]});
-    expect(m.posts[1]!.body).toMatchObject({confirm_publication:true,expected_digest:DRAFT.digest});
-    const n=await mount();await startProductEdit(n);
-    await runInContext('publishProducts()',n.context); expect(n.posts).toEqual([]);
+    expect(m.posts[1]!.body).toEqual({confirm_publication:true,expected_digest:DRAFT.digest});
+  });
+
+  it("取消预览不发布；编辑中禁止生成发布草稿", async () => {
+    const m = await mount();
+    await runInContext('publishProducts()', m.context);
+    runInContext('resetPublication()', m.context);
+    await runInContext('commitPublication()', m.context);
+    expect(m.posts).toHaveLength(1);
+    const n = await mount();
+    await startProductEdit(n);
+    await runInContext('publishProducts()', n.context);
+    expect(n.posts).toEqual([]);
+  });
+
+  it("分页达到显示上限时明确提示，不把撤回商品算作已发布", async () => {
+    const m = await mount({
+      productPages: Array.from({ length: 52 }, (_, i) => ({ items: [{ sku: `SKU-${i}`, title: "商品" }], next_cursor: String(i + 1) })),
+      published: [{ sku: "SKU-0", publication_state: "WITHDRAWN" }],
+    });
+    const html = await runInContext('views.products()', m.context) as string;
+    expect(html).toContain("此处仅显示前 51 件商品");
+    expect(html).toContain("已撤回");
+    expect(html).toContain("已发布到Kiwi网关 0 件");
+    expect(html).not.toContain('data-sku="SKU-51"');
   });
 });

@@ -303,6 +303,38 @@ describe("merchant workbench view lifecycle", () => {
 });
 
 describe("merchant workbench CSRF recovery", () => {
+  it("ignores a slower draft for the previously selected CSV and commits the current file only", async () => {
+    const elements: Record<string, Element> = {};
+    let finishOldDraft!: (response: Response) => void;
+    const oldDraft = new Promise<Response>((resolve) => { finishOldDraft = resolve; });
+    const writes: string[] = [];
+    const preview = { added: 1, updated: 0, unchanged: 0 };
+    const context = createPageContext(elements, async (path, init) => {
+      if (path === "/merchant/api/session") return Response.json(null);
+      if (path.includes("/products/import-parse?")) return Response.json({ ok: true, table: { label: init?.body } });
+      if (path.endsWith("/products/import-drafts")) {
+        const label = JSON.parse(String(init?.body)).table.label;
+        writes.push(label);
+        return label === "old" ? oldDraft : Response.json({ draft_id: "new", digest: "new-digest", preview });
+      }
+      writes.push(path);
+      return Response.json({ status: "succeeded", operation_id: "committed" });
+    });
+    await loadPage(context);
+    runInContext(`
+      this.FileReader = function () { this.readAsText = function (file) { this.result = file.content; this.onload(); }; };
+      refresh = function () {};
+      $("pfile").files = [{ name: "old.csv", content: "old" }]; previewImport();`, context);
+    await eventually(() => writes.includes("old"));
+    runInContext('$("pfile").files = [{ name: "new<&.csv", content: "new" }]; invalidateImportPreview(); previewImport();', context);
+    await eventually(() => (elements.presult?.innerHTML ?? "").includes("new&lt;&amp;.csv"));
+    finishOldDraft(Response.json({ draft_id: "old", digest: "old-digest", preview }));
+    await tick();
+    expect(elements.presult?.innerHTML).toContain("new&lt;&amp;.csv");
+    expect(elements.presult?.innerHTML).not.toContain("old.csv");
+    await runInContext('commitImport()', context);
+    expect(writes).toEqual(["old", "new", "/merchant/api/v1/products/import-drafts/new/commit"]);
+  });
   it("refreshes the token and retries a write rejected by a stale CSRF token", async () => {
     const elements: Record<string, Element> = {};
     const sentTokens: string[] = [];

@@ -25,7 +25,7 @@ import { createWorkbenchWeixinOwnerOptions } from "./weixin-owner-source.js";
 import { WeixinOwnerModelSettings } from "./weixin-owner-model-settings.js";
 import { MerchantImportDraftStore } from "../http/merchant-management/draft-store.js";
 import { MerchantManagementOperationStore } from "../http/merchant-management/operation-store.js";
-import { renderMerchantManagementPage } from "../http/merchant-management/page.js";
+import { MERCHANT_PRODUCT_HELP_HTML, renderMerchantManagementPage } from "../http/merchant-management/page.js";
 import { startLocalManualSupportBuyer, type ManualSupportPreviewOptions } from "../http/customer-support-buyer.js";
 import { BuyerFollowups } from "../merchant-core/support/buyer-followups.js";
 import { ManualSupportError, type ManualSupportService } from "../merchant-core/support/manual-service.js";
@@ -158,6 +158,16 @@ function routeRequest(input: {
         "cache-control": "no-store",
       });
       res.end(input.page);
+      return;
+    }
+    if (pathname === "/merchant/product-help.html") {
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        res.writeHead(405, { allow: "GET, HEAD", "cache-control": "no-store" });
+        res.end();
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+      res.end(req.method === "HEAD" ? undefined : MERCHANT_PRODUCT_HELP_HTML);
       return;
     }
     if (input.weixinPage !== undefined && (pathname === "/merchant/weixin" || pathname === "/merchant/weixin/")) {

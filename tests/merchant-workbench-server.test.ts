@@ -206,6 +206,16 @@ describe("standalone merchant workbench", () => {
     expect(live.status).toBe(200);
     expect((await live.json()) as { ok: boolean }).toMatchObject({ ok: true });
 
+    const helpUrl = new URL("/merchant/product-help.html", handle.url);
+    const help = await fetch(helpUrl);
+    expect(help.status).toBe(200);
+    expect(help.headers.get("cache-control")).toBe("no-store");
+    expect(await help.text()).toContain("下载 CSV 模板");
+    const helpHead = await fetch(helpUrl, { method: "HEAD" });
+    expect(helpHead.status).toBe(200);
+    expect(await helpHead.text()).toBe("");
+    expect((await fetch(helpUrl, { method: "POST" })).status).toBe(405);
+
     const pairingPage = await fetch(new URL("/merchant/weixin/", handle.url));
     expect(pairingPage.status).toBe(200);
     expect(pairingPage.headers.get("cache-control")).toBe("no-store");

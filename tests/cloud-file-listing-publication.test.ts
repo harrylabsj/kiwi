@@ -444,14 +444,33 @@ describe("file listing publication core", () => {
     await expect(service.preview([SEL("SKU-A")])).rejects.toMatchObject({ code: "LISTING_PUBLISH_NOT_CONNECTED" });
   });
 
-  it("listPublished：签名自查目录，只返回未撤回的商品 SKU", async () => {
+  it("listPublished：如实报告目录中已发布、暂停和撤回的商品状态", async () => {
     const fixture = createFixture();
     const service = newService(fixture);
     const result = await service.listPublished();
     expect(result.results).toEqual([
       { sku: "SKU-A", listing_id: "lst_a", publication_state: "ACTIVE", category: "tools" },
       { sku: "SKU-B", listing_id: "lst_b", publication_state: "PAUSED" },
+      { sku: "SKU-C", listing_id: "lst_c", publication_state: "WITHDRAWN" },
     ]);
+    expect(fixture.stub.publishCalls).toHaveLength(0);
+  });
+
+  it("目录签名自查支持超过 50 页；分页重复时停止，不使用不完整状态", async () => {
+    const fixture = createFixture();
+    let pages = 0;
+    let repeat = false;
+    const service = newService(fixture, { fetchImpl: async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname !== `/v1/agents/${CATALOG_AGENT}/listings`) return fixture.fetchImpl(input, init);
+      pages += 1;
+      return Response.json({ ok: true, results: [], next_cursor: repeat ? "repeated" : pages < 52 ? `page-${pages}` : null });
+    } });
+    await expect(service.listPublished()).resolves.toEqual({ results: [] });
+    expect(pages).toBe(52);
+    repeat = true;
+    await expect(service.previewChanges([])).rejects.toMatchObject({ code: "CATALOG_LISTINGS_INCOMPLETE" });
+    expect(pages).toBe(54);
     expect(fixture.stub.publishCalls).toHaveLength(0);
   });
 
@@ -465,7 +484,9 @@ describe("file listing publication core", () => {
     table.products[0] = updated;
     table.products.push({ ...updated, sku: "SKU-NEW" });
     writeFileSync(fixture.productsFile, JSON.stringify(table));
-    expect(await service.previewChanges([])).toEqual({ draft: null, missing_categories: ["SKU-NEW"] });
+    const partial = await service.previewChanges([]);
+    expect(partial.missing_categories).toEqual(["SKU-NEW"]);
+    expect(partial.draft?.items.map(({ sku }) => sku)).toEqual(["SKU-A"]);
 
     const plan = await service.previewChanges([SEL("SKU-NEW", "new tools")]);
     expect(plan.draft?.items.map(({ sku, category }) => ({ sku, category }))).toEqual([
