@@ -1,18 +1,26 @@
 # Kiwi 平台发布版本台账
 
-最近一次发布与生产部署核验为 2026-11-26（北京时间），各平台状态以对应条目的核验日期为准。本表记录**已观察到的版本与当时状态**，不是实时查询；候选代码、注册表版本、平台审核和实际云端运行分开记录。部署、上线或发布新版本后，应补充平台链接、版本、状态、核验时间与回执；不得以代码提交或审核提交代替上线证据。
+最近一次公开发布核验为 2026-11-27（北京时间）；本轮未正式部署。各平台状态以对应条目的核验日期为准。本表记录**已观察到的版本与当时状态**，不是实时查询；候选代码、注册表版本、平台审核和实际云端运行分开记录。部署、上线或发布新版本后，应补充平台链接、版本、状态、核验时间与回执；不得以代码提交或审核提交代替上线证据。
 
 ## npm 与 PyPI
 
 | 平台 | 产品 | 已确认版本 | 证据与限制 |
 |---|---|---:|---|
-| npm | `@harrylabsj/kiwi` | 0.12.40 | 2026-11-26 portfolio run [45815046350](https://github.com/harrylabsj/kiwi/actions/runs/45815046350) 发布；下载 tarball 复算 SHA-1（`ff60b617…`）与发布日志、registry 元数据三方一致，干净安装通过。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi/v/0.12.40)。 |
-| npm | `@harrylabsj/kiwi-merchant-cloud` | 0.12.40 | 2026-11-26 同一 portfolio run 发布；下载 tarball 复算 SHA-1（`a45abf8e…`）与发布日志、registry 元数据一致。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-merchant-cloud/v/0.12.40)。 |
+| npm | `@harrylabsj/kiwi` | 0.12.41 | 2026-11-27 portfolio run [45990248413](https://github.com/harrylabsj/kiwi/actions/runs/45990248413) 发布；公开 tarball 与同运行签名制品逐字节一致。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi/v/0.12.41)。 |
+| npm | `@harrylabsj/kiwi-merchant-cloud` | 0.12.41 | 2026-11-27 同一 portfolio run 发布；公开 tarball 与同运行签名制品逐字节一致。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-merchant-cloud/v/0.12.41)。 |
 | npm | `@harrylabsj/kiwi-dsh-plugin` | 0.1.4 | 2026-11-11 portfolio run 发布并回读核验；npm 可查 0.1.4。[npm 版本页](https://www.npmjs.com/package/@harrylabsj/kiwi-dsh-plugin/v/0.1.4)。 |
-| PyPI | `kiwi-catalog` | 0.5.30 | 2026-11-25 portfolio run [45617840510](https://github.com/harrylabsj/kiwi/actions/runs/45617840510) 发布，手工回读 PyPI latest=0.5.30 并干净安装核验；**生产 kiwi-hk 已于同日部署 0.5.30 + admin 0.2.28（whl sha256 与 PyPI 逐字节一致），schema user_version=60 无变更**。[PyPI 版本页](https://pypi.org/project/kiwi-catalog/0.5.30/)。 |
+| PyPI | `kiwi-catalog` | 0.5.31 | 2026-11-27 同一 portfolio run 发布；公开 wheel 与 sdist 的 SHA-256 均与 PyPI 元数据及同运行签名制品相符；未部署 0.5.31。[PyPI 版本页](https://pypi.org/project/kiwi-catalog/0.5.31/)。 |
 | PyPI | `shopping-cli` | 3.2.12 | 2026-11-25 回读 PyPI latest=3.2.12（发布链路见当日晚间其他会话记录，本台账只确认 registry 状态）。[PyPI 版本页](https://pypi.org/project/shopping-cli/3.2.12/)。 |
 
-上表确认指定版本可查，不声称它们必然仍是 registry 当前 latest（2026-11-26 已确认 `@harrylabsj/kiwi` latest=0.12.39、`@harrylabsj/kiwi-merchant-cloud` latest=0.12.39、`kiwi-catalog` latest=0.5.30、`shopping-cli` latest=3.2.12）。`kiwi-catalog-admin` 0.2.18 已推送私有 tag `v0.2.18`，并作为生产 catalog 的扩展安装；它不是公开 registry 制品。
+上表确认指定版本曾可查，不代表当前 `latest` 或生产运行版本。`kiwi-catalog-admin` 是私有 Git 发行渠道，不是公开 registry 制品；`0.2.33` 的代码已合入，私有 tag 待单独发行。
+
+## 2026-11-27 kiwi 0.12.41 / kiwi-catalog 0.5.31 公开发布（未正式部署）
+
+- 内容：三库评审修复，包括隔离名片重绑、WorkBuddy 免分享码判据统一、店主询盘区间统计和回执发件箱恢复。`kiwi-catalog-admin` 的审阅修复未随公开包发行。
+- 发布源：Kiwi main `709fa27ab23593053bd66e5a5f6d822b31cdbfb8`；Catalog `5051587f0003014f414672323fa05af8bdbb5314`；Shopping CLI 3.2.12 pin 不变。渠道为 `npm,merchant-cloud,kiwi-catalog`，不重发 DSH 插件或 Shopping CLI。
+- 真实验收：2026-11-27T10:45Z，以签名候选 [45980214262](https://github.com/harrylabsj/kiwi/actions/runs/45980214262) 在 Veyquo 临时验证一笔 `VQ-001`、2 个的非约束测试询价；[八阶段回执](https://github.com/harrylabsj/kiwi/blob/709fa27ab23593053bd66e5a5f6d822b31cdbfb8/build-inputs/release-acceptance.json) 全通过。未下单、付款或锁库存；验收后 runtime 与 workbench 均恢复 `0.12.40`，公网端点检查通过。
+- 工作流：最终签名 dry-run [45986480015](https://github.com/harrylabsj/kiwi/actions/runs/45986480015) 与正式发布 [45990248413](https://github.com/harrylabsj/kiwi/actions/runs/45990248413) 均成功；正式发布经 `kiwi-release` 保护环境人工审批。正式运行的归档通过 Sigstore 签名和 GitHub attestation 校验。部分渠道发布时 `verify-registry` 被跳过，以下为手工回读结果。
+- Registry 回读（2026-11-27 北京时间）：两个 npm tarball 均可公开下载，SHA-256 与正式发布 manifest 一致，SHA-1 与 registry 和发布日志一致（Kiwi `23645c93…`、Merchant Cloud `0cc5e24c…`），SHA-512 SRI 与 registry 一致。PyPI 的 wheel（SHA-256 `729cfc6d…`）和 sdist（`ac98d6e3…`）均与正式签名制品及 registry 元数据一致。回读验证的是下载字节，未另外从公网制品执行冷安装。
 
 ## 2026-11-26 kiwi 0.12.40 发布与生产部署（商品事实应答 + RFQ 回执恢复 + 微信自有模型配置）
 
