@@ -239,10 +239,10 @@ describe("runtime Catalog connection API", () => {
     expect(response.status).toBe(409);
     expect(await response.text()).toContain("不能同时启动旧部署向导");
   });
-  it("rendered product publication page commits changes only after the publish click", async () => {
+  it("rendered product publication page commits only after the merchant confirms the preview", async () => {
     const elements: Record<string, { value: string; innerHTML: string; textContent: string; className: string; style: { display: string } }> = {};
     const requests: Array<{ path: string; body: unknown }> = [];
-    const draft = { ...publicationDraft, items: [{ listing: { title: "<验收商品>", category: "验收测试" } }] };
+    const draft = { ...publicationDraft, items: [{ sku: "SKU1", listing: { title: "<验收商品>", category: "验收测试" } }] };
     const category = { value: "验收测试", defaultValue: "", disabled: false };
     const selectionRow = {
       getAttribute: (name: string) => (name === "data-sku" ? "SKU1" : null),
@@ -274,6 +274,10 @@ describe("runtime Catalog connection API", () => {
     expect(await runInContext(`esc(accessSyncText(${failure}))`, context)).toContain("A&lt;B");
     expect(requests.filter((r) => r.path.includes("publication-drafts"))).toHaveLength(0);
     await runInContext('publishProducts()', context);
+    expect(elements["publication-result"]?.innerHTML).toContain("&lt;验收商品&gt;");
+    expect(elements["publication-result"]?.innerHTML).toContain("确认发布这批商品");
+    expect(requests.filter((r) => r.path.endsWith("/commit"))).toEqual([]);
+    await runInContext('commitPublication()', context);
     expect(elements["publication-result"]?.innerHTML).toContain("发布结果");
     expect(requests.filter((r) => r.path.endsWith("/commit"))).toEqual([{ path: "/merchant/api/v1/products/publication-drafts/flp_test_123456789abc/commit", body: { expected_digest: "sha256:test", confirm_publication: true } }]);
   });

@@ -15,6 +15,8 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync
 import { homedir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { OnboardingStore } from "../src/cloud/onboarding/store.js";
 import { bootstrapCloudRuntime, CloudStartupError } from "../src/cloud/bootstrap.js";
 import { enrollmentStorePath } from "../src/cloud/binding/enrollment-challenge.js";
 import { writeAdminCredentials, verifyAdminPassword } from "../src/auth/merchant-sessions.js";
@@ -654,6 +656,26 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
       expect(await status()).toMatchObject({ merchant_name_needs_update: true, merchant_name_editable: true });
       expect((await rename("待设置商家名称")).status).toBe(422);
       expect((await rename("商家", "invalid")).status).toBe(403);
+      // A previously started legacy wizard has reserved an identity, not a card preview.
+      const db = new DatabaseSync(path.join(dataDir, "state.sqlite"));
+      try {
+        const record = new OnboardingStore(db).openIntent({
+          merchantId: MERCHANT_ID, intentId: "legacy-name-setup", versionDigest: "sha256:artifact",
+          idempotencyKey: "legacy-name-intent", requestDigest: "name-test-intent",
+        });
+        expect(record.status).toBe("DRAFT");
+      } finally {
+        db.close();
+      }
+      const initialCard = await card();
+      const pendingEnrollment = {
+        enrollment_id: "pending-test", runtime_origin: env.KIWI_CLOUD_PUBLIC_ORIGIN,
+        status: "preparing", frozen_card: initialCard,
+      };
+      writeFileSync(enrollmentStorePath(dataDir), JSON.stringify({ version: 1, consumed: [], sessions: [pendingEnrollment] }));
+      expect((await rename("只修改工作台名称")).status).toBe(200);
+      expect(await card()).toEqual(initialCard);
+      writeFileSync(enrollmentStorePath(dataDir), JSON.stringify({ version: 1, consumed: [], sessions: [] }));
       const firstSave = await rename("  第一版商家名  ");
       expect(firstSave.status).toBe(200);
       expect(await firstSave.json()).toEqual({ merchant_name: "第一版商家名" });

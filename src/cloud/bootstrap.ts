@@ -1288,10 +1288,10 @@ export async function bootstrapCloudRuntime(
         current: () => displayNames.current(),
         needsPublicName: () => publicMerchantName() === MERCHANT_DISPLAY_NAME_PLACEHOLDER,
         save: (name) => {
-          // 首次填补占位名才能用于公开预览；后续改工作台显示名不使名片漂移。
-          // 占位名本身不能发起直连发布；旧向导或已有授权仍保留自己的预览。
+          // A wizard record alone does not freeze a name. Both onboarding paths
+          // persist the generated authorization preview in the enrollment store.
           const setPublicName = publicMerchantName() === MERCHANT_DISPLAY_NAME_PLACEHOLDER &&
-            onboardingStore.activeRecord(profile.owner_id) === undefined &&
+            onboardingStore.activeRecord(profile.owner_id)?.status !== "PUBLISHED" &&
             !readEnrollmentStore(config.dataDir).sessions.some((session) =>
               session.runtime_origin === config.publicOrigin &&
               ["preparing", "authorized", "bound", "published", "paused"].includes(session.status));

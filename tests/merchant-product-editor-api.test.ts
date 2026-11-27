@@ -56,14 +56,13 @@ function fixture() {
 }
 
 describe("商品页面直接编辑 API（无监听端口）", () => {
-  it("读取原商品与平台配置 → 补库存保存 → 同键重放，保留其他商品及规格", async () => {
+  it("读取原商品与平台配置 → 未填库存按 0 保存 → 同键重放，保留其他商品及规格", async () => {
     const f = fixture(), auth = await f.login();
     const state = await f.request("GET", "/merchant/api/v1/products/edit-state?sku=A", auth.cookie);
     expect(state.status).toBe(200);
     expect(state.body["platforms"]).toEqual([{ id: "custom-shop", label: "配置的平台" }]);
     const table = state.body["table"] as { products: Array<Record<string, unknown>> };
     expect(table.products[0]).not.toHaveProperty("stock");
-    table.products[0]!["stock"] = 0;
     table.products[0]!["title"] = "更新名称"; table.products[0]!["category"] = "工具";
     const draft = await f.request("POST", "/merchant/api/v1/products/import-drafts", auth.cookie, auth.csrf, { table, base_digest: state.body["base_digest"] });
     expect(draft.status).toBe(200);
@@ -77,14 +76,31 @@ describe("商品页面直接编辑 API（无监听端口）", () => {
     expect(records[0]).toMatchObject({ sku: "A", title: "更新名称", category: "工具", stock: 0, supply_note: "原供货说明", public_details: { overview: "25合一" } });
     expect(records[1]).toMatchObject({ sku: "B", stock: 5 });
   });
-  it("拒绝缺少商品名、价格、库存的 JSON，并按行提醒；不改变原数据", async () => {
+  it.each([null, "", "  "])("JSON 库存 %j 按 0 覆盖本次更新的 SKU，不修改未参与导入的 SKU", async (stock) => {
+    const f = fixture(), auth = await f.login();
+    const state = await f.request("GET", "/merchant/api/v1/products/edit-state?sku=B", auth.cookie);
+    const table = state.body["table"] as { products: Array<Record<string, unknown>> };
+    table.products[0]!["stock"] = stock;
+    const draft = await f.request("POST", "/merchant/api/v1/products/import-drafts", auth.cookie, auth.csrf, { table });
+    expect(draft.status).toBe(200);
+    expect(draft.body["preview"]).toMatchObject({ added: 0, updated: 1, kept: 1 });
+    expect(loadProductTableSnapshot(f.file, f.merchantId).records[1]?.stock).toBe(5);
+    const endpoint = `/merchant/api/v1/products/import-drafts/${String(draft.body["draft_id"])}/commit`;
+    const saved = await f.request("POST", endpoint, auth.cookie, auth.csrf, { expected_draft_digest: draft.body["digest"], idempotency_key: "save-b" });
+    expect(saved.body["status"]).toBe("succeeded");
+    const records = loadProductTableSnapshot(f.file, f.merchantId).records;
+    expect(records[0]).not.toHaveProperty("stock");
+    expect(records[1]).toMatchObject({ sku: "B", stock: 0 });
+  });
+  it("拒绝缺少商品名或价格的 JSON，并按行提醒；不改变原数据", async () => {
     const f = fixture(), auth = await f.login();
     const state = await f.request("GET", "/merchant/api/v1/products/edit-state?sku=A", auth.cookie);
     const table = state.body["table"] as { products: Array<Record<string, unknown>> };
     delete table.products[0]!["title"]; delete table.products[0]!["price"];
     const result = await f.request("POST", "/merchant/api/v1/products/import-drafts", auth.cookie, auth.csrf, { table });
     expect(result.status).toBe(422);
-    expect(JSON.stringify(result.body)).toContain("第 1 行缺少必填信息：商品名、价格、库存");
+    expect(JSON.stringify(result.body)).toContain("第 1 行缺少必填信息：商品名、价格");
+    expect(JSON.stringify(result.body)).not.toContain("库存");
     expect(loadProductTableSnapshot(f.file, f.merchantId).records[0]?.title).toBe("螺丝刀");
   });
   it.each([{ price: 19.995, stock: 1 }, { price: 1, stock: 9007199254740992 }])("拒绝无法精确表示的商品数据 %j", async (values) => {
@@ -96,17 +112,21 @@ describe("商品页面直接编辑 API（无监听端口）", () => {
     expect(result.status).toBe(422);
     expect(loadProductTableSnapshot(f.file, f.merchantId).records[0]?.price).toBe(19.7);
   });
-  it("CSV 校验预览指出空库存与缺库存列，0 库存可以导入", async () => {
+  it("CSV 缺库存列或库存为空时按 0 预览，保留给定数量并拒绝无效库存", async () => {
     const f = fixture(), a = await f.login();
     const endpoint = "/merchant/api/v1/products/import-parse?format=csv";
     const header = "sku,title,currency,unit,price,valid_until";
     const row = "A,螺丝刀,CNY,件,19.7,2099-01-01";
     const missing = await f.request("POST", endpoint, a.cookie, a.csrf, undefined, header + "\n" + row);
-    expect(missing.body["ok"]).toBe(false); expect(JSON.stringify(missing.body)).toContain("库存");
-    const blank = await f.request("POST", endpoint, a.cookie, a.csrf, undefined, header + ",stock\n" + row + ",");
-    expect(blank.body["ok"]).toBe(false); expect(JSON.stringify(blank.body)).toContain("第 2 行缺少必填信息：库存");
-    const zero = await f.request("POST", endpoint, a.cookie, a.csrf, undefined, header + ",stock\n" + row + ",0");
-    expect(zero.body["ok"]).toBe(true);
+    expect(missing.body).toMatchObject({ ok: true, table: { products: [{ stock: 0 }] } });
+    for (const [input, expected] of [["", 0], ["0", 0], ["7", 7]]) {
+      const parsed = await f.request("POST", endpoint, a.cookie, a.csrf, undefined, header + ",stock\n" + row + "," + input);
+      expect(parsed.body).toMatchObject({ ok: true, table: { products: [{ stock: expected }] } });
+    }
+    for (const input of ["-1", "1.5", "缺货"]) {
+      const invalid = await f.request("POST", endpoint, a.cookie, a.csrf, undefined, header + ",stock\n" + row + "," + input);
+      expect(invalid.body).toMatchObject({ ok: false, errors: [{ row: 2, field: "stock", code: "BAD_NUMBER" }] });
+    }
   });
   it("旧快照保存返回冲突；未登录、viewer 和其他商户不能读取编辑信息", async () => {
     const f = fixture(), a = await f.login();
