@@ -9,7 +9,7 @@
 - **真实执行授权**：用户明确要求安装/升级即为本会话授权；`stage/verify` 在完成完整性、来源与安装副本校验后返回 `executionAuthorized:true`，不再依赖额外环境变量或平台预授权。
 - **升级不依赖 prepare**：已有应用直接用本次 session 的官方包根目录作为 `--staged`，只替换程序文件，逐字节保留 `cloud.config.json` 与 `pilot/merchant.yaml`；避免 prepare 生成新身份/新 data_dir。
 - **新增发布参数**：`references/publish-params.json` 固化已验证的 `node@22.19.0 → .node22 → npm ci → PORT 3000` 安装/启动命令。
-- **新增目标发现**：`scripts/discover-target.mjs` 从工作区 `.wbapp_*.genie` 读取 `appId`/`localDir`，并读取 `cloud.config.json` 的 origin/data_dir。
+- **核验升级目标**：`scripts/discover-target.mjs` 根据从当前 WorkBuddy 账号和组织核验的 appId、origin，在原发布任务中验证唯一绑定。原地替换前执行同样的校验。
 - **真实发布步骤**：`SKILL.md` 新增 `workbuddy_sites_deploy` 调用参数与回执核对，发布后自检 `/livez`、`/readyz`、`agent-card`。
 - **预检超时**：安装/检查超时从 120 秒提升到 600 秒，避免冷缓存安装被误判为 `ISOLATED_INSTALL_FAILED`。
 - **npm 版本**：需要 npm >= 12.2.2；12.2.0 的 `npm audit signatures` 会漏掉顶层目标包，导致 `TARGET_NOT_VERIFIED`/`AUDIT_NOT_CLEAN`。

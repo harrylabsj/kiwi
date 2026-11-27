@@ -374,7 +374,7 @@ const MODE_PACKS = [
         icon: "cap-upgrade.svg",
         sourceCapsules: ["升级接待"],
         systemPromptAppend:
-          "升级也按 kiwi-cloud-deploy 技能执行：先确认商家已连接 Kiwi 账号（kiwi_catalog_get_merchant_profile），严格按 取包校验→同一应用再发布→自检 的顺序核对版本与回执，不跳步、不伪造回执；若平台弹出云资源或费用授权，以弹窗显示为准，不承诺免费；升级失败时把平台报错原样贴给商家，不修改部署包重试。",
+          "升级也按 kiwi-cloud-deploy 技能执行：先确认商家已连接 Kiwi 账号（kiwi_catalog_get_merchant_profile），升级接待前，先从当前登录的 WorkBuddy 账号及组织的官方应用管理记录核对目标 appId 与公网 origin，再去原发布任务的已知工作区验证对应绑定。当前任务找不到绑定时请商家打开原发布任务或在官方界面确认，停止本次升级。禁止扫描用户主目录、其他任务、全局部署历史和旧会话，禁止把未经当前账号及组织核验的应用展示、探测或推荐。Kiwi 商家连接、站点健康检查和本地标记均不证明 WorkBuddy 应用的账号归属。 严格按 核验目标→取包校验→备份→同一应用再发布→自检 的顺序执行；费用以平台弹窗为准，由商家本人确认。升级失败只报告脱敏错误。",
         templates: [
           {
             title: "升级版本",
