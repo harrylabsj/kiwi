@@ -1754,6 +1754,7 @@ export function createMerchantManagementApiHandler(
       if (action === "save") allowed.push("confirmation_ref", "confirm_owner_rights");
       const fields = alipayFields(await readJsonBody(req), allowed);
       const expectedVersion = alipayExpectedVersion(fields["expected_version"]);
+      // Body streaming awaited above; recheck owner authority before creating a preview or writing.
       if (auth.ctx.generation !== requireAlipayCollectionOwner(req).ctx.generation) {
         throw new AlipayCollectionConflict();
       }
@@ -1818,6 +1819,7 @@ export function createMerchantManagementApiHandler(
         throw new ManagementError("invalid_input", "请明确确认包含适用运费、税费及其他费用的 CNY 最终应付总额");
       }
       const current = store.current();
+      // The session or generation could have changed while the request body was streaming.
       if (auth.ctx.generation !== requireAlipayCollectionOwner(req).ctx.generation ||
           current?.enabled !== true || current.version !== expectedVersion) throw new AlipayCollectionConflict();
       const pending = approvals.listApprovals("pending").find((item) => item.approval_id === approvalId && item.currency === "CNY");

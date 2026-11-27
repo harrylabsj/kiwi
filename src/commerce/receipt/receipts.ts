@@ -112,6 +112,8 @@ export interface ReceiptOutboxOptions {
   dbPath?: string;
   db?: DatabaseSync;
   reporterScope?: string;
+  /** Inspect an existing, already initialized outbox without changing its schema. */
+  initializeSchema?: boolean;
   now: () => string;
 }
 
@@ -124,6 +126,7 @@ export class ReceiptOutbox {
     this.db = options.db ?? new DatabaseSync(options.dbPath ?? ":memory:");
     this.now = options.now;
     this.reporterScope = options.reporterScope ?? "";
+    if (options.initializeSchema === false) return;
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS commerce_receipt_outbox (
         event_id TEXT PRIMARY KEY,
@@ -233,10 +236,28 @@ export class ReceiptOutbox {
       .run(this.reporterScope, file, version);
   }
 
-  pendingCount(): number {
-    const row = this.db
-      .prepare("SELECT COUNT(*) AS n FROM commerce_receipt_outbox WHERE status = 'PENDING' AND delivery_blocked = 0")
-      .get() as { n: number };
+  pendingCount(): number { return this.countPending(0); }
+
+  blockedCount(): number { return this.countPending(1); }
+
+  blockedEventIds(): string[] {
+    return this.db.prepare(`SELECT event_id FROM commerce_receipt_outbox
+      WHERE reporter_scope = ? AND status = 'PENDING' AND delivery_blocked = 1
+      ORDER BY created_at, event_id LIMIT 100`).all(this.reporterScope).map(row => String(row.event_id));
+  }
+
+  /** Requeue a single blocked row without changing its local identity or payload. */
+  retryBlocked(eventId: string): boolean {
+    const stamp = this.now();
+    return this.db.prepare(`UPDATE commerce_receipt_outbox SET delivery_blocked = 0,
+      attempts = 0, next_retry_at = ?, updated_at = ?
+      WHERE reporter_scope = ? AND event_id = ? AND status = 'PENDING' AND delivery_blocked = 1`)
+      .run(stamp, stamp, this.reporterScope, eventId).changes !== 0;
+  }
+
+  private countPending(blocked: 0 | 1): number {
+    const row = this.db.prepare(`SELECT COUNT(*) AS n FROM commerce_receipt_outbox
+      WHERE reporter_scope = ? AND status = 'PENDING' AND delivery_blocked = ?`).get(this.reporterScope, blocked) as { n: number };
     return Number(row.n);
   }
 

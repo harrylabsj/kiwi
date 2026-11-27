@@ -12,7 +12,7 @@ import { probeWeixinOwnerAgent, type WeixinOwnerAgent } from "./weixin-owner-age
 import { OwnerConversationError } from "./weixin-owner-conversation.js";
 import {
   isOwnerModelProvider, OWNER_MODEL_PROVIDERS, OWNER_MODEL_SERVICES,
-  openOwnerModelKey, parseOwnerModelSelection, readOwnerModelConfig, sealOwnerModelKey, writeOwnerModelConfig,
+  OwnerModelConfigError, openOwnerModelKey, parseOwnerModelSelection, readOwnerModelConfig, sealOwnerModelKey, writeOwnerModelConfig,
   type OwnerModelConfig, type OwnerModelSelection, type StoredOwnerModelConfig,
 } from "./weixin-owner-model-config.js";
 
@@ -23,6 +23,7 @@ export class WeixinOwnerModelSettings {
   private config: OwnerModelConfig | undefined;
   private selected: WeixinOwnerAgent;
   private saving = false;
+  private configProblem: string | undefined;
 
   constructor(
     private readonly profile: AgentProfile,
@@ -33,7 +34,8 @@ export class WeixinOwnerModelSettings {
     try {
       this.config = readOwnerModelConfig(dataDir, profile.owner_id);
       this.selected = resolveWeixinOwnerAgent(profile, env, this.config, dataDir);
-    } catch {
+    } catch (error) {
+      this.configProblem = error instanceof OwnerModelConfigError ? error.message : "无法读取当前实例的模型配置。";
       this.selected = { state: "unavailable", reason: "invalid_config" };
     }
   }
@@ -56,6 +58,7 @@ export class WeixinOwnerModelSettings {
     return {
       editable: this.editable,
       active: this.agent?.state === "configured",
+      ...(this.configProblem === undefined ? {} : { config_problem: this.configProblem }),
       credential_saved: this.config !== undefined && "credential" in this.config && this.selected.state === "configured",
       ...(current === undefined ? {} : { provider: current.provider, model: current.model }),
       providers: OWNER_MODEL_PROVIDERS.map((id) => ({
@@ -66,6 +69,7 @@ export class WeixinOwnerModelSettings {
 
   async save(input: { provider: unknown; model: unknown; apiKey: unknown }, assertCurrent: () => void, changed: () => void) {
     if (!this.editable) throw new OwnerConversationError("forbidden", "此实例的部署设置已停用微信模型配置。");
+    if (this.configProblem !== undefined) throw new OwnerConversationError("unavailable", this.configProblem);
     if (this.saving) throw new OwnerConversationError("conflict", "模型测试正在进行，请稍后重试。");
     if (!isOwnerModelProvider(input.provider)) throw new OwnerConversationError("invalid_input", "请选择支持的模型服务商。");
     let selection: OwnerModelSelection;
@@ -104,8 +108,8 @@ export class WeixinOwnerModelSettings {
       let current: OwnerModelConfig | undefined;
       try {
         current = readOwnerModelConfig(this.dataDir, this.profile.owner_id);
-      } catch {
-        throw new OwnerConversationError("unavailable", "无法读取当前实例的模型配置。");
+      } catch (error) {
+        throw new OwnerConversationError("unavailable", error instanceof OwnerModelConfigError ? error.message : "无法读取当前实例的模型配置。");
       }
       if (JSON.stringify(current) !== JSON.stringify(this.config)) {
         throw new OwnerConversationError("conflict", "模型配置已在运行时外更新，请重启实例后重试。");

@@ -1530,6 +1530,7 @@ async function routeMerchant(sub: string | undefined, args: ParsedArgs): Promise
   if (sub === "setup-public") return await cmdMerchantSetupPublic(args);
   if (sub === "up") return await cmdMerchantUp(args);
   if (sub === "stats") return await cmdMerchantStats(args);
+  if (sub === "receipt-outbox") return await cmdMerchantReceiptOutbox(args);
   if (sub === "listings") return notImplementedProduct("kiwi merchant listings", "D2");
   if (sub === "status") return notImplementedProduct("kiwi merchant status", "D1");
   if (sub === "doctor") return await cmdMerchantDoctor(args);
@@ -2490,6 +2491,36 @@ async function cmdMerchantStats(args: ParsedArgs): Promise<number> {
     return EXIT.OK;
   } catch (err) {
     process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    return EXIT.CONFIG;
+  }
+}
+
+/** Local operator access only; the running dispatcher signs and submits retryable rows. */
+async function cmdMerchantReceiptOutbox(args: ParsedArgs): Promise<number> {
+  const [, , action, id, ...extra] = args.command;
+  if (args.dataDir === undefined || extra.length ||
+      !(action === "status" && id === undefined || action === "retry" && id?.trim())) {
+    process.stderr.write("usage: kiwi merchant receipt-outbox status --data-dir <merchant-data-dir>\n" +
+      "       kiwi merchant receipt-outbox retry <event-id> --data-dir <merchant-data-dir>\n");
+    return EXIT.CONFIG;
+  }
+  const file = path.join(args.dataDir, "a2a", "commerce-receipt-outbox.sqlite");
+  try {
+    if (!lstatSync(file).isFile()) throw new Error("outbox must be an existing regular file");
+    const { ReceiptOutbox } = await import("./commerce/receipt/receipts.js");
+    const db = new DatabaseSync(file, { readOnly: action === "status" });
+    try {
+      const outbox = new ReceiptOutbox({ db, initializeSchema: false, now: () => new Date().toISOString() });
+      if (action === "status") {
+        printJson({ ok: true, pending: outbox.pendingCount(), blocked: outbox.blockedCount(), blocked_event_ids: outbox.blockedEventIds() });
+        return EXIT.OK;
+      }
+      const requeued = outbox.retryBlocked(id!);
+      printJson({ ok: requeued, requeued });
+      return requeued ? EXIT.OK : EXIT.CONFIG;
+    } finally { db.close(); }
+  } catch {
+    process.stderr.write("无法读取或更新现有回执队列，请核对商家数据目录、文件权限和实例版本。\n");
     return EXIT.CONFIG;
   }
 }

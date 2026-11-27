@@ -1,4 +1,5 @@
-import { constants } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { constants, createReadStream } from 'node:fs';
 import { chmod, copyFile, lstat, mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -27,18 +28,22 @@ export async function snapshotInstallTarballs(directory, installCacheDirectory, 
   for (const integrity of integrities) {
     if (typeof integrity !== 'string' || !/^sha512-[A-Za-z0-9+/]{86}==$/.test(integrity)) throw new Error('PACKAGE_LOCK_INVALID');
     const hash = Buffer.from(integrity.slice(7), 'base64').toString('hex');
-    entries.push(join('_cacache', 'content-v2', 'sha512', hash.slice(0, 2), hash.slice(2, 4), hash.slice(4)));
+    entries.push({ hash, path: join('_cacache', 'content-v2', 'sha512', hash.slice(0, 2), hash.slice(2, 4), hash.slice(4)) });
   }
   const signal = options.signal;
   const deadlineEpochMs = options.deadlineEpochMs ?? (Number(process.env.KIWI_PREPARE_DEADLINE_EPOCH_MS) || undefined);
   const concurrency = Math.max(1, Math.min(16, options.concurrency ?? 8));
   let index = 0;
+  function checkBudget() {
+    if (signal?.aborted) throw new Error('PREPARE_CANCELLED');
+    if (deadlineEpochMs !== undefined && Date.now() >= deadlineEpochMs) throw new Error('PREPARE_TIMEOUT');
+  }
   async function worker() {
     for (;;) {
-      if (signal?.aborted) throw new Error('PREPARE_CANCELLED');
-      if (deadlineEpochMs !== undefined && Date.now() >= deadlineEpochMs) throw new Error('PREPARE_TIMEOUT');
-      const path = entries[index++];
-      if (path === undefined) return;
+      checkBudget();
+      const entry = entries[index++];
+      if (!entry) return;
+      const { path, hash } = entry;
       const source = join(installCacheDirectory, path);
       const destination = join(directory, 'npm-cache', path);
       let stat;
@@ -51,6 +56,12 @@ export async function snapshotInstallTarballs(directory, installCacheDirectory, 
       }
       await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
       await copyFile(source, destination, constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE);
+      const digest = createHash('sha512');
+      for await (const chunk of createReadStream(destination)) {
+        checkBudget();
+        digest.update(chunk);
+      }
+      if (digest.digest('hex') !== hash) throw new Error('CACHE_TARBALL_INVALID');
     }
   }
   await Promise.all(Array.from({ length: Math.min(concurrency, entries.length) }, worker));

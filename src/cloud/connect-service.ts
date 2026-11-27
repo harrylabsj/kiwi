@@ -50,6 +50,7 @@
  * 目标会话的格，不删除其他会话。
  */
 
+import { MERCHANT_DISPLAY_NAME_PLACEHOLDER } from "./merchant-display-name.js";
 import { createHash, randomUUID } from "node:crypto";
 import { isIP } from "node:net";
 
@@ -258,7 +259,7 @@ export function isPublicHostAllowed(hostname: string): boolean {
 
 /** 部署占位名不是可公开的商家身份。只拦截新发起/继续发布，不改变存量已发布状态。 */
 function assertPublishableMerchantName(card: AgentCard): void {
-  if (card.name.trim() === "待设置商家名称" || card.provider.organization.trim() === "待设置商家名称") {
+  if (card.name.trim() === MERCHANT_DISPLAY_NAME_PLACEHOLDER || card.provider.organization.trim() === MERCHANT_DISPLAY_NAME_PLACEHOLDER) {
     throw new MerchantConnectError("MERCHANT_DISPLAY_NAME_REQUIRED", "请先在原实例配置商家显示名，再从工作台发布名片；无需在聊天里重填。");
   }
 }

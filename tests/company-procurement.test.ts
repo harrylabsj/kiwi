@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, mkdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, linkSync, mkdtempSync, mkdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -162,6 +162,9 @@ describe("company procurement through native A2A and external source capture", (
         costs: { ...costs, native_basis: undefined, goods: { ...costs.goods, amount_minor: 11250, tax: "gross", tax_bps: undefined },
           charges: [{ ...costs.charges![0], amount_minor: 10000 }] },
       }), { mode: 0o600 });
+      const linkedCapture = join(directory, "other-fixture.json");
+      writeFileSync(linkedCapture, "{}", { mode: 0o600 });
+      linkSync(linkedCapture, join(captureRoot, "linked.json"));
       let confirm = false;
       let clockOffset = 0;
       const service = new KiwiBuyerService({ store, principal: "workbuddy-test", buyerAgentId: "buyer:company", sessionId: "company",
@@ -172,8 +175,10 @@ describe("company procurement through native A2A and external source capture", (
       const attached = await call("kiwi_prepare_procurement", { operation: "attach_sources", request_id: "sources",
         case_id: created.case.id, expected_revision: created.case.revision, ecommerce_status: "completed",
         sources: [{ id: "a", channel: "kiwi", variant: "sku-001", merchant_id: "merchant-001", query: "Test Product" },
-          { id: "b", channel: "ecommerce", variant: "platform-sku-b", capture_id: "verified-b" }],
+          { id: "b", channel: "ecommerce", variant: "platform-sku-b", capture_id: "verified-b" },
+          { id: "linked", channel: "ecommerce", variant: "linked-sku", capture_id: "linked" }],
       });
+      expect(attached.failures).toEqual([{ source_id: "linked", reason: "INVALID_CAPTURE_FILE" }]);
       const args = { intent: { intent_id: "rfq-1", intent_type: "procurement",
         items: [{ query: "Test Product", sku: "sku-001", quantity: { value: 120, unit: "台" } }] },
         merchant_ids: ["merchant-001"], idempotency_key: "first-rfq",

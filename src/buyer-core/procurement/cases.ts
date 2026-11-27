@@ -207,8 +207,12 @@ export class ProcurementCases {
             const draft = input.sources[index]!;
             const reason = item.reason instanceof McpError ? item.reason.message : "SOURCE_UNAVAILABLE";
             failures.push({ source_id: draft.id, reason });
-            const status = reason.split(":")[1];
-            if (draft.channel === "kiwi" && (status === "error" || status === "timeout" || status === "partial")) coverage.kiwi = status;
+            continue;
+          }
+          if ("failure" in item.value) {
+            const { code, coverage: status } = item.value.failure;
+            failures.push({ source_id: input.sources[index]!.id, reason: `${code}:${status}` });
+            if (status === "error" || status === "timeout" || status === "partial") coverage.kiwi = status;
             continue;
           }
           const { source, status } = item.value;
@@ -286,7 +290,9 @@ export class ProcurementCases {
     if (basis.delivery_before && !validTimestamp(basis.delivery_before)) fail("INVALID_DELIVERY_DEADLINE");
   }
 
-  private async materialize(current: Case, draft: SourceDraft): Promise<{ source: Source; status?: Coverage }> {
+  private async materialize(current: Case, draft: SourceDraft): Promise<
+    { source: Source; status?: Coverage } | { failure: { code: "DISCOVERY_BINDING_NOT_FOUND"; coverage: Coverage } }
+  > {
     const channel = draft.channel;
     const at = this.deps.now();
     if (current.basis.channels && !current.basis.channels.includes(channel)) fail("CHANNEL_OUT_OF_SCOPE");
@@ -294,7 +300,8 @@ export class ProcurementCases {
     if (channel === "kiwi") {
       const merchant = must(draft.merchant_id, "MERCHANT_REQUIRED");
       const { match, coverage } = await this.deps.discover(draft.query ?? current.basis.model ?? draft.variant, merchant, draft.variant);
-      const found = must(match, `DISCOVERY_BINDING_NOT_FOUND:${coverage}`);
+      if (!match) return { failure: { code: "DISCOVERY_BINDING_NOT_FOUND", coverage } };
+      const found = match;
       return { status: coverage, source: sourceVersion({ ...base, name: found.name, merchant_id: merchant,
         inquiry_available: found.inquiry_available, product: found.product, price_kind: "IMPORTED_REFERENCE",
         evidence: { reference: `kiwi-directory/${merchant}/${draft.variant}`, captured_at: at } }) };
@@ -318,7 +325,7 @@ export class ProcurementCases {
     let values: Record<string, unknown>;
     try {
       const stat = fstatSync(fd);
-      if (!stat.isFile() || stat.uid !== directory.uid || (stat.mode & 0o077) !== 0 || stat.size > 262144) fail("INVALID_CAPTURE_FILE");
+      if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== directory.uid || (stat.mode & 0o077) !== 0 || stat.size > 262144) fail("INVALID_CAPTURE_FILE");
       values = asRecord(JSON.parse(readFileSync(fd, "utf8")));
     } finally {
       closeSync(fd);

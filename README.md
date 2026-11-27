@@ -217,6 +217,17 @@ merchant_experience:
 可使用 createMerchantHttpServer() 接入独立 session、SSE 事件流和 candidate 审批。新
 能力的实现边界和工具清单见 [`docs/merchant-experience.md`](docs/merchant-experience.md)。
 
+### 恢复被拒收的商家交易回据
+
+在商家实例上，用该实例启动时的 `--data-dir` 检查本地队列：
+
+```bash
+kiwi merchant receipt-outbox status --data-dir "$MERCHANT_DATA_DIR"
+kiwi merchant receipt-outbox retry '<event-id>' --data-dir "$MERCHANT_DATA_DIR"
+```
+
+`status` 分开显示待投递和阻塞计数，以及最多 100 个阻塞事件 ID；不输出回据正文或拒收错误。先从实例日志确认并修复拒收原因（例如升级到兼容的回据契约），再选中单条 ID 重入队。`retry` 成功只表示回据恢复待投递，由运行中的实例按原签名和幂等规则投递；不表示目录已收录，也不会重新创建订单。如果再次被拒收，该回据会重新进入阻塞状态。
+
 ## DeepSeek Harness 插件
 
 Kiwi 买家能力可以以 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）插件形式挂载：

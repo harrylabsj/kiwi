@@ -45,8 +45,7 @@ export function createOwnerA2aInquirySource(dataDir: string, localAgent: string)
     if (!Number.isFinite(receivedAt)) return undefined;
     return { events, inbound, wire, receivedAt };
   }
-  function read(ledger: LedgerStore, id: string): OwnerInquiry | undefined {
-    const hit = lastInbound(ledger, id);
+  function read(id: string, hit: ReturnType<typeof lastInbound>): OwnerInquiry | undefined {
     if (hit === undefined) return undefined;
     const { events, inbound, wire, receivedAt } = hit;
     const phase = events.filter((event) => event.state_transition !== undefined).at(-1)?.state_transition?.to_phase;
@@ -70,11 +69,11 @@ export function createOwnerA2aInquirySource(dataDir: string, localAgent: string)
       const ids = ledger.listNegotiations();
       if (ids.length > MAX_LEDGER_CHAINS) throw new OwnerConversationError("unavailable", "试点询价视图超出查询容量。");
       return ids.flatMap((id) => {
-        const value = read(ledger, id);
+        const value = read(id, lastInbound(ledger, id));
         return value === undefined ? [] : [value];
       });
     },
-    get(id) { return read(open(), id); },
+    get(id) { return read(id, lastInbound(open(), id)); },
     rangeStats(since) {
       if (!Number.isSafeInteger(since)) throw new OwnerConversationError("invalid_input", "统计区间起点无效。");
       const ledger = open();
@@ -85,7 +84,7 @@ export function createOwnerA2aInquirySource(dataDir: string, localAgent: string)
         const hit = lastInbound(ledger, id);
         if (hit === undefined || hit.receivedAt < since) continue;
         inquiries += 1;
-        if (read(ledger, id) !== undefined) pending += 1;
+        if (read(id, hit) !== undefined) pending += 1;
       }
       return { inquiries, pending };
     },

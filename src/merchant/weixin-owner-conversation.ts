@@ -122,7 +122,8 @@ export function rankOwnerInquiries(items: readonly OwnerInquiry[], now: number):
     (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).slice(0, 3);
 }
 
-type OwnerIntent = OwnerAgentDecision | { kind: "greeting" | "unsupported" | "clarify_target" };
+type OwnerIntent = OwnerAgentDecision | { kind: "greeting" | "unsupported" | "clarify_target" | "clarify_range" }
+  | { kind: "explicit_range"; days: number };
 
 /** The model may interpret intent but cannot invent or silently change a draft target. */
 function checkAgentTarget(intent: OwnerAgentDecision, text: string): OwnerIntent {
@@ -137,15 +138,15 @@ function checkAgentTarget(intent: OwnerAgentDecision, text: string): OwnerIntent
   return intent;
 }
 
-const CN_DAYS: Record<string, number> = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+const CN_DAYS: Record<string, number> = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
 
-/** 区间天数只取店主明确给出的 1–30，超出范围不猜、回落为不支持。 */
+/** 只解析完整的天数。无效或超出范围时不查询。 */
 function parseOwnerDays(text: string): number | undefined {
-  if (/^[0-9]{1,2}$/.test(text)) {
-    const n = Number(text);
-    return n >= 1 && n <= 30 ? n : undefined;
-  }
-  return CN_DAYS[text];
+  const tens = /^([二三]?)十([一二三四五六七八九]?)$/.exec(text);
+  const n = /^[0-9]{1,2}$/.test(text) ? Number(text)
+    : tens ? (tens[1] ? CN_DAYS[tens[1]]! : 1) * 10 + (tens[2] ? CN_DAYS[tens[2]]! : 0)
+    : CN_DAYS[text];
+  return n !== undefined && n >= 1 && n <= 30 ? n : undefined;
 }
 
 /** 只把边界明确的自然语言意图映射到业务能力，不执行正式操作。 */
@@ -164,16 +165,23 @@ function classify(text: string): OwnerIntent {
     return { kind: why ? "explain" : "draft", index: ("一二三".includes(n) ? "一二三".indexOf(n) + 1 : Number(n)) - 1,
       ...(ref !== undefined ? { ref: ref.toUpperCase() } : {}) };
   }
+  const privateLookup = /库存|订单|询价详情|客户资料|联系方式|成交|付款状态|退款状态/.test(request);
+  if (!privateLookup && /咨询|询价|询盘|客户|买家|商机/.test(request)) {
+    const ranges = [...request.normalize("NFKC").matchAll(
+      /(?:最近|过去|近)([0-9零〇一二两三四五六七八九十百千万半廿卅几点.+~到至–—,、\s-]+)天/g,
+    )];
+    if (ranges.length) {
+      const days = ranges.length === 1 ? parseOwnerDays(ranges[0]![1]!.trim()) : undefined;
+      return days === undefined ? { kind: "clarify_range" } : { kind: "explicit_range", days };
+    }
+  }
   if (!/起草|草稿/.test(request) && (/询[价盘]|待回复/.test(request) && /今天|哪些|哪几|哪[三3]|优先|待回复|最该|排行/.test(request) ||
     /(?:今天|现在).*(?:有什么|哪些|哪几|要|待).*(?:跟进|处理|回复)/.test(request))) return { kind: "list" };
   if (/^(?:(?:把)?(?:刚才|上一条|上次)(?:的)?(?:清单|回复|结果)?(?:再说一遍|是什么|是啥|给我看看|给我复述一下)|(?:刚才|上次)(?:聊|说)到哪[里儿]?|再说一遍|你刚才说了什么)[。！？!?\s]*$/.test(request)) {
     return { kind: "repeat", listOnly: request.includes("清单") };
   }
   if (/^(?:你好|您好|在吗|嗨|hi|hello|你是谁|你是做什么的|你能做什么|你可以帮我做什么)[。！？!?\s]*$/i.test(request)) return { kind: "greeting" };
-  if (/库存|订单|询价详情|客户资料|联系方式|成交|付款状态|退款状态/.test(request)) return { kind: "private_lookup" };
-  const daysText = /(?:最近|过去|近)\s*([0-9]{1,2}|[一二两三四五六七八九十])\s*天/.exec(request)?.[1];
-  const days = daysText !== undefined ? parseOwnerDays(daysText) : undefined;
-  if (days !== undefined && /咨询|询价|客户|买家|商机/.test(request)) return { kind: "range", days };
+  if (privateLookup) return { kind: "private_lookup" };
   if (/(?:这周|本周|这一周|上个?周|上个?星期)/.test(request) && /咨询|询价|客户|买家|商机/.test(request)) return { kind: "range", days: 7 };
   if (/今天|今日/.test(request) && /咨询|询价|买家|客户|新增/.test(request)) return { kind: "today" };
   return { kind: "unsupported" };
@@ -505,14 +513,15 @@ export class WeixinOwnerConversation {
     let historyReply: number | null = null;
     let modelResponded = false;
     try {
-      let intent: OwnerIntent;
-      if (agent?.state === "configured") {
+      let intent = classify(text);
+      // An explicit interval is either deterministic or needs clarification, even with a model configured.
+      if (agent?.state === "configured" && intent.kind !== "explicit_range" && intent.kind !== "clarify_range") {
         const decision = await this.decideWithAgent(agent, binding, turn, text, signal);
         if (signal.aborted || this.active(fingerprint)?.conversation !== turn.conversation || this.now() - turn.received >= REPLY_TTL) return;
         ({ intent, usedModel: modelResponded } = decision);
         // Later model turns get only free-form replies, not rendered business facts.
         if (modelResponded) historyReply = intent.kind === "reply" ? 1 : 0;
-      } else intent = classify(text);
+      }
       if (previewOnly) ruleProposal = ownerWeekdayDigest(turn.text ?? "", this.options.timeZone ?? "Asia/Shanghai", this.now());
       if (inventorySku !== undefined) {
         reply = await this.inventoryPreview(inventorySku);
@@ -527,8 +536,10 @@ export class WeixinOwnerConversation {
         reply = intent.text;
       } else if (intent.kind === "today") {
         reply = this.countReply("今天", this.startOfDay(this.now()));
-      } else if (intent.kind === "range") {
+      } else if (intent.kind === "range" || intent.kind === "explicit_range") {
         reply = this.countReply(`过去 ${intent.days} 天`, this.now() - intent.days * DAY_MS);
+      } else if (intent.kind === "clarify_range") {
+        reply = "请用 1–30 的整数告诉我想查多少天，例如「过去 15 天有几笔咨询？」。本次没有查询。";
       } else if (intent.kind === "clarify_target") {
         reply = "我还不能确定你指哪一笔。请告诉我清单中的序号；如果有多份清单，也请带上清单号。";
       } else if (intent.kind === "greeting") {

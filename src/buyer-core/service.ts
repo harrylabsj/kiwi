@@ -987,14 +987,14 @@ export class KiwiBuyerService {
   async requestQuotes(input: QuoteRequestInput): Promise<{ task: Record<string, unknown>; created: boolean; reused_history?: Record<string, unknown> }> {
     const useHistory = input.reuse_history === true && explicitIntentItemSku(input.intent) === undefined;
     const merchants = input.merchant_ids ?? [];
-    if (useHistory && merchants.length !== 1) {
-      throw new McpError("clarification_needed", "沿用上次规格需要恰好指定一个商家；请说明要沿用哪家店的报价。", {
-        reason: "history_merchant_required",
-      });
-    }
     if (merchants.length === 0) {
       throw new McpError("clarification_needed", "发起询价需要至少指定一个商家；请先从搜索结果中选择可实时询价的商家。", {
         reason: "merchant_required",
+      });
+    }
+    if (useHistory && merchants.length !== 1) {
+      throw new McpError("clarification_needed", "沿用上次规格需要恰好指定一个商家；请说明要沿用哪家店的报价。", {
+        reason: "history_merchant_required",
       });
     }
     const idempotencyKey = input.idempotency_key ?? `req-${uuidv7()}`;

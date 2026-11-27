@@ -38,8 +38,10 @@ export type StoredOwnerModelConfig = OwnerModelSelection & {
 export type OwnerModelConfig = (OwnerModelSelection & { api_key_env: string }) | StoredOwnerModelConfig;
 
 export class OwnerModelConfigError extends Error {
-  constructor(readonly code: "invalid_config" | "unreadable_config") {
-    super(code === "invalid_config" ? "店主模型配置无效。" : "无法读取店主模型配置。");
+  constructor(readonly code: "invalid_config" | "unreadable_config" | "merchant_mismatch") {
+    super(code === "merchant_mismatch" ? "模型配置属于另一商家。请核对本实例数据目录；不会覆盖该文件。"
+      : code === "invalid_config" ? "本实例的店主模型配置无效。请由实例运维核对文件归属和权限，备份损坏的配置后重启，再重新填写。"
+      : "无法读取店主模型配置。请由实例运维核对本实例的数据目录和文件权限。");
   }
 }
 
@@ -103,9 +105,11 @@ export function readOwnerModelConfig(dataDir: string, merchantId: string): Owner
     const value: unknown = JSON.parse(source);
     if (typeof value !== "object" || value === null || Array.isArray(value)) throw new OwnerModelConfigError("invalid_config");
     const { schema_version, merchant_id, ...config } = value as Record<string, unknown>;
+    if (typeof merchant_id === "string" && merchant_id !== merchantId) throw new OwnerModelConfigError("merchant_mismatch");
     if (schema_version !== 1 || merchant_id !== merchantId) throw new OwnerModelConfigError("invalid_config");
     return parseOwnerModelConfig(config);
-  } catch {
+  } catch (error) {
+    if (error instanceof OwnerModelConfigError) throw error;
     throw new OwnerModelConfigError("invalid_config");
   }
 }
