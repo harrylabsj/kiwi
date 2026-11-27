@@ -154,6 +154,7 @@ import {
   type ExactMoney,
 } from "../../merchant/application/money.js";
 import { CONNECTION_PAIRING_SAFE_CODES, type PublicInquiryConsentSummary } from "../../cloud/connect-service.js";
+import { normalizeMerchantDisplayName } from "../../cloud/merchant-display-name.js";
 import { EXACT_PRODUCT_TOOLS } from "../../merchant/exact-product-executors.js";
 import { SERVICE_CONTROL_TOOLS } from "../../merchant/service-control-executors.js";
 import type { WorkbenchQuoteResult } from "../../merchant/quote-calculator.js";
@@ -244,6 +245,11 @@ export interface MerchantManagementApiOptions {
   merchantId: string;
   merchantName?: string;
   merchantNameNeedsUpdate?: boolean;
+  merchantDisplayName?: {
+    current: () => string | undefined;
+    needsPublicName: () => boolean;
+    save: (name: string) => void;
+  };
   /** 当前部署代次（单代次实例恒 1；代次切换后旧代次不得再产生业务写入）。 */
   generation: () => number;
   runtimeVersion: string;
@@ -1224,8 +1230,9 @@ export function createMerchantManagementApiHandler(
       const auth = requireActor(req);
       writeJson(res, 200, {
         ...await readService.getStatus(auth.ctx),
-        merchant_name: options.merchantName ?? null,
-        merchant_name_needs_update: options.merchantNameNeedsUpdate === true,
+        merchant_name: options.merchantDisplayName?.current() ?? options.merchantName ?? null,
+        merchant_name_needs_update: (options.merchantDisplayName?.needsPublicName() ?? options.merchantNameNeedsUpdate) === true,
+        merchant_name_editable: options.merchantDisplayName !== undefined && auth.ctx.role === "owner",
       }, { "x-request-id": requestId });
       return;
     }
@@ -1852,6 +1859,25 @@ export function createMerchantManagementApiHandler(
     requestId: string,
     url: URL,
   ): Promise<void> {
+    if (rest === "/runtime/display-name") {
+      const auth = requireActor(req);
+      assertWriteGuards(req, auth.sessionId);
+      authorizeOrThrow(auth.ctx, "onboarding:manage");
+      if (auth.ctx.role !== "owner") throw new ManagementError("forbidden", "只有店主可以修改商家显示名。");
+      const displayName = options.merchantDisplayName;
+      if (displayName === undefined) throw new ManagementError("unavailable", "此实例暂不支持修改商家显示名。");
+      const fields = objectFields(await readJsonBody(req), ["display_name"]);
+      const name = normalizeMerchantDisplayName(fields["display_name"]);
+      if (name === undefined) throw new ManagementError("invalid_input", "请输入 1 至 80 个字符的商家显示名，不能使用占位名或控制字符。");
+      const latest = requireActor(req);
+      authorizeOrThrow(latest.ctx, "onboarding:manage");
+      if (latest.ctx.role !== "owner" || latest.ctx.generation !== auth.ctx.generation) {
+        throw new ManagementError("conflict", "当前管理权限或部署代次已变更，请刷新后重试。");
+      }
+      displayName.save(name);
+      writeJson(res, 200, { merchant_name: name }, { "x-request-id": requestId });
+      return;
+    }
     if (rest === ALIPAY_APPROVAL_PATH) {
       await approveAlipayTotal(req, res, requestId);
       return;
@@ -3620,7 +3646,7 @@ export function createMerchantManagementApiHandler(
         ...(readiness.checks.products?.code === "PRODUCTS_NOT_CONFIGURED"
           ? [{ code: "products_required", message: "请先导入商品；导入后系统会自动继续服务检查，当前不会报价或发布名片。" }]
           : []),
-        ...(options.merchantNameNeedsUpdate === true
+        ...((options.merchantDisplayName?.needsPublicName() ?? options.merchantNameNeedsUpdate) === true
           ? [{ code: "merchant_name_required", message: "请设置商家显示名后再确认公开资料。" }]
           : []),
       ];

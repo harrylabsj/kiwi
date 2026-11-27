@@ -557,6 +557,8 @@ function authVerifierFromEnv(ctx: AuthFromEnvContext): AuthVerifier | undefined 
 export interface A2aNodeCoreOptions {
   assertCustomerWriterOwner?: () => void;
   profile: AgentProfile;
+  /** 当前公开名片预览名；缺省使用部署时的 profile 名称。 */
+  publicMerchantName?: () => string | undefined;
   /** 对外广告地址（决定 Card/UCP 内的 baseUrl）。 */
   advertisedBase: string;
   /** A2A 端点路径：自托管形态 "/"；云端单端口用 "/a2a"（设计 §8.2）。 */
@@ -1122,28 +1124,31 @@ export function createA2aNodeCore(options: A2aNodeCoreOptions): A2aNodeCore {
     trustForwardedFor: (process.env.KIWI_A2A_TRUST_FORWARDED_FOR ?? "").trim() === "1",
     // A2AServerOptions.card 是 AgentCardConfigProvider：返回 config，server 内部再 buildAgentCard。
     // 只使用商家明确配置的公开名称，不从 agent_id 或私密业务资料推导。
-    card: () => ({
-      name: role === "merchant" ? profile.name ?? "Kiwi 商家" : "Kiwi A2A Buyer",
-      description: role === "merchant"
-        ? "采购方 Agent 可发现并向本店发送询价；本服务仅按商家已配置规则报价。"
-        : "Kiwi buyer agent",
-      providerOrganization: role === "merchant" ? profile.name ?? "商家" : "Kiwi",
-      version: "1.0.0",
-      baseUrl: holder.baseUrl,
-      a2aPath,
-      // Issue 16 B：签名模式发布节点公开签名密钥（非 secret），对端据此验签。
-      ...(options.signingIdentity !== undefined
-        ? {
-            securityScheme: {
-              name: "kiwi-signature",
-              type: "kiwi-http-message-signature",
-              keyid: options.signingIdentity.keyid,
-              publicKeyPem: options.signingIdentity.publicKeyPem,
-              algorithm: options.signingIdentity.algorithm,
-            },
-          }
-        : {}),
-    }),
+    card: () => {
+      const merchantName = role === "merchant" ? options.publicMerchantName?.() ?? profile.name : undefined;
+      return {
+        name: role === "merchant" ? merchantName ?? "Kiwi 商家" : "Kiwi A2A Buyer",
+        description: role === "merchant"
+          ? "采购方 Agent 可发现并向本店发送询价；本服务仅按商家已配置规则报价。"
+          : "Kiwi buyer agent",
+        providerOrganization: role === "merchant" ? merchantName ?? "商家" : "Kiwi",
+        version: "1.0.0",
+        baseUrl: holder.baseUrl,
+        a2aPath,
+        // Issue 16 B：签名模式发布节点公开签名密钥（非 secret），对端据此验签。
+        ...(options.signingIdentity !== undefined
+          ? {
+              securityScheme: {
+                name: "kiwi-signature",
+                type: "kiwi-http-message-signature",
+                keyid: options.signingIdentity.keyid,
+                publicKeyPem: options.signingIdentity.publicKeyPem,
+                algorithm: options.signingIdentity.algorithm,
+              },
+            }
+          : {}),
+      };
+    },
     // 发布 UCP Profile（/.well-known/ucp）：注册广告了 ucp_profile_url，
     // 端点就必须真实可拉——否则 catalog 验证的 profile 阶段拉 UCP 404 →
     // freshness=unreachable → buyer 发现被 BLOCKED 列表挡掉。
