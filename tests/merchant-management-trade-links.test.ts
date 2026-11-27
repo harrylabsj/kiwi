@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { projectFileProductRecord } from "../src/cloud/bootstrap.js";
 import { createFileProductSource } from "../src/cloud/product-source.js";
-import { renderMerchantManagementPage } from "../src/http/merchant-management/page.js";
+import { MERCHANT_PRODUCT_HELP_HTML, renderMerchantManagementPage } from "../src/http/merchant-management/page.js";
 
 async function productView(items: Record<string, unknown>[]) {
   const page = renderMerchantManagementPage({ productAuthority: "file", catalogConnection: true });
@@ -28,7 +28,7 @@ describe("merchant file-product marketplace links", () => {
     expect(html).toContain(`<td>${label}</td><td>${id}</td>`);
     expect(html).toContain(`<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`);
     expect(html).toContain("&lt;b&gt;sample&lt;/b&gt;");
-    expect(html).toContain("交易链接仅为平台商品页");
+    expect(MERCHANT_PRODUCT_HELP_HTML).toContain("实际成交条件和付款结果由交易平台确认");
     expect(html).not.toContain("已付款");
   });
 
