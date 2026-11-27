@@ -161,6 +161,7 @@ import {
 } from "./product-source.js";
 import { runCardPublicationReadiness, runReadiness, type ReadinessInputs, type ReadinessCheckResult, type ReadinessReport } from "./readiness.js";
 import { loadOrCreateMerchantIdentity } from "./merchant-identity.js";
+import { MERCHANT_DISPLAY_NAME_PLACEHOLDER, MerchantDisplayNameStore } from "./merchant-display-name.js";
 import { createMerchantConnectionService, MerchantConnectError, type MerchantConnectionService } from "./connect-service.js";
 import { createProbeHandler } from "../tools/workbuddy-echo.js";
 import { createFileListingPublicationService } from "./file-listing-publication.js";
@@ -473,6 +474,8 @@ export async function bootstrapCloudRuntime(
   profile = loadOrCreateMerchantIdentity(config.dataDir, profile, {
     merchantNameNeedsUpdate: config.merchantNameNeedsUpdate,
   });
+  let merchantDisplayName: MerchantDisplayNameStore | undefined;
+  const publicMerchantName = () => merchantDisplayName?.publicPreview() ?? profile.name;
   if (config.productsFile !== undefined && !config.sample) {
     ensureInitialEmptyProductTable(config.productsFile, profile.owner_id);
   }
@@ -705,6 +708,7 @@ export async function bootstrapCloudRuntime(
         } }
       : {}),
     profile,
+    publicMerchantName,
     advertisedBase: config.publicOrigin,
     a2aPath: CLOUD_A2A_PATH,
     dataDir: config.dataDir,
@@ -865,6 +869,8 @@ export async function bootstrapCloudRuntime(
     // 立即 SQLITE_BUSY；WAL 允许单写多读。
     managementDb.exec("PRAGMA journal_mode = WAL");
     managementDb.exec("PRAGMA busy_timeout = 5000");
+    const displayNames = new MerchantDisplayNameStore(managementDb, profile.owner_id);
+    merchantDisplayName = displayNames;
     if (config.a2aAuth.mode === "signature" && new URL(config.publicOrigin).protocol === "https:") {
       collectionStore = new AlipayCollectionStore(managementDb, profile.owner_id);
     }
@@ -1035,9 +1041,9 @@ export async function bootstrapCloudRuntime(
         serviceEpoch: 1,
         // 名片与 A2A server 自发的 well-known 卡同源（name/securityScheme 对齐 node.ts）。
         card: {
-          name: profile.name ?? "Kiwi 商家",
+          get name() { return publicMerchantName() ?? "Kiwi 商家"; },
           description: "采购方 Agent 可发现并向本店发送询价；本服务仅按商家已配置规则报价。",
-          providerOrganization: profile.name ?? "商家",
+          get providerOrganization() { return publicMerchantName() ?? "商家"; },
           version: "1.0.0",
           ...(a2aSigningIdentity !== undefined
             ? {
@@ -1277,8 +1283,21 @@ export async function bootstrapCloudRuntime(
     merchantApiHandler = createMerchantManagementApiHandler({
       ...(weixinChannel !== undefined ? { weixinChannel } : {}),
       merchantId: profile.owner_id,
-      merchantName: profile.name ?? "待设置商家名称",
-      merchantNameNeedsUpdate: config.merchantNameNeedsUpdate && profile.name === "待设置商家名称",
+      merchantName: profile.name ?? MERCHANT_DISPLAY_NAME_PLACEHOLDER,
+      merchantDisplayName: {
+        current: () => displayNames.current(),
+        needsPublicName: () => publicMerchantName() === MERCHANT_DISPLAY_NAME_PLACEHOLDER,
+        save: (name) => {
+          // 首次填补占位名才能用于公开预览；后续改工作台显示名不使名片漂移。
+          // 占位名本身不能发起直连发布；旧向导或已有授权仍保留自己的预览。
+          const setPublicName = publicMerchantName() === MERCHANT_DISPLAY_NAME_PLACEHOLDER &&
+            onboardingStore.activeRecord(profile.owner_id) === undefined &&
+            !readEnrollmentStore(config.dataDir).sessions.some((session) =>
+              session.runtime_origin === config.publicOrigin &&
+              ["preparing", "authorized", "bound", "published", "paused"].includes(session.status));
+          displayNames.save(name, setPublicName);
+        },
+      },
       // 单代次实例（与 M2 挑战应答的 currentGeneration 同值）；代次切换属 BD-05。
       generation: () => 1,
       runtimeVersion: PRODUCT_VERSION,

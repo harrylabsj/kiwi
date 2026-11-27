@@ -1175,6 +1175,31 @@ function mountBuyerFollowups(sequence) {
     });
   }).catch(function (e) { if (sequence === viewSequence) root.textContent = e.message; });
 }
+function bindMerchantDisplayName(sequence) {
+  var edit = $("merchant-name-edit");
+  var form = $("merchant-name-form");
+  if (!edit || !form) return;
+  var input = $("merchant-name-input");
+  var save = $("merchant-name-save");
+  var cancel = $("merchant-name-cancel");
+  edit.onclick = function () { form.hidden = false; edit.hidden = true; input.focus(); };
+  cancel.onclick = function () { form.reset(); form.hidden = true; edit.hidden = false; edit.focus(); };
+  form.onsubmit = function (event) {
+    event.preventDefault();
+    var name = input.value.trim();
+    if (!name) { bar("请输入商家显示名。", true); return; }
+    save.disabled = cancel.disabled = input.disabled = true;
+    call("POST", "/runtime/display-name", { display_name: name }).then(function () {
+      if (sequence !== viewSequence) return;
+      bar("商家显示名已保存。", false);
+      refresh();
+    }).catch(function (error) {
+      if (sequence !== viewSequence) return;
+      save.disabled = cancel.disabled = input.disabled = false;
+      bar(error.message, true);
+    });
+  };
+}
 var views = {
   buyerFollowups: function () {
     return Promise.resolve('<section class="card"><h2>买家待确认</h2><p>确认后只供原买家主动查询，不发微信、不改变报价。</p><div id="buyer-followups-content">加载中…</div></section>');
@@ -1210,8 +1235,20 @@ var views = {
   status: function () {
     return call("GET", "/runtime/status").then(function (s) {
       var failed = s.readiness && s.readiness.failed_checks || [];
+      var nameEditor = s.merchant_name_editable && ROLE === "owner"
+        ? ' <button id="merchant-name-edit" type="button" class="act">编辑显示名</button>' +
+          '<form id="merchant-name-form" hidden>' +
+          '<label for="merchant-name-input">商家显示名</label> ' +
+          '<input type="text" id="merchant-name-input" required maxlength="80" value="' +
+          esc(s.merchant_name === "待设置商家名称" ? "" : s.merchant_name || "") + '">' +
+          '<div class="row"><button id="merchant-name-save" class="act primary" type="submit">保存</button>' +
+          '<button id="merchant-name-cancel" class="act" type="button">取消</button></div>' +
+          '<p class="muted">' + (s.merchant_name_needs_update
+            ? '首次设置的名称可用于名片预览。保存不会发布名片或改动已确认的公开资料。'
+            : '此处只改工作台显示名，不会改动公开名片。') + '</p></form>'
+        : "";
       var html = '<div class="card"><h2>运行状态</h2><table>' +
-        "<tr><th>商家显示名</th><td>" + esc(s.merchant_name || "-") + "</td></tr>" +
+        "<tr><th>商家显示名</th><td>" + esc(s.merchant_name || "-") + nameEditor + "</td></tr>" +
         "<tr><th>服务状态</th><td>" + statePill(s.service_state) + "</td></tr>" +
         "<tr><th>部署代次</th><td>" + esc(s.generation) + "</td></tr>" +
         "<tr><th>Runtime</th><td>" + esc(s.runtime_version) + "（管理 API v" + esc(s.api_version) + "）</td></tr>" +
@@ -1222,7 +1259,7 @@ var views = {
         "；对话工具 " + (s.capabilities.dialog_tools ? "✓" : "未启用") + "</td></tr>" +
         '</table><p class="muted">更新于 ' + esc(s.observed_at) + "</p>";
       if (s.merchant_name_needs_update) {
-        html += '<p class="muted">请设置商家显示名；该名称会用于 Catalog 公开资料。</p>';
+        html += '<p class="muted">发布名片前，请先设置用于公开资料的商家显示名。</p>';
       }
       if (failed.indexOf("PRODUCTS_NOT_CONFIGURED") >= 0) {
         html += '<p class="muted">名片可先发布。请在「商品与导入」准备首个可报价 SKU；导入与商品发布是两次确认。</p>';
@@ -2539,6 +2576,7 @@ function refresh() {
     if (current === "collection") { bindAlipayCollection(); bindAlipayApprovals(); }
     if (current === "support") mountSupport(sequence);
     if (current === "buyerFollowups") mountBuyerFollowups(sequence);
+    if (current === "status") bindMerchantDisplayName(sequence);
     if (current === "status" && CATALOG_CONNECT && ROLE === "owner") {
       if (catalogConnectionState && waitingForCatalogConfirmation(catalogConnectionState)) showCatalogPairing(sequence);
       if (catalogConnectionState && catalogConnectionState.bindingId) {

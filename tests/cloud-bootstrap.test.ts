@@ -16,6 +16,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { bootstrapCloudRuntime, CloudStartupError } from "../src/cloud/bootstrap.js";
+import { enrollmentStorePath } from "../src/cloud/binding/enrollment-challenge.js";
 import { writeAdminCredentials, verifyAdminPassword } from "../src/auth/merchant-sessions.js";
 import { CloudConfigError } from "../src/cloud/config.js";
 import { generateA2aSigningIdentity } from "../src/a2a/signing-key.js";
@@ -608,6 +609,74 @@ describe("云端单实例启动（T013/T014/T015/T016）", () => {
       expect(response.headers.get("cache-control")).toContain("no-store");
     } finally {
       await instance.close();
+    }
+  });
+
+  it("保存商家显示名并在重启后保留；已授权名片不随工作台改名", async () => {
+    const commerce = await startFakeCommerce(TEST_SKU);
+    const dataDir = tempDir("kiwi-cloud-display-name-");
+    const profilePath = writeCloudProfile(dataDir, commerce, { name: "待设置商家名称" });
+    trackEnv("KIWI_COMMERCE_URL", commerce);
+    const port = await freePort();
+    const env = cloudEnv({ port, dataDir, profilePath, sku: TEST_SKU });
+    const start = () => bootstrapCloudRuntime({
+      env, artifactRoot: "/workspace", log: () => {},
+      catalogFetchImpl: async () => new Response(null, { status: 503 }),
+    });
+    writeAdminCredentials(dataDir, {
+      principalId: `merchant-agent:${MERCHANT_ID}`, merchantId: MERCHANT_ID, password: ADMIN_PASSWORD,
+    });
+    const base = `http://127.0.0.1:${port}`;
+    const card = async () => (await fetch(`${base}/.well-known/agent-card.json`)).json();
+    let cookie = "";
+    let csrf = "";
+    const login = async () => {
+      const res = await fetch(`${base}/admin/login`, {
+        method: "POST", redirect: "manual",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: `password=${ADMIN_PASSWORD}&next=/merchant/`,
+      });
+      expect(res.status).toBe(303);
+      cookie = res.headers.get("set-cookie")?.split(";")[0] ?? "";
+      const session = await fetch(`${base}/merchant/api/session`, { headers: { cookie } });
+      csrf = ((await session.json()) as { csrf_token: string }).csrf_token;
+    };
+    const status = async () => (await fetch(`${base}/merchant/api/v1/runtime/status`, { headers: { cookie } })).json();
+    const rename = async (name: string, token = csrf) => fetch(`${base}/merchant/api/v1/runtime/display-name`, {
+      method: "POST",
+      headers: { cookie, "x-csrf-token": token, "content-type": "application/json" },
+      body: JSON.stringify({ display_name: name }),
+    });
+    const instance = await start();
+    try {
+      expect((await rename("商家")).status).toBe(401);
+      await login();
+      expect(await status()).toMatchObject({ merchant_name_needs_update: true, merchant_name_editable: true });
+      expect((await rename("待设置商家名称")).status).toBe(422);
+      expect((await rename("商家", "invalid")).status).toBe(403);
+      const firstSave = await rename("  第一版商家名  ");
+      expect(firstSave.status).toBe(200);
+      expect(await firstSave.json()).toEqual({ merchant_name: "第一版商家名" });
+      expect(await status()).toMatchObject({ merchant_name: "第一版商家名", merchant_name_needs_update: false });
+      const original = await card();
+      expect(original).toMatchObject({ name: "第一版商家名", provider: { organization: "第一版商家名" } });
+      writeFileSync(enrollmentStorePath(dataDir), JSON.stringify({ version: 1, consumed: [], sessions: [{
+        enrollment_id: "published-test", runtime_origin: env.KIWI_CLOUD_PUBLIC_ORIGIN,
+        status: "published", frozen_card: original,
+      }] }));
+      expect((await rename("新版商家名")).status).toBe(200);
+      expect(await status()).toMatchObject({ merchant_name: "新版商家名" });
+      expect(await card()).toEqual(original);
+    } finally {
+      await instance.close();
+    }
+    const restarted = await start();
+    try {
+      await login();
+      expect(await status()).toMatchObject({ merchant_name: "新版商家名" });
+      expect(await card()).toMatchObject({ name: "第一版商家名" });
+    } finally {
+      await restarted.close();
     }
   });
 
