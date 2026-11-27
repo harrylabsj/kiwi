@@ -36,7 +36,7 @@ const catalogUrl = arg("--catalog") ?? process.env.KIWI_ACCEPTANCE_CATALOG_URL ?
 const signingKeyDir = process.env.KIWI_A2A_SIGNING_KEY_DIR ?? "";
 const timeoutMs = Number(process.env.KIWI_ACCEPTANCE_TIMEOUT_MS ?? "240000");
 
-const testMarker = `【测试，请勿履约】linkluck 验收询价：SKU ${sku}，${quantity} 盒；仅用于非约束报价、协议与交接，不下单、不付款、不锁库存。`;
+const testMarker = `【测试，请勿履约】linkluck 验收询价：SKU ${sku}，${quantity} ${unit}；仅用于非约束报价、协议与交接，不下单、不付款、不锁库存。`;
 const fail = (message) => {
   console.error(`ACCEPTANCE_FAILED ${message}`);
   process.exit(1);
