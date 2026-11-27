@@ -12,7 +12,7 @@
 import { createContext, runInContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 
-import { renderMerchantManagementPage } from "../src/http/merchant-management/page.js";
+import { MERCHANT_PRODUCT_HELP_HTML, renderMerchantManagementPage } from "../src/http/merchant-management/page.js";
 
 type El = {
   value: string;
@@ -156,7 +156,7 @@ async function mount(options: MountOptions = {}) {
     }
     if (path === "/merchant/api/v1/products/publication-drafts" && init?.method === "POST") {
       posts.push({ path, body: JSON.parse(String(init.body)) as Record<string, unknown> });
-      return Response.json(DRAFT);
+      return Response.json({ draft: DRAFT, missing_categories: [] });
     }
     if (path.endsWith("/commit") && init?.method === "POST") {
       commitCalls += 1;
@@ -172,7 +172,7 @@ async function mount(options: MountOptions = {}) {
     return Response.json({});
   };
   const context = createContext({
-    URL, Date, Math, Response, JSON, Promise, Array, String, Object, Error, setTimeout,
+    URL, Date, Math, Response, JSON, Promise, Array, String, Object, Error, setTimeout, clearTimeout,
     document: {
       getElementById: (id: string) => (elements[id] ??= el()),
       querySelectorAll: (selector: string) =>
@@ -187,25 +187,24 @@ async function mount(options: MountOptions = {}) {
   return { context, elements, posts, paths, rows };
 }
 
-async function flush() {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-describe("商品发布体验（勾选 + 分类 → 表格预览/结果）", () => {
-  it("商品页用选择表替代手输 SKU，并说明导入按 SKU 追加", async () => {
+describe("商品发布体验（自动识别变更）", () => {
+  it("导入在表格上方，发布在下方，详细说明通过链接打开", async () => {
     const { context } = await mount();
     const html = (await runInContext("views.products()", context)) as string;
     expect(html).toContain('id="pub-rows"');
     expect(html).toContain('data-sku="SKU-1"');
-    expect(html).toContain('class="pub-pick"');
-    expect(html).toContain('class="pub-category"');
-    expect(html).toContain('id="pub-select-all"');
-    expect(html).toContain("全选当前商品");
-    expect(html).toContain("预览公开内容");
-    expect(html).toContain("按 SKU 追加/更新");
-    expect(html).toContain("文件里没有的商品会保留");
-    expect(html).toContain('"public_details":');
-    expect(html).toContain("商品介绍和规格仅保存在商家工作台，不随网关发布");
+    expect(html).not.toContain('class="pub-pick"');
+    expect(html).not.toContain('id="pub-select-all"');
+    expect((html.match(/onclick="publishProducts\(\)"/g) ?? []).length).toBe(1);
+    expect(html).toContain("发布商品");
+    expect(html).not.toContain("预览公开内容");
+    expect(html).toContain('href="/merchant/product-help.html"');
+    expect(html.indexOf("导入文件</button>")).toBeLessThan(html.indexOf('id="pub-rows"'));
+    expect(html.indexOf("</table>")).toBeLessThan(html.indexOf('id="pub-submit"'));
+    expect(html).not.toContain("下载 CSV 模板");
+    expect(MERCHANT_PRODUCT_HELP_HTML).toContain("导入按 SKU");
+    expect(MERCHANT_PRODUCT_HELP_HTML).toContain('"public_details":');
+    expect(MERCHANT_PRODUCT_HELP_HTML).toContain("下载 CSV 模板");
     expect(html).not.toContain("整表替换");
     // 只有一个商品表：不再出现上下重复的列表。
     expect((html.match(/id="pub-rows"/g) ?? []).length).toBe(1);
@@ -213,156 +212,71 @@ describe("商品发布体验（勾选 + 分类 → 表格预览/结果）", () =
     expect(html).not.toContain("用英文竖线分隔");
   });
 
-  it("显示Kiwi网关发布状态，并能用全选勾选当前商品", async () => {
-    const rows = [row("SKU-1", false, ""), row("SKU-2", false, "")];
+  it("错误提示自动消失，新提示重置计时，切换页面立即清除", async () => {
+    const { context, elements } = await mount();
+    const timers = new Map<number, { callback: () => void; delay: number }>();
+    let nextTimer = 0;
+    context.setTimeout = (callback: () => void, delay: number) => {
+      timers.set(++nextTimer, { callback, delay });
+      return nextTimer;
+    };
+    context.clearTimeout = (id: number) => timers.delete(id);
+
+    runInContext('bar("旧提示"); bar("新错误", true)', context);
+    expect(timers.size).toBe(1);
+    expect(elements["bar"]).toMatchObject({ textContent: "新错误", style: { display: "block" } });
+    const errorTimer = timers.get(nextTimer)!;
+    expect(errorTimer.delay).toBe(6000);
+    errorTimer.callback();
+    expect(elements["bar"]).toMatchObject({ textContent: "", style: { display: "none" } });
+
+    runInContext('bar("保存成功"); previousView = "status"; current = "products"; refresh()', context);
+    expect(elements["bar"]).toMatchObject({ textContent: "", style: { display: "none" } });
+    expect(timers.size).toBe(0);
+  });
+
+  it("长商品名显示安全转义的短预览，可通过原生折叠控件查看全名", async () => {
     const { context } = await mount({
-      rows,
-      published: [{ sku: "SKU-1", listing_id: "lst_1", publication_state: "ACTIVE" }],
+      productPages: [{ items: [
+        { sku: "SHORT", title: "短商品名" },
+        { sku: "LONG", title: "😀一二三四五六七八九十甲乙<测试>" },
+      ] }],
     });
     const html = (await runInContext("views.products()", context)) as string;
-    expect(html).toContain("已发布到Kiwi网关 1 件，未发布 1 件。");
-    expect(html).toContain("已发布");
-    expect(html).toContain("未发布");
-    await runInContext("togglePublicationPicks({ checked: true })", context);
-    expect(rows[0]!.box.checked).toBe(true);
-    expect(rows[1]!.box.checked).toBe(true);
-    await runInContext("togglePublicationPicks({ checked: false })", context);
-    expect(rows[0]!.box.checked).toBe(false);
-    expect(rows[1]!.box.checked).toBe(false);
+    expect(html).toContain("<td>短商品名</td>");
+    expect(html).toContain('<details class="product-name"><summary>');
+    expect(html).toContain("😀一二三四五六七八九十甲…");
+    expect(html).toContain("查看全名");
+    expect(html).toContain("收起");
+    expect(html).toContain("<div>😀一二三四五六七八九十甲乙&lt;测试&gt;</div>");
+    expect(html).not.toContain("<测试>");
   });
 
-  it("预览只展示五项网关业务字段，并标注草稿到期", async () => {
-    const rows = [row("SKU-1", true, "陶瓷杯"), row("SKU-2", true, "玻璃杯")];
-    const { context, elements, posts } = await mount({ rows });
-    await runInContext("previewPublication()", context);
-    await flush();
-
-    expect(posts[0]?.body).toEqual({
-      selections: [
-        { sku: "SKU-1", category: "陶瓷杯" },
-        { sku: "SKU-2", category: "玻璃杯" },
-      ],
+  it("文件商品展示零库存及完整资料，并提供逐行修改与保存", async () => {
+    const { context } = await mount({
+      productPages: [{ items: [{
+        sku: "SKU-1", title: "陶瓷杯", stock: 0, supply_note: "三天发货",
+        public_details: { overview: "手工陶瓷", capacity: "450 mL" },
+      }] }],
     });
-    const html = elements["publication-result"]!.innerHTML;
-    expect(html).toContain("将公开 2 件商品");
-    expect(html).toContain("<table");
-    expect(html).toContain("手工陶瓷杯");
-    expect(html).toContain("陶瓷杯");
-    expect(html).not.toContain('href="https://shop.example/p?a=1&amp;b=2"');
-    expect(html).not.toContain("javascript:");
-    // Listing 上架即永久；只有草稿 expires_at 是本次预览的到期时间。
-    expect(html).not.toContain("新鲜期");
-    expect(html).not.toContain("2027-01-31T00:00:00+00:00");
-    expect(html).toContain("商品上架后长期有效");
-    expect(html).toContain("2030-12-31T00:00:00Z（草稿到期时间）");
-    expect(html).toContain('<th>商品名称</th><th>类目</th><th>交易平台</th><th>状态</th><th>上架（是／否）</th>');
-    expect(html).toContain('jd'); expect(html).toContain('在售'); expect(html).toContain('是');
-    for (const value of ['手工拉坯','杯身','450 mL','private-note','陶社','3-5天']) expect(html).not.toContain(value);
-    // 私有字段与 JSON 不出现。
-    expect(html).not.toContain("private-owner");
-    expect(html).not.toContain("private-merchant");
-    expect(html).not.toContain("<pre>");
-  });
-
-  it("预览后锁定选择；选择被改动时作废旧确认且不再提交", async () => {
-    const rows = [row("SKU-1", true, "陶瓷杯"), row("SKU-2", true, "玻璃杯")];
-    const { context, elements, posts } = await mount({ rows });
-    await runInContext("previewPublication()", context);
-    await flush();
-    expect(rows[0]!.box.disabled).toBe(true);
-    expect(rows[0]!.input.disabled).toBe(true);
-    expect(elements["publication-result"]!.innerHTML).toContain("重新选择（作废本次预览）");
-
-    rows[0]!.input.value = "被改动的分类";
-    await runInContext("commitPublication()", context);
-    await flush();
-    expect(posts.filter((p) => p.path.endsWith("/commit"))).toHaveLength(0);
-    expect(elements["bar"]!.textContent).toContain("预览后选择或分类已变化");
-    expect(await runInContext("publicationDraft", context)).toBe(null);
-  });
-
-  it("提交网络失败保留旧草稿引用，可用同一草稿重试", async () => {
-    const rows = [row("SKU-1", true, "陶瓷杯"), row("SKU-2", true, "玻璃杯")];
-    const { context, elements, posts } = await mount({ rows, commitFailsOnCall: 1 });
-    await runInContext("previewPublication()", context);
-    await flush();
-    await runInContext("commitPublication()", context);
-    await flush();
-    expect(elements["bar"]!.textContent).toContain("请保留本页");
-    expect(await runInContext("publicationDraft !== null", context)).toBe(true);
-
-    await runInContext("commitPublication()", context);
-    await flush();
-    const commits = posts.filter((p) => p.path.endsWith("/commit"));
-    expect(commits).toHaveLength(2);
-    expect(commits[1]?.body).toEqual({ expected_digest: DRAFT.digest, confirm_publication: true });
-  });
-
-  it("确认发布后以表格回执呈现数量与逐项结果，不展示 JSON", async () => {
-    const rows = [row("SKU-1", true, "陶瓷杯"), row("SKU-2", true, "玻璃杯")];
-    const { context, elements, posts } = await mount({ rows });
-    await runInContext("previewPublication()", context);
-    await flush();
-    await runInContext("commitPublication()", context);
-    await flush();
-
-    const commit = posts.find((p) => p.path.endsWith("/commit"));
-    expect(commit?.body).toEqual({ expected_digest: DRAFT.digest, confirm_publication: true });
-    const html = elements["publication-result"]!.innerHTML;
-    expect(html).toContain("发布结果");
-    expect(html).toContain("共 2 件：成功 2，失败 0，待确认 0");
-    expect(html).toContain("<td>SKU-1</td>");
-    expect(html).toContain("已确认");
-    expect(html).not.toContain("<pre>");
-  });
-
-  it("checkPublication 对 pending 结果保留原草稿续办", async () => {
-    const rows = [row("SKU-1", true, "陶瓷杯"), row("SKU-2", true, "玻璃杯")];
-    const { context, elements } = await mount({
-      rows,
-      receipts: [
-        { sku: "SKU-1", status: "pending" },
-        { sku: "SKU-2", status: "succeeded", listing_id: "lst_2" },
-      ],
-    });
-    await runInContext("previewPublication()", context);
-    await flush();
-    await runInContext("checkPublication()", context);
-    await flush();
-    const html = elements["publication-result"]!.innerHTML;
-    expect(html).toContain("原草稿回执");
-    expect(html).toContain("待确认");
-    expect(html).toContain("按原草稿继续确认");
-  });
-
-  it("超过 100 件商品时跟随 next_cursor，全部可选且计数准确", async () => {
-    const page1 = {
-      items: Array.from({ length: 100 }, (_, index) => ({ sku: `S-${index}`, title: `商品${index}`, status: "在售" })),
-      next_cursor: "1",
-    };
-    const page2 = {
-      items: [{ sku: "S-100", title: "商品100", status: "在售" }],
-      next_cursor: null,
-    };
-    const { context, paths } = await mount({ productPages: [page1, page2] });
     const html = (await runInContext("views.products()", context)) as string;
-    expect(html).toContain("商品与Kiwi网关发布（101）");
-    expect(html).toContain('data-sku="S-0"');
-    expect(html).toContain('data-sku="S-100"');
-    expect(paths).toContain("/merchant/api/products?limit=100");
-    expect(paths.some((p) => p.includes("cursor=1"))).toBe(true);
+    expect(html).toContain("<th>库存</th>");
+    expect(html).toContain("<td>0</td>");
+    expect(html).toContain("三天发货");
+    expect(html).toContain("商品简介：</strong>手工陶瓷");
+    expect(html).toContain("容量：</strong>450 mL");
+    expect(html).toContain('onclick="editProduct(0)">修改');
+    expect(html).not.toContain('class="act pub-row"');
   });
 
-  it("勾选后缺分类时明确提示且不发发布请求", async () => {
-    const rows = [row("SKU-1", true, ""), row("SKU-2", false, "")];
-    const { context, elements, posts } = await mount({ rows });
-    await runInContext("previewPublication()", context);
-    await flush();
-    expect(elements["bar"]!.textContent).toContain("请为已勾选的商品填写分类：SKU-1");
-    expect(posts).toHaveLength(0);
+  it("有自动重试入口时保留同一发布草稿", async () => {
+    const m = await mount({ commitFailsOnCall: 1 });
+    await runInContext("publishProducts()", m.context);
+    expect(m.elements["publication-result"]?.innerHTML).toContain("继续本次发布");
+    await runInContext("commitPublication()", m.context);
+    expect(m.posts[1]).toEqual(m.posts[2]);
   });
 });
-
 
 async function startProductEdit(mounted: Awaited<ReturnType<typeof mount>>) {
   const { context, elements } = mounted;
@@ -381,17 +295,17 @@ async function startProductEdit(mounted: Awaited<ReturnType<typeof mount>>) {
 }
 
 describe("商品直接编辑与发布", () => {
-  it("未填字段保持显示；库存区分未知与0；规格完整展示并转义", async () => {
+  it("未填字段保持显示；缺失库存显示0；规格完整展示并转义", async () => {
     const { context } = await mount();
     const html = runInContext(`renderProducts([
       {sku:'A',title:'<商品>',stock:null,public_details:{}},
       {sku:'B',title:'其他',stock:0,price_unit:'件',public_details:{overview:'<简介>'}}
     ],{canPublish:true,known:true,published:{}})`, context) as string;
-    expect(html).toContain('<th>库存</th>'); expect(html).toContain('待填写（库存未知）');
-    expect(html).toContain('无库存（0）'); expect(html).toContain('未填写');
+    expect(html).toContain('<th>库存</th>'); expect(html).not.toContain('库存未知');
+    expect((html.match(/<td>0<\/td>/g) ?? []).length).toBe(2); expect(html).toContain('未填写');
     expect(html).toContain('商品简介'); expect(html).toContain('供货说明'); expect(html).toContain('更新时间');
     expect(html).toContain('&lt;简介&gt;'); expect(html).toContain('修改</button>');
-    expect(html).toContain('发布到Kiwi网关');
+    expect(html).toContain('发布商品');
   });
   it("修改打开所有业务字段，平台为配置下拉；取消不发写请求", async () => {
     const m = await mount(); await startProductEdit(m);
@@ -462,6 +376,7 @@ describe("商品直接编辑与发布", () => {
     const m=await mount({rows:[row('SKU-1',true,'工具')]});
     await runInContext('publishProducts()',m.context);
     expect(m.posts).toHaveLength(2);
+    expect(m.posts[0]!.body).toEqual({changes_only:true,selections:[]});
     expect(m.posts[1]!.body).toMatchObject({confirm_publication:true,expected_digest:DRAFT.digest});
     const n=await mount();await startProductEdit(n);
     await runInContext('publishProducts()',n.context); expect(n.posts).toEqual([]);

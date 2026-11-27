@@ -251,7 +251,7 @@ export function createCloudRouter(options: CloudRouterOptions): CloudRequestList
     // 5) 商家工作台首页：/merchant 与 /merchant/（BD §9.1 静态壳；先于别名）。
     if (
       options.merchantHomePage !== undefined &&
-      (pathname === "/merchant" || pathname === "/merchant/")
+      (pathname === "/merchant" || pathname === "/merchant/" || pathname === "/merchant/product-help.html")
     ) {
       options.merchantHomePage(req, res);
       return;

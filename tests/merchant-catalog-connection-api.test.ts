@@ -85,6 +85,7 @@ beforeAll(async () => {
     readiness: async () => ({ ready: false, checks: {} }),
     fileListingPublication: {
       preview: async () => publicationDraft,
+      previewChanges: async () => ({ draft: publicationDraft, missing_categories: [] }),
       getDraft: async () => ({ found: true, draft: publicationDraft, receipts: [] }),
       listPublished: async () => ({ results: [{ sku: "SKU1", listing_id: "listing_test", publication_state: "ACTIVE" }] }),
       commit: async () => {
@@ -180,6 +181,9 @@ describe("runtime Catalog connection API", () => {
     expect((await fetch(base + "/merchant/api/v1" + draftPath, { headers: { cookie: operator.cookie } })).status).toBe(403);
     expect((await fetch(base + "/merchant/api/v1" + draftPath, { headers: { cookie: owner.cookie } })).status).toBe(200);
     expect((await post(owner, "/products/publication-drafts", { selections: [{ sku: "SKU1", category: "验收测试" }] })).status).toBe(200);
+    const changes = await post(owner, "/products/publication-drafts", { changes_only: true, selections: [] });
+    expect(changes.status).toBe(200);
+    expect(await changes.json()).toEqual({ draft: publicationDraft, missing_categories: [] });
     expect((await post(owner, "/products/publication-drafts", { selections: [{ sku: "SKU1", category: "验收测试", merchant_id: "evil" }] })).status).toBe(422);
     expect((await post(owner, commitPath, confirmation, false)).status).toBe(403);
     expect((await post(operator, commitPath, confirmation)).status).toBe(403);
@@ -235,18 +239,18 @@ describe("runtime Catalog connection API", () => {
     expect(response.status).toBe(409);
     expect(await response.text()).toContain("不能同时启动旧部署向导");
   });
-  it("rendered product publication page never writes until explicit preview and confirmation", async () => {
+  it("rendered product publication page commits changes only after the publish click", async () => {
     const elements: Record<string, { value: string; innerHTML: string; textContent: string; className: string; style: { display: string } }> = {};
     const requests: Array<{ path: string; body: unknown }> = [];
     const draft = { ...publicationDraft, items: [{ listing: { title: "<验收商品>", category: "验收测试" } }] };
-    const picked = { checked: true, value: "", disabled: false };
-    const category = { checked: false, value: "验收测试", disabled: false };
+    const category = { value: "验收测试", defaultValue: "", disabled: false };
     const selectionRow = {
       getAttribute: (name: string) => (name === "data-sku" ? "SKU1" : null),
       querySelector: (selector: string) =>
-        selector.includes("pub-pick") ? picked : selector.includes("pub-category") ? category : null,
+        selector.includes("pub-category") ? category : null,
     };
     const context = createContext({
+      setTimeout: () => 0, clearTimeout: () => {},
       URL, Date, Math,
       document: {
         querySelectorAll: (selector: string) => (selector === "#pub-rows tr" ? [selectionRow] : []),
@@ -255,7 +259,7 @@ describe("runtime Catalog connection API", () => {
       fetch: async (path: string, init?: { body?: unknown }) => {
         if (path === "/merchant/api/session") return Response.json(null);
         requests.push({ path, body: init?.body ? JSON.parse(String(init.body)) : null });
-        if (path.endsWith("/publication-drafts")) return Response.json(draft);
+        if (path.endsWith("/publication-drafts")) return Response.json({ draft, missing_categories: [] });
         if (path.endsWith("/commit")) return Response.json({ status: "succeeded", succeeded: 1, failed: 0, pending: 0, results: [] });
         return Response.json({ items: [{ sku: "SKU1", title: "商品", status: "active" }] });
       },
@@ -263,16 +267,14 @@ describe("runtime Catalog connection API", () => {
     const script = inlineScriptBodies(renderMerchantManagementPage({ productAuthority: "file", catalogConnection: true })).join("\n");
     await runInContext(script!, context);
     runInContext('ROLE = "owner"', context);
-    expect(await runInContext('views.products()', context)).toContain("预览公开内容");
+    expect(await runInContext('views.products()', context)).toContain("发布商品");
     // 错误码只在 HTML 拼接点转义一次；函数本身返回纯文本。
     const failure = '{ catalogSync: "failed", catalogSyncError: "A<B" }';
     expect(await runInContext(`accessSyncText(${failure})`, context)).toContain("A<B");
     expect(await runInContext(`esc(accessSyncText(${failure}))`, context)).toContain("A&lt;B");
     expect(requests.filter((r) => r.path.includes("publication-drafts"))).toHaveLength(0);
-    await runInContext('previewPublication()', context);
-    expect(elements["publication-result"]?.innerHTML).toContain("&lt;验收商品&gt;");
-    expect(requests.some((r) => r.path.endsWith("/commit"))).toBe(false);
-    await runInContext('commitPublication()', context);
+    await runInContext('publishProducts()', context);
+    expect(elements["publication-result"]?.innerHTML).toContain("发布结果");
     expect(requests.filter((r) => r.path.endsWith("/commit"))).toEqual([{ path: "/merchant/api/v1/products/publication-drafts/flp_test_123456789abc/commit", body: { expected_digest: "sha256:test", confirm_publication: true } }]);
   });
   it("summary never exposes pairing or device credentials; pairing has an explicit whitelist", async () => {
@@ -379,6 +381,7 @@ describe("runtime Catalog connection API", () => {
       setAttribute: () => void; querySelectorAll: () => unknown[];
     }> = {};
     const context = createContext({
+      setTimeout: () => 0, clearTimeout: () => {},
       URL,
       document: {
         querySelectorAll: () => [],
@@ -440,6 +443,7 @@ describe("runtime Catalog connection API", () => {
     try {
       const elements: Record<string, { innerHTML: string; textContent: string; className: string; style: { display: string } }> = {};
       const context = createContext({
+        setTimeout: () => 0, clearTimeout: () => {},
         document: { querySelectorAll: () => [], getElementById: (id: string) => elements[id] ??= { innerHTML: "", textContent: "", className: "", style: { display: "" } } },
         fetch: async (requestPath: string) => {
           if (requestPath === "/merchant/api/session") return new Response("null");
