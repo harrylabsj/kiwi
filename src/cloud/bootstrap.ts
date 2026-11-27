@@ -1710,6 +1710,7 @@ export async function bootstrapCloudRuntime(
       workbuddyAccess: isWorkbuddyAppOrigin(new URL(config.publicOrigin)),
       weixinChannel: weixinChannel !== undefined,
       buyerFollowups: process.env.KIWI_BUYER_FOLLOWUPS === "1",
+      merchantDisplayNamePlaceholder: MERCHANT_DISPLAY_NAME_PLACEHOLDER,
     }));
   };
 

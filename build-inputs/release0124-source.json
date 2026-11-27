@@ -4922,7 +4922,7 @@
     },
     {
       "path": "src/cloud/bootstrap.ts",
-      "sha256": "sha256:e126d1286457c5b8c2d581a1ae3b7c66b3b7b5630a86c20fe0afd0a1504d22cd"
+      "sha256": "sha256:d93d7bafd1bee4356ba41aefeb917d53f298be7c31d038af29f3da7d1010806d"
     },
     {
       "path": "src/cloud/catalog-client.ts",
@@ -5442,7 +5442,7 @@
     },
     {
       "path": "src/http/merchant-management/page.ts",
-      "sha256": "sha256:f5c53db980a3d64caf12f1057c3ead5e85bf595215f79c1f26a001c0a19e00d1"
+      "sha256": "sha256:5b94ebc19a11431e24444218fd2a779001f5aeedc602620305ea15bb7278b60d"
     },
     {
       "path": "src/http/merchant-management/problem-client.ts",
@@ -8276,7 +8276,7 @@
     },
     {
       "path": "tests/merchant-management-page-connect-flow.test.ts",
-      "sha256": "sha256:67cc0a77c608d53a35d3cdc7d20fc3ea1e6dc23308a7b97071738686fb4135a2"
+      "sha256": "sha256:3bc80089d3bac4a6bac6478af7bce6a024f0d21673789b27512edd429d22c24f"
     },
     {
       "path": "tests/merchant-management-page-csrf.test.ts",

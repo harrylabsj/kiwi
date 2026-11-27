@@ -35,6 +35,7 @@ import { MerchantImportDraftStore } from "../src/http/merchant-management/draft-
 import { MerchantManagementOperationStore } from "../src/http/merchant-management/operation-store.js";
 import { MutableServiceState } from "../src/http/merchant-management/service-state.js";
 import { MerchantConnectError } from "../src/cloud/connect-service.js";
+import { MERCHANT_DISPLAY_NAME_PLACEHOLDER } from "../src/cloud/merchant-display-name.js";
 
 const RUNTIME_ORIGIN = "https://runtime.test";
 const LINK = `${RUNTIME_ORIGIN}/a2a?sharecode=staged-secret-1`;
@@ -46,7 +47,7 @@ type Element = { value: string; checked?: boolean; disabled?: boolean; innerHTML
   querySelectorAll: (selector: string) => unknown[]; closest: (selector: string) => null };
 interface Recorded { method: string; path: string; body: unknown }
 
-function pageScript(options: { catalogConnection?: boolean; workbuddyAccess?: boolean }): string {
+function pageScript(options: Parameters<typeof renderMerchantManagementPage>[0]): string {
   const html = renderMerchantManagementPage(options);
   // 结束标签必须完整匹配（允许 `</script >`、大小写变体），不使用只认小写
   // 精确 `</script>` 的正则（CodeQL js/bad-tag-filter，main 上 alert #32）。
@@ -81,6 +82,7 @@ async function loadConnectPage(options: {
   connect: Record<string, unknown>;
   access: Record<string, unknown>;
   workbuddyAccess?: boolean;
+  merchantName?: string;
   shareLinkResponse?: () => Response;
   beginResponses?: Array<() => Response>;
   /** 传入外部 session 存储：跨“刷新”（重新执行页面脚本）恢复幂等键用。 */
@@ -123,8 +125,9 @@ async function loadConnectPage(options: {
       return Response.json({ ok: true });
     }
     if (route === "/merchant/api/v1/runtime/status") {
-      return Response.json({ merchant_name: "S", service_state: "OPERATING", generation: "1",
+      return Response.json({ merchant_name: options.merchantName ?? "S", service_state: "OPERATING", generation: "1",
         runtime_version: "t", api_version: "1", observed_at: "t", merchant_name_needs_update: false,
+        merchant_name_editable: options.merchantName !== undefined,
         readiness: { ready: true, failed_checks: [] }, capabilities: { management_page: true, dialog_tools: false } });
     }
     if (route === "/merchant/api/v1/catalog/connect/pairing") return Response.json({ pairing: {
@@ -148,7 +151,10 @@ async function loadConnectPage(options: {
         }),
     },
   });
-  await runInContext(pageScript({ catalogConnection: true, workbuddyAccess: options.workbuddyAccess ?? true }), context);
+  await runInContext(pageScript({
+    catalogConnection: true, workbuddyAccess: options.workbuddyAccess ?? true,
+    merchantDisplayNamePlaceholder: MERCHANT_DISPLAY_NAME_PLACEHOLDER,
+  }), context);
   const eventually = async (predicate: () => boolean, timeoutMs = 2000): Promise<void> => {
     const started = Date.now();
     while (!predicate()) {
@@ -170,6 +176,15 @@ async function loadConnectPage(options: {
 
 const problem = (status: number, detail: string): Response =>
   Response.json({ title: "请求未完成", status, detail, code: "INVALID" }, { status, headers: { "content-type": "application/problem+json" } });
+
+it.each([
+  [MERCHANT_DISPLAY_NAME_PLACEHOLDER, ""],
+  ['商家 A & B', '商家 A &amp; B'],
+])("renders the owner display-name editor for %s", async (merchantName, inputValue) => {
+  const page = await loadConnectPage({ connect: {}, access: {}, merchantName });
+  const html = await page.run("views.status()");
+  expect(html).toContain(`id="merchant-name-input" required maxlength="80" value="${inputValue}"`);
+});
 
 describe("merchant workbench one-click connect flow (stageAccessAndBegin)", () => {
   it("已发布时显示询价状态，在高级设置提供暂停开关", async () => {
