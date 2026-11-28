@@ -341,6 +341,17 @@
     },
     {
       "kind": "expert",
+      "id": "oe_eee5ab6349f00203",
+      "name": "开通顾问",
+      "platform_version": "0.2.0",
+      "observed_state": "local candidate; not uploaded/reviewed",
+      "source": "kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0",
+      "source_version": "0.2.0",
+      "mapping": "local candidate; embeds skill 0.3.7 (not independently published); makes the isolated install resumable (cloud-session-cli resume reuses npm-cache and the locked transaction, 30 min default budget, prefer-offline/fetch timers), classifies an outer-budget SIGTERM as INSTALL_TIMEOUT_KILLED with resumable:true, replaces per-file delete with move-aside backup in upgrade-in-place (no WorkBuddy bulk-delete prompt, receipt backup_mode:move + rollback), and adds version-probe guidance for post-publish verification; 0.1.9 remains unchanged",
+      "bundle_mode": "candidate-source"
+    },
+    {
+      "kind": "expert",
       "id": "oe_a2d0c6cc725719bd",
       "name": "报价助理",
       "platform_version": "0.1.3",
