@@ -1,7 +1,7 @@
 {
   "format": "kiwi-npm-shipping-source/1",
   "source_base": "e703bc0d67e24a98c417274e46f37d210eff86ac",
-  "reviewed_release": "0.12.41",
+  "reviewed_release": "0.12.42",
   "owner_runtime_default": "dual-off/private",
   "tool": {
     "node": "v22.22.3",
@@ -98,8 +98,8 @@
     "arch": "arm64"
   },
   "stage": {
-    "package_sha256": "sha256:34d50cfde79437a5d9aea806ae51bdd5173e1b99a5d7f3fdd50c2661b42d33e0",
-    "lock_sha256": "sha256:ad487c8a9d0b405875a35d31f494dc6bf04f3fcffb21abbf1f22d7b77d36b1b3"
+    "package_sha256": "sha256:64abc1af8a0e4f72948d37be912b23951d0a4b9582a370dd172f09054e183e28",
+    "lock_sha256": "sha256:bae819729c8e0c6b9a78e929d525dbb255006dd24d187e06926fcba386395086"
   },
   "budgets": {
     "plain_bytes": 268435456,
@@ -246,7 +246,7 @@
     },
     {
       "path": "build-inputs/release-acceptance.json",
-      "sha256": "sha256:9c41e37c8c8623143a0be9fd17c496711369ea6648cbfcc12ce0183c08eba6cc"
+      "sha256": "sha256:da2fd69bcffdc53d5a8cd3ea8ee18bde5910f06e59c1ebee8c9d3418f6e53461"
     },
     {
       "path": "build-inputs/release0124-npm12-payload.json",
@@ -254,11 +254,11 @@
     },
     {
       "path": "build-inputs/release0124-stage/package-lock.json",
-      "sha256": "sha256:ad487c8a9d0b405875a35d31f494dc6bf04f3fcffb21abbf1f22d7b77d36b1b3"
+      "sha256": "sha256:bae819729c8e0c6b9a78e929d525dbb255006dd24d187e06926fcba386395086"
     },
     {
       "path": "build-inputs/release0124-stage/package.json",
-      "sha256": "sha256:34d50cfde79437a5d9aea806ae51bdd5173e1b99a5d7f3fdd50c2661b42d33e0"
+      "sha256": "sha256:64abc1af8a0e4f72948d37be912b23951d0a4b9582a370dd172f09054e183e28"
     },
     {
       "path": "build-inputs/shipping-audit-allow.json",
@@ -1090,7 +1090,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/README.md",
-      "sha256": "sha256:e461aa408fe557c6a528fade523feb4d495007ffca591e4c7f441cdb972f5877"
+      "sha256": "sha256:8434209c76303c5b16006b3bfc438c0bcdbf64104e79a5c6e68833785216b470"
     },
     {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/avatars/kiwi-merchant-buddy.png",
@@ -2729,6 +2729,134 @@
       "sha256": "sha256:d96524071c80b600770d0338e038469f173725c178b5befde04c9b982217870f"
     },
     {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/.codebuddy-plugin/plugin.json",
+      "sha256": "sha256:821225b30a4c7eb7806dd47f0fed0d3c986461cc49a143f3443fa7b31e80feda"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/README.md",
+      "sha256": "sha256:dd9068ff041eec230c80081ec6abad5398cc890b40fa12e661aa06c01e09ab1e"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/agents/kiwi-onboarding-advisor.md",
+      "sha256": "sha256:69efde12ee00c31d6b95fb89707510d44d045c27506dfb9b915ee4b9234cf30a"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/avatars/kiwi.png",
+      "sha256": "sha256:dce9b1e30a0b71ab139978f3b9be1f16f208950e4a1467a10f1c748624d14b11"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/SKILL.md",
+      "sha256": "sha256:27e6963a8d07671ec16b3f8f845311efa523eb7f43ef26541c5edf7b78067240"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/first-publish/README.md",
+      "sha256": "sha256:5e1ba1a50b30aba28cb269a015c7d6ba268b9cd0d4a7a1575fe4f457b40fc9f2"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/first-publish/index.js",
+      "sha256": "sha256:47292192616f80ff8da3c89a69ea1561326e2b0996fbbc69016d91a897fb432f"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/first-publish/package.json",
+      "sha256": "sha256:565d6902bbb71cd9bcf59d99508462be5fb32718a50675e9071f7c3c0ab95b5b"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/references/fallback-prompt.md",
+      "sha256": "sha256:2dddc5fdae582a7fd0a2f36104f3b51bcfbcc82249f6a25eb01406948347532b"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/references/publish-params.json",
+      "sha256": "sha256:867807771a14f3add095fb5a5350925fe5b8b44e22c77b9a5515af7ee88f71c3"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/scripts/artifact.mjs",
+      "sha256": "sha256:a197bc7c9bbb934a01375c741a274aa9d6b0049482c61c36b874f99b7c403625"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/scripts/audit-gate.mjs",
+      "sha256": "sha256:3486b6a48f70f2004fb439971d63e6397747b7da6a8693cabb3310f4a9519d82"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/scripts/cloud-candidate-check.mjs",
+      "sha256": "sha256:bc4805c2c69b45346be6356b80345280123242079704d5f779c122d7aa90d957"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/scripts/cloud-session-cli.mjs",
+      "sha256": "sha256:68f48765af8f9cca75c4258ea0c2eeb060f5f6f28cf02e7de0d18b40fc8be438"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/scripts/cloud-session.mjs",
+      "sha256": "sha256:d2695d97555ca427b79c0b815c8b8fc143f4389d1974505f93a9d1a68fd829a6"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/scripts/cloud_manifest.py",
+      "sha256": "sha256:c5c507dfadcab468455af0fb397d9a86e208a77317c23e5bea10c6dcc0f22363"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/scripts/discover-target.mjs",
+      "sha256": "sha256:d7cdb621cb0e88a760e8a98825ca1e990c82a78a1120288e09930bf0ffa7ceba"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/scripts/inspect_buyer_archive_cli.py",
+      "sha256": "sha256:3958a0161d2112f7048fa39762a4aeb5377d5d180f598540f60bd9e3571e9dab"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/scripts/inspect_cloud_cli.py",
+      "sha256": "sha256:decc3f6799904cbc63ef5cc655e79ffc21b93b85662c09dd54955fcb6912070d"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/scripts/inspect_tree_cli.py",
+      "sha256": "sha256:3adfd6273418e46dc2fe03a4bbf62eaaa0471d12c39abbb87850d76b26d543af"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/scripts/install-diagnostics.mjs",
+      "sha256": "sha256:99c2cc6c09144125124377eda1972e3fcc6c0c0c86e393bafc95b8e01354e6ff"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/scripts/installed_cloud.py",
+      "sha256": "sha256:638d1d268cf125ff3a3937969d6779d9bf12208f1ff84d1dd2805e989d5a4790"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/scripts/installed_root.py",
+      "sha256": "sha256:bf0158773d83e5c664aa58248dd799ccbbcb1e5b48c802fa7b1bfba10f007a69"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/scripts/installed_tree.py",
+      "sha256": "sha256:a84a780bf5f657150a19aac804b59848dfcd1ed41d9204286c2c6ce0b0142df9"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/scripts/latest-resolver.mjs",
+      "sha256": "sha256:c429b4f7f92b03c0e486b301f9a4ac3c455fa7a2a01a57036ed9bf31eda91371"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/scripts/preflight.mjs",
+      "sha256": "sha256:3d4289da571dffba803094c182aeb8b8d80d0f5bfce20a3d6a4afa87c4519a2c"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/scripts/provenance-policy.mjs",
+      "sha256": "sha256:8937f9ce11df59949be658754752a5fa4acc9024d8dd7e1c10070e9c1bcfc7d3"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/scripts/published-provenance.mjs",
+      "sha256": "sha256:664b1f65d8b272cddc9a1d42670d7630f5acbec20d25b16f985771d9f3b91681"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/scripts/resource_guard.py",
+      "sha256": "sha256:db478ae28ef19b8d10e65ef9a3fcd8b9471518657ad001d7c3838ea6fd7e9985"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/scripts/sigstore-gate.mjs",
+      "sha256": "sha256:9cf9b76d8683f4a6fc22124751d8c00cdf3200c6e6e7fdce74562bbcd640a608"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/scripts/transaction.mjs",
+      "sha256": "sha256:83787755f5cfb8061af5b272891d124da68a298e90b1fb3193ddf362a94e0225"
+    },
+    {
+      "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy/scripts/upgrade-in-place.mjs",
+      "sha256": "sha256:444a96fb2e98f6ab8e9faf9944c1260a948ae7d6d51d928d4c95f85f960ae81e"
+    },
+    {
       "path": "integrations/hosts/workbuddy/kiwi-merchant-buddy/platform/build-platform-pack.d.mts",
       "sha256": "sha256:f581b0e187c429160c12dc5c41f786e4be1a0f6121a7ef0bc85f33bbc387ce10"
     },
@@ -3594,7 +3722,7 @@
     },
     {
       "path": "integrations/hosts/workbuddy/release-bundle-manifest.json",
-      "sha256": "sha256:9ebb867bbc026202fd493c285a3ab6dc2813ba71119bf72e259832fbae141120"
+      "sha256": "sha256:05f31106d3d4fe5666a88a985d5f6b3bae85084b088bf1921f4787c4d6f13cfa"
     },
     {
       "path": "integrations/hosts/workbuddy/stage-embedded-buyer.mjs",
@@ -3638,19 +3766,19 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "sha256:39973752003275835ea1bc78ba09e3bac35ee0335b8fb56fa279d8f07ae86417"
+      "sha256": "sha256:b7d7e974edac6c3517385891076a5a4e098c75b6f07044055fb3f132c3a91ea1"
     },
     {
       "path": "package.json",
-      "sha256": "sha256:368c471d8c1bf72934e9f0d4f9f35d9a7ad788de1e1c0db0fd17a000f32c2676"
+      "sha256": "sha256:d1ab0ec7fd6ace6fe75b17436a9edd6629c87d2b8d0751ffe32bb5d213d40d29"
     },
     {
       "path": "packages/merchant-cloud/package-lock.json",
-      "sha256": "sha256:9b5acfcc889e3c6c2e3c2826057d192ea568e9ed0eac1aef241b5eae17f6bae5"
+      "sha256": "sha256:17d5e91aa7e7ebb169513c23950b4810a06ed883192dbe1fa62ce0b6ed7680cf"
     },
     {
       "path": "packages/merchant-cloud/package.json",
-      "sha256": "sha256:37e34b5ed3f9acaef8f269b8d739a48290c283b9295669a85ed5febe88af9365"
+      "sha256": "sha256:59398fbcdbf9b46f77a6b65cdd6a8a978d1aec681b4584a537e2f3db081f61d6"
     },
     {
       "path": "packages/merchant-cloud/prepare.mjs",
@@ -3658,7 +3786,7 @@
     },
     {
       "path": "portfolio-products.json",
-      "sha256": "sha256:70c4bd88e39df9d4a47959a32f28879bfb140a1ef217584b6e388f129ab690b6"
+      "sha256": "sha256:84f4140d82c206974e34afbf50c2934aaa351a137995daa865a86b6a4ad5d1c8"
     },
     {
       "path": "portfolio.lock.json",
@@ -3826,7 +3954,7 @@
     },
     {
       "path": "scripts/lib/npm-shipping.mjs",
-      "sha256": "sha256:11e7c020f8fea71d53caf6481f1045f2b7957c8ca98d16fc6ffe5cc43f354419"
+      "sha256": "sha256:17dcb5a441647b448757de7860eefddb9c0ab64eebc587fb09dbe06753cfa6b7"
     },
     {
       "path": "scripts/lib/portfolio-lock-verify.d.mts",
@@ -3998,7 +4126,7 @@
     },
     {
       "path": "scripts/verify-cloud-package-candidate.mjs",
-      "sha256": "sha256:3e6258160a45c9097c8e58ecd9582ded568934aee4a9aedc78882ca5f65671b9"
+      "sha256": "sha256:6294e63c12f5bb00e7dfaf02e54922d060d7b672bcf8f2400a0854fe7d0f64df"
     },
     {
       "path": "scripts/verify-contract-vectors.mjs",
@@ -4022,7 +4150,7 @@
     },
     {
       "path": "scripts/verify-npm-shipping-installed.mjs",
-      "sha256": "sha256:a689f2726fb469607a1937595fee185a20c2f15c9a549f3f885ff2de6beb42ff"
+      "sha256": "sha256:a8a6c8452126d4801972b44b8c1f470e13b4377a918033348c00a84d7540fa2b"
     },
     {
       "path": "scripts/verify-npm-shipping-runtime.mjs",
@@ -4922,7 +5050,7 @@
     },
     {
       "path": "src/cloud/bootstrap.ts",
-      "sha256": "sha256:d93d7bafd1bee4356ba41aefeb917d53f298be7c31d038af29f3da7d1010806d"
+      "sha256": "sha256:5110af6ccd603b0cd72ee287b2c82d16f468d9068ac0affb2346ac3bfbb604f0"
     },
     {
       "path": "src/cloud/catalog-client.ts",
@@ -6830,9 +6958,9 @@
     },
     {
       "path": "supply-chain.sbom.json",
-      "sha256": "sha256:ef810b986d4f6c777e1c0925a5acaac13369ef682fde271728498fa8f39e7112",
+      "sha256": "sha256:c8193ca1cd96ac1adc0c5997f1c2426802b4b6a7e3233c99ad1f4cd631b12d3e",
       "digest_policy": "generated-SBOM-only-generated_at-excluded",
-      "raw_sha256": "sha256:84c872c16f863c75635ace09cae8f97de65cfd97b867003e8635a8771f29246c"
+      "raw_sha256": "sha256:a19b32d886faa318f51fa5e4b10b5f75ae237885cd7dd2bd64dc1986a2594488"
     },
     {
       "path": "tests/a-handoff-intent-binding.test.ts",
@@ -7500,7 +7628,7 @@
     },
     {
       "path": "tests/cloud-product-table.test.ts",
-      "sha256": "sha256:8d276c75e8e921fe170de64def68cd47216411363ae6db76d5874af0b3429037"
+      "sha256": "sha256:e939077d6ed3f5553c2eb8cc10159a28ebc96cf70c1b0637a8337a1dae43aefc"
     },
     {
       "path": "tests/cloud-workbuddy-share-link.test.ts",
@@ -8724,7 +8852,7 @@
     },
     {
       "path": "tests/npm-shipping-contract.test.ts",
-      "sha256": "sha256:c82f4395974ec33bef84694a3732416e986f33f04582316be5b31278f4c2072c"
+      "sha256": "sha256:a81c3d5f7e553874a6ebb5880fffd70e27c9f4a896198dd3da06a4533bf74565"
     },
     {
       "path": "tests/onboarding-local-fallback.test.ts",
@@ -9229,6 +9357,10 @@
     {
       "path": "tests/workbuddy-onboarding-advisor-0.1.9.test.ts",
       "sha256": "sha256:08a3adeb121d3c100d35e710cba9fa0d8fa7d41de052926a1732797ca5a68cfa"
+    },
+    {
+      "path": "tests/workbuddy-onboarding-advisor-0.2.0.test.ts",
+      "sha256": "sha256:f79c290c1d6cb919a3d54d6eb83f0104cb6d99def06c765c37c64fdc587fe0a9"
     },
     {
       "path": "tests/workbuddy-onboarding-advisor-first-publish.test.ts",
