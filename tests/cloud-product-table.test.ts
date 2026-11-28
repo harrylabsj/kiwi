@@ -23,6 +23,8 @@ import {
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { A2AV1Task } from "../src/a2a/v1/types.js";
+import { writeAdminCredentials } from "../src/auth/merchant-sessions.js";
 import { bootstrapCloudRuntime } from "../src/cloud/bootstrap.js";
 import {
   bindProductTableToCatalog,
@@ -459,6 +461,74 @@ describe("集成：配置文件 + 商品表驱动的云端实例", () => {
     // 表内价 128.50 元 → 12850 minor（确定性：等于表内价，未被模型或折扣改写）
     expect(serialized).toContain('"amount_minor":12850');
     expect(serialized).toContain('"currency":"CNY"');
+  });
+
+  it("工作台提交交期后，不重启即可在新 A2A 报价中看到交期", async () => {
+    const artifactDir = tempDir("kiwi-pilot-policy-artifact-");
+    const dataDir = tempDir("kiwi-pilot-policy-data-");
+    const { profilePath, productsFile } = writePilotFiles(dataDir);
+    const publicOrigin = "https://pilot-runtime.example.app.workbuddy.host";
+    const port = await freePort();
+    writeConfigFile(artifactDir, {
+      public_origin: publicOrigin,
+      data_dir: dataDir,
+      profile: profilePath,
+      products_file: productsFile,
+      a2a_auth: { mode: "signature" },
+    });
+    const password = "test-workbench-policy-password";
+    writeAdminCredentials(dataDir, { principalId: `merchant-agent:${MERCHANT}`, merchantId: MERCHANT, password });
+    instances.push(await bootstrapCloudRuntime({
+      env: { PORT: String(port) },
+      artifactRoot: artifactDir,
+      log: () => {},
+      catalogFetchImpl: async () => new Response(null, { status: 503 }),
+    }));
+
+    const base = `http://127.0.0.1:${port}`;
+    const login = await fetch(`${base}/admin/login`, {
+      method: "POST",
+      redirect: "manual",
+      body: new URLSearchParams({ password, next: "/merchant/" }),
+    });
+    expect(login.status).toBe(303);
+    const cookie = login.headers.get("set-cookie")?.split(";")[0] ?? "";
+    const session = await fetch(`${base}/merchant/api/session`, { headers: { cookie } });
+    expect(session.status).toBe(200);
+    const { csrf_token } = (await session.json()) as { csrf_token: string };
+    const postPolicy = (suffix: string, body: object) => fetch(`${base}/merchant/api/v1/policy${suffix}`, {
+      method: "POST",
+      headers: { cookie, origin: publicOrigin, "x-csrf-token": csrf_token, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    const draft = await postPolicy("/form-drafts", { lead_days: 3 });
+    expect(draft.status).toBe(200);
+    const { draft_id, digest } = (await draft.json()) as { draft_id: string; digest: string };
+    const commit = await postPolicy(`/drafts/${draft_id}/commit`, {
+      expected_draft_digest: digest,
+      idempotency_key: "commit-workbench-delivery-lead",
+    });
+    expect(commit.status).toBe(200);
+    const current = await fetch(`${base}/merchant/api/v1/policy`, { headers: { cookie } });
+    expect(current.status).toBe(200);
+    expect(await current.json()).toMatchObject({ lead_days: 3 });
+
+    const requestedAt = Date.now();
+    const { status, body } = await sendRfq(base, "msg_table_updated_lead");
+    expect(status).toBe(200);
+    const task = (body["result"] as { task?: A2AV1Task } | undefined)?.task;
+    const data = task?.status.message?.parts.find((part) => "data" in part)?.data;
+    const offer = data?.["knp_envelope"] as {
+      action: string;
+      payload: { terms?: { fulfillment_terms?: { delivery_before?: string } } };
+    } | undefined;
+    expect(offer?.action).toBe("offer");
+    const deliveryBefore = offer?.payload.terms?.fulfillment_terms?.delivery_before;
+    expect(deliveryBefore).toBeDefined();
+    const threeDaysMs = 3 * 86_400_000;
+    expect(Date.parse(deliveryBefore ?? "")).toBeGreaterThanOrEqual(requestedAt + threeDaysMs);
+    expect(Date.parse(deliveryBefore ?? "")).toBeLessThanOrEqual(Date.now() + threeDaysMs);
   });
 
   it("商品过期：readyz 未就绪且 RFQ 明确 decline（无任何价格）", async () => {
