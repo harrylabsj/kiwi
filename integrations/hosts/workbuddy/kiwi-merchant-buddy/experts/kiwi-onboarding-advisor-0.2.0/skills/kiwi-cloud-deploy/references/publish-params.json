@@ -1,0 +1,7 @@
+{
+  "language": "node",
+  "port": 3000,
+  "installCmd": "npm install --no-audit --no-fund --prefix .node22 node@22.19.0 && export PATH=\"$PWD/.node22/node_modules/node/bin:$PWD/.node22/node_modules/.bin:$PATH\" && echo \"[verify] install node: $(node --version)\" && npm ci --no-audit --no-fund && echo \"[verify] deps under: $(node --version)\"",
+  "startCmd": "export PATH=\"$PWD/.node22/node_modules/node/bin:$PWD/.node22/node_modules/.bin:$PATH\" && echo \"[verify] start node: $(node --version)\" && PORT=\"${PORT:-3000}\" exec node index.js",
+  "notes": "Proven on linkluck (2026-11-10 and 2026-11-12); node@22.19.0 satisfies engines >=22.19.0."
+}

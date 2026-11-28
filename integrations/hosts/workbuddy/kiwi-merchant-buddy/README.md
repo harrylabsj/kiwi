@@ -32,6 +32,7 @@
 ### 模块 3：市场配置
 
 - **技能版本警告（2026-11-14 核对）**：线上「Kiwi 云端接待部署」已发布 **0.3.2**；主库活动源 `skills/kiwi-cloud-deploy` 是 **0.2.6**，0.3.2 只保存在 `skills/candidate-archives/kiwi-cloud-deploy/0.3.2/`。不要用活动源重打包 0.2.6 覆盖线上；更新前先把 0.3.2 提升为活动源或明确归档线。
+- **0.3.7 候选（2026-11-28）**：可续传安装、超时误杀分类与移动式备份的修复在 `experts/kiwi-onboarding-advisor-0.2.0/skills/kiwi-cloud-deploy`（随专家 0.2.0 打包，未上传、未审核）。它修的是 2026-11-27 升级实测暴露的问题：600 秒级预算 SIGTERM 被误判为依赖冲突、删缓存后重试必然再超时、逐文件替换触发批量删除确认。活动源 `skills/kiwi-cloud-deploy`（0.2.6）与归档 0.3.2 未改动；若要把 0.3.7 作为独立技能资产发布，先把 0.2.0 里的这份提升为活动源并新增 `candidate-archives/kiwi-cloud-deploy/0.3.7/`。
 - 连接器：v1.2.0 的提审 ID 为 `oc_0053ad85c92a6587`（2026-10-13 历史记录）；当前审核/可用状态需以平台页面核实。下方 WP22 的“等待生成 ID”仅为旧开发说明。技能源文件和头像分别维护在 `skills/` 与 `avatars/skills/`；下列版本与提审 ID 也是 2026-10-13 的历史快照，不代表审核通过或当前可用：`kiwi-cloud-deploy`（0.2.3，`os_1ea25f81ce98fea3`）、`kiwi-product-import`（0.1.3，`os_32c612d72d2c3bcd`）、`kiwi-merchant-cs-prep`（0.1.1，`os_dc3a52407574eb77`）、`merchant-source-evidence-audit`（0.1.0，`os_6aedc97ac49e2d5b`）、`merchant-trade-link-check`（0.1.0，`os_9bc616f4fb80a452`）、`merchant-inquiry-structuring`（0.1.0，`os_fe982aad31a98bfb`）、`merchant-quote-draft`（0.1.0，`os_053e9e8722df80e6`）、`merchant-approval-brief`（0.1.0，`os_03cf120a20b00aae`）、`merchant-operations-insights`（0.1.0，`os_e64be8878bbb4349`）、`merchant-catalog-preflight`（0.1.0，`os_50c0414417e25586`）。「商品报价」模式「整理商品」胶囊以 `bindSkills` 表达技能绑定；平台若不支持胶囊级技能绑定，以模式 skills 为准。
 - 专家：以下 `platform/market-draft/` 和生成器维护说明是旧开发记录。专家审核与发布状态须以 WorkBuddy 当前页面核实；本页中的状态仅是有日期的历史背景。
 
