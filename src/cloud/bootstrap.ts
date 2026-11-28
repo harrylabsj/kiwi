@@ -708,6 +708,8 @@ export async function bootstrapCloudRuntime(
         } }
       : {}),
     profile,
+    // A2A quotes must use the same effective policy that the workbench updates.
+    merchantPolicy: assembly.currentPolicy,
     publicMerchantName,
     advertisedBase: config.publicOrigin,
     a2aPath: CLOUD_A2A_PATH,
